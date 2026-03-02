@@ -1037,56 +1037,63 @@ export const GameHudPanelDef = {
         // Initial dashboard render
         refreshDashboard();
 
-        // Button handlers
-        if (beginBtn) {
-            beginBtn.addEventListener('click', async () => {
+        // Button handlers (with double-click protection)
+        function guardClick(btn, handler) {
+            if (!btn) return;
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) return;
+                btn.disabled = true;
                 try {
-                    const resp = await fetch('/api/game/begin', { method: 'POST' });
-                    const data = await resp.json();
-                    if (data.error) console.warn('[GAME] Begin war error:', data.error);
-                } catch (e) {
-                    console.error('[GAME] Begin war failed:', e);
+                    await handler();
+                } finally {
+                    btn.disabled = false;
                 }
             });
         }
 
-        if (spawnBtn) {
-            spawnBtn.addEventListener('click', async () => {
-                try {
-                    const resp = await fetch('/api/amy/simulation/spawn', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({}),
-                    });
-                    if (resp.ok) {
-                        EventBus.emit('toast:show', { message: 'Hostile spawned', type: 'alert' });
-                    } else {
-                        const data = await resp.json().catch(() => ({}));
-                        EventBus.emit('toast:show', { message: data.detail || 'Spawn failed', type: 'alert' });
-                    }
-                } catch (e) {
-                    console.error('[GAME] Spawn hostile failed:', e);
-                    EventBus.emit('toast:show', { message: 'Spawn failed: network error', type: 'alert' });
-                }
-            });
-        }
+        guardClick(beginBtn, async () => {
+            try {
+                const resp = await fetch('/api/game/begin', { method: 'POST' });
+                const data = await resp.json();
+                if (data.error) console.warn('[GAME] Begin war error:', data.error);
+            } catch (e) {
+                console.error('[GAME] Begin war failed:', e);
+            }
+        });
 
-        if (resetBtn) {
-            resetBtn.addEventListener('click', async () => {
-                try {
-                    await fetch('/api/game/reset', { method: 'POST' });
-                    if (typeof warCombatReset === 'function') warCombatReset();
-                    // Reset combat tracker on manual reset
-                    tracker.reset();
-                    _previousMorale = 1.0;
-                    _waveHostileTotal = 0;
-                    _waveStartTime = 0;
-                    refreshDashboard();
-                } catch (e) {
-                    console.error('[GAME] Reset failed:', e);
+        guardClick(spawnBtn, async () => {
+            try {
+                const resp = await fetch('/api/amy/simulation/spawn', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+                if (resp.ok) {
+                    EventBus.emit('toast:show', { message: 'Hostile spawned', type: 'alert' });
+                } else {
+                    const data = await resp.json().catch(() => ({}));
+                    EventBus.emit('toast:show', { message: data.detail || 'Spawn failed', type: 'alert' });
                 }
-            });
-        }
+            } catch (e) {
+                console.error('[GAME] Spawn hostile failed:', e);
+                EventBus.emit('toast:show', { message: 'Spawn failed: network error', type: 'alert' });
+            }
+        });
+
+        guardClick(resetBtn, async () => {
+            try {
+                await fetch('/api/game/reset', { method: 'POST' });
+                if (typeof warCombatReset === 'function') warCombatReset();
+                // Reset combat tracker on manual reset
+                tracker.reset();
+                _previousMorale = 1.0;
+                _waveHostileTotal = 0;
+                _waveStartTime = 0;
+                refreshDashboard();
+            } catch (e) {
+                console.error('[GAME] Reset failed:', e);
+            }
+        });
     },
 
     unmount(bodyEl) {
