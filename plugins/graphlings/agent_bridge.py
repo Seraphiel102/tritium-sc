@@ -27,6 +27,7 @@ class AgentBridge:
     def __init__(self, config: GraphlingsConfig) -> None:
         self._base_url = config.server_url.rstrip("/")
         self._timeout = config.server_timeout
+        self._dry_run = config.dry_run
 
     # ── Deploy / Recall ──────────────────────────────────────────
 
@@ -35,6 +36,8 @@ class AgentBridge:
 
         Returns the deployment record dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "deployment_id": f"dry_{soul_id}", "status": "deployed"}
         return self._post(
             "/deployment/deploy",
             json={"soul_id": soul_id, "config": config},
@@ -45,6 +48,8 @@ class AgentBridge:
 
         Returns recall result dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "status": "recalled", "reason": reason}
         return self._post(
             f"/deployment/{soul_id}/recall",
             json={"reason": reason},
@@ -58,6 +63,8 @@ class AgentBridge:
         POST /deployment/deploy-batch
         Returns the batch result dict, or None on error.
         """
+        if self._dry_run:
+            return {"status": "deployed", "count": len(config.get("souls", []))}
         return self._post("/deployment/deploy-batch", json=config)
 
     def batch_recall(self, service_name: str, reason: str) -> Optional[dict]:
@@ -66,6 +73,8 @@ class AgentBridge:
         POST /deployment/recall-batch
         Returns recall result dict, or None on error.
         """
+        if self._dry_run:
+            return {"status": "recalled", "reason": reason}
         return self._post(
             "/deployment/recall-batch",
             json={"service_name": service_name, "reason": reason},
@@ -87,6 +96,8 @@ class AgentBridge:
         Returns ThinkResponse dict (thought, action, emotion, layer, model, confidence),
         or None on timeout/error.
         """
+        if self._dry_run:
+            return self._dry_run_think(soul_id, perception, current_state, available_actions, urgency)
         body: dict[str, Any] = {
             "perception": perception,
             "current_state": current_state,
@@ -105,6 +116,8 @@ class AgentBridge:
 
         Returns heartbeat response dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "status": "alive"}
         return self._post(f"/deployment/{soul_id}/heartbeat", json={})
 
     # ── Experience ───────────────────────────────────────────────
@@ -114,6 +127,8 @@ class AgentBridge:
 
         Returns the number of experiences recorded (0 on error).
         """
+        if self._dry_run:
+            return len(experiences)
         result = self._post(
             f"/deployment/{soul_id}/experience",
             json={"experiences": experiences},
@@ -138,6 +153,8 @@ class AgentBridge:
 
         Returns server response dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "status": "ok"}
         return self._post(
             f"/deployment/{soul_id}/feedback",
             json={"action": action, "success": success, "outcome": outcome},
@@ -154,6 +171,8 @@ class AgentBridge:
 
         Returns list of action dicts (empty on error).
         """
+        if self._dry_run:
+            return []
         result = self._get(f"/deployment/{soul_id}/pending-actions")
         if result is None:
             return []
@@ -169,6 +188,8 @@ class AgentBridge:
 
         Returns server response dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "status": "ok"}
         return self._post(f"/deployment/{soul_id}/world/entity", json=entity)
 
     # ── Mood ───────────────────────────────────────────────────
@@ -179,6 +200,8 @@ class AgentBridge:
         Returns mood dict (happiness, stress, engagement, confidence),
         or None on error. Use for adaptive behavior and auto-recall.
         """
+        if self._dry_run:
+            return {"happiness": 0.7, "stress": 0.2, "engagement": 0.6, "confidence": 0.5}
         return self._get(f"/deployment/{soul_id}/mood")
 
     # ── Objectives ─────────────────────────────────────────────
@@ -191,6 +214,8 @@ class AgentBridge:
 
         Returns created objective dict, or None on error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "objective": objective, "status": "set"}
         return self._post(f"/deployment/{soul_id}/objectives", json=objective)
 
     # ── Status ───────────────────────────────────────────────────
@@ -200,6 +225,8 @@ class AgentBridge:
 
         Returns deployment record dict, or None if not found/error.
         """
+        if self._dry_run:
+            return {"soul_id": soul_id, "status": "deployed", "deployment_id": f"dry_{soul_id}"}
         return self._get(f"/deployment/{soul_id}")
 
     def list_active(self) -> list[dict]:
@@ -207,10 +234,69 @@ class AgentBridge:
 
         Returns list of deployment records (empty on error).
         """
+        if self._dry_run:
+            return []
         result = self._get("/deployment/active")
         if result is None:
             return []
         return result.get("deployments", [])
+
+    # ── Dry-run stub responses ─────────────────────────────────
+
+    def _dry_run_think(
+        self,
+        soul_id: str,
+        perception: dict,
+        current_state: str,
+        available_actions: list[str],
+        urgency: float,
+    ) -> dict:
+        """Generate a stub think response for dry-run mode.
+
+        Urgency-aware: high urgency triggers defensive behavior,
+        low urgency triggers exploration/social behavior.
+        """
+        danger = perception.get("danger_level", urgency)
+
+        if danger > 0.7 and "flee" in available_actions:
+            return {
+                "thought": f"Danger detected (level {danger:.1f})! I need to get to safety immediately.",
+                "action": 'flee("away_from_danger")',
+                "emotion": "fearful",
+                "layer": 2,
+                "model_used": "dry_run",
+                "confidence": 0.9,
+            }
+        elif danger > 0.4:
+            action = "observe" if "observe" in available_actions else available_actions[0] if available_actions else "say"
+            return {
+                "thought": f"Something feels tense. I should stay alert and {action}.",
+                "action": f'{action}("staying_alert")',
+                "emotion": "cautious",
+                "layer": 3,
+                "model_used": "dry_run",
+                "confidence": 0.7,
+            }
+        else:
+            # Peaceful — pick a social or exploratory action
+            if "say" in available_actions:
+                return {
+                    "thought": "Things are calm. I feel content and want to connect with others.",
+                    "action": 'say("Hello! What a beautiful day.")',
+                    "emotion": "happy",
+                    "layer": 3,
+                    "model_used": "dry_run",
+                    "confidence": 0.8,
+                }
+            action = available_actions[0] if available_actions else "observe"
+            return {
+                "thought": f"Peaceful moment. I'll {action} and enjoy the surroundings.",
+                "action": f'{action}("exploring")',
+                "emotion": "content",
+                "layer": 3,
+                "model_used": "dry_run",
+                "confidence": 0.8,
+            }
 
     # ── HTTP helpers ─────────────────────────────────────────────
 

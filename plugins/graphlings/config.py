@@ -35,6 +35,9 @@ class GraphlingsConfig:
     default_consciousness_min: int = 2
     default_consciousness_max: int = 5
 
+    # Dry-run mode: generate stub responses without contacting the graphling server
+    dry_run: bool = False
+
     # Named spawn locations
     spawn_points: dict[str, tuple[float, float]] = field(default_factory=lambda: {
         "marketplace": (100.0, 200.0),
@@ -61,4 +64,7 @@ class GraphlingsConfig:
         config.perception_radius = float(
             os.environ.get("GRAPHLINGS_PERCEPTION_RADIUS", config.perception_radius)
         )
+        config.dry_run = os.environ.get(
+            "GRAPHLINGS_DRY_RUN", "0"
+        ).lower() in ("1", "true", "yes")
         return config

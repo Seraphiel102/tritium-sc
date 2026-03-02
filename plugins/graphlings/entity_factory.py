@@ -53,6 +53,7 @@ class EntityFactory:
             weapon_range=0.0,
             weapon_cooldown=0.0,
             weapon_damage=0.0,
+            source="graphling",
         )
 
         self._engine.add_target(target)

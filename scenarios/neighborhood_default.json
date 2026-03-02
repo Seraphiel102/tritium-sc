@@ -2,45 +2,59 @@
   "format": "TritiumLevelFormat",
   "version": 1,
   "meta": {
-    "name": "Cul-de-Sac Neighborhood",
-    "description": "Default neighborhood layout: ~400m x 400m operational area. Amy's property at center (0,0). Patrol rovers cover perimeter routes, turrets guard property boundaries, drones sweep wider sectors. Cameras stay house-mounted near origin.",
+    "name": "West Dublin Neighborhood",
+    "description": "City-scale operational area: ~1km x 1km. Amy's property at center (0,0). Inner patrol ring covers the immediate block, outer patrol ring covers surrounding streets. Drones sweep wide sectors, turrets at strategic intersections, tank and APC on main approaches.",
     "scale": "1 unit = 1 meter",
-    "map_bounds": [-200, 200],
+    "map_bounds": [-500, 500],
     "author": "tritium-sc"
   },
   "objects": [
     {
       "type": "patrol_rover",
       "name": "Rover Alpha",
-      "position": {"x": -60.0, "y": 0.0, "z": 80.0},
+      "position": {"x": -80.0, "y": 0.0, "z": 120.0},
       "properties": {
         "name": "Rover Alpha",
         "patrol_waypoints": [
-          {"x": -80.0, "z": 100.0},
-          {"x": 80.0, "z": 100.0},
-          {"x": 80.0, "z": -100.0},
-          {"x": -80.0, "z": -100.0}
+          {"x": -120.0, "z": 180.0},
+          {"x": 120.0, "z": 180.0},
+          {"x": 120.0, "z": -180.0},
+          {"x": -120.0, "z": -180.0}
         ]
       }
     },
     {
       "type": "patrol_rover",
       "name": "Rover Bravo",
-      "position": {"x": 100.0, "y": 0.0, "z": -40.0},
+      "position": {"x": 200.0, "y": 0.0, "z": -100.0},
       "properties": {
         "name": "Rover Bravo",
         "patrol_waypoints": [
-          {"x": 120.0, "z": -60.0},
-          {"x": 120.0, "z": 120.0},
-          {"x": -120.0, "z": 120.0},
-          {"x": -120.0, "z": -60.0}
+          {"x": 280.0, "z": -200.0},
+          {"x": 280.0, "z": 200.0},
+          {"x": -280.0, "z": 200.0},
+          {"x": -280.0, "z": -200.0}
+        ]
+      }
+    },
+    {
+      "type": "patrol_rover",
+      "name": "Rover Charlie",
+      "position": {"x": -250.0, "y": 0.0, "z": -150.0},
+      "properties": {
+        "name": "Rover Charlie",
+        "patrol_waypoints": [
+          {"x": -350.0, "z": -100.0},
+          {"x": -350.0, "z": 250.0},
+          {"x": -150.0, "z": 250.0},
+          {"x": -150.0, "z": -100.0}
         ]
       }
     },
     {
       "type": "sentry_turret",
       "name": "Turret NW",
-      "position": {"x": -40.0, "y": 0.0, "z": 35.0},
+      "position": {"x": -60.0, "y": 0.0, "z": 50.0},
       "properties": {
         "name": "Turret NW"
       }
@@ -48,61 +62,99 @@
     {
       "type": "sentry_turret",
       "name": "Turret SE",
-      "position": {"x": 40.0, "y": 0.0, "z": -35.0},
+      "position": {"x": 60.0, "y": 0.0, "z": -50.0},
       "properties": {
         "name": "Turret SE"
       }
     },
     {
       "type": "heavy_turret",
-      "name": "Heavy Turret Front Gate",
-      "position": {"x": 0.0, "y": 0.0, "z": 50.0},
+      "name": "Heavy Turret North Approach",
+      "position": {"x": 0.0, "y": 0.0, "z": 200.0},
       "properties": {
-        "name": "Heavy Turret Front Gate"
+        "name": "Heavy Turret North Approach"
+      }
+    },
+    {
+      "type": "heavy_turret",
+      "name": "Heavy Turret South Approach",
+      "position": {"x": 0.0, "y": 0.0, "z": -200.0},
+      "properties": {
+        "name": "Heavy Turret South Approach"
       }
     },
     {
       "type": "missile_turret",
-      "name": "Missile Turret Roof",
+      "name": "Missile Turret Center",
       "position": {"x": 0.0, "y": 6.0, "z": 0.0},
       "properties": {
-        "name": "Missile Turret Roof"
+        "name": "Missile Turret Center"
+      }
+    },
+    {
+      "type": "missile_turret",
+      "name": "Missile Turret East Ridge",
+      "position": {"x": 300.0, "y": 4.0, "z": 100.0},
+      "properties": {
+        "name": "Missile Turret East Ridge"
       }
     },
     {
       "type": "scout_drone",
-      "name": "Scout Drone West",
-      "position": {"x": -100.0, "y": 8.0, "z": 0.0},
+      "name": "Scout Drone West Sector",
+      "position": {"x": -200.0, "y": 8.0, "z": 0.0},
       "properties": {
-        "name": "Scout Drone West",
+        "name": "Scout Drone West Sector",
         "patrol_waypoints": [
-          {"x": -150.0, "z": 150.0},
-          {"x": -150.0, "z": -150.0},
-          {"x": -60.0, "z": -150.0},
-          {"x": -60.0, "z": 150.0}
+          {"x": -350.0, "z": 350.0},
+          {"x": -350.0, "z": -350.0},
+          {"x": -100.0, "z": -350.0},
+          {"x": -100.0, "z": 350.0}
         ]
       }
     },
     {
       "type": "scout_drone",
-      "name": "Scout Drone East",
-      "position": {"x": 100.0, "y": 8.0, "z": 0.0},
+      "name": "Scout Drone East Sector",
+      "position": {"x": 200.0, "y": 8.0, "z": 0.0},
       "properties": {
-        "name": "Scout Drone East",
+        "name": "Scout Drone East Sector",
         "patrol_waypoints": [
-          {"x": 150.0, "z": 150.0},
-          {"x": 150.0, "z": -150.0},
-          {"x": 60.0, "z": -150.0},
-          {"x": 60.0, "z": 150.0}
+          {"x": 350.0, "z": 350.0},
+          {"x": 350.0, "z": -350.0},
+          {"x": 100.0, "z": -350.0},
+          {"x": 100.0, "z": 350.0}
+        ]
+      }
+    },
+    {
+      "type": "scout_drone",
+      "name": "Scout Drone North Overwatch",
+      "position": {"x": 0.0, "y": 10.0, "z": 300.0},
+      "properties": {
+        "name": "Scout Drone North Overwatch",
+        "patrol_waypoints": [
+          {"x": -250.0, "z": 400.0},
+          {"x": 250.0, "z": 400.0},
+          {"x": 250.0, "z": 200.0},
+          {"x": -250.0, "z": 200.0}
         ]
       }
     },
     {
       "type": "tank",
       "name": "Tank Guardian",
-      "position": {"x": 0.0, "y": 0.0, "z": -60.0},
+      "position": {"x": -150.0, "y": 0.0, "z": -80.0},
       "properties": {
         "name": "Tank Guardian"
+      }
+    },
+    {
+      "type": "apc",
+      "name": "APC East Gate",
+      "position": {"x": 250.0, "y": 0.0, "z": -50.0},
+      "properties": {
+        "name": "APC East Gate"
       }
     },
     {
@@ -157,31 +209,31 @@
     },
     {
       "type": "activity_zone",
-      "name": "Front Yard Activity",
-      "position": {"x": 0.0, "y": 0.0, "z": 40.0},
+      "name": "Inner Perimeter Activity",
+      "position": {"x": 0.0, "y": 0.0, "z": 0.0},
       "properties": {
-        "name": "Front Yard Activity",
-        "radius": 50.0,
+        "name": "Inner Perimeter Activity",
+        "radius": 100.0,
         "alert_level": "low"
       }
     },
     {
       "type": "restricted_area",
-      "name": "Back Porch Restricted",
-      "position": {"x": 0.0, "y": 0.0, "z": -30.0},
+      "name": "Property Restricted",
+      "position": {"x": 0.0, "y": 0.0, "z": 0.0},
       "properties": {
-        "name": "Back Porch Restricted",
-        "radius": 25.0,
+        "name": "Property Restricted",
+        "radius": 30.0,
         "alert_level": "high"
       }
     },
     {
       "type": "entry_exit_zone",
-      "name": "Full Perimeter",
+      "name": "City Perimeter",
       "position": {"x": 0.0, "y": 0.0, "z": 0.0},
       "properties": {
-        "name": "Full Perimeter",
-        "radius": 100.0,
+        "name": "City Perimeter",
+        "radius": 450.0,
         "alert_level": "medium"
       }
     }
