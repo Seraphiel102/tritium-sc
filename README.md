@@ -13,13 +13,13 @@
 
 **[ NERF WAR BATTLESPACE MANAGEMENT ]**
 
-![Command Center](docs/screenshots/command-center.png)
+![Command Center](docs/screenshots/command-center.jpg)
 *Command Center — real satellite imagery, AI-controlled units, live tactical panels*
 
-![Combat](docs/screenshots/game-combat.png)
+![Combat](docs/screenshots/game-combat.jpg)
 *Wave-based Nerf combat — turrets engage hostile intruders with projectile physics and kill streaks*
 
-![Neighborhood](docs/screenshots/neighborhood-wide.png)
+![Neighborhood](docs/screenshots/neighborhood-wide.jpg)
 *Your neighborhood becomes the battlefield — same pipeline monitors real security*
 
 `▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀`
@@ -141,10 +141,10 @@ Amy's thoughts stream in real time through the Command Center's Amy panel.
 
 The Mission Director generates combat scenarios using real map data. It queries OpenStreetMap for buildings, shops, schools, and streets near the map center, then places defenders at actual building locations.
 
-![Mission Deployment](docs/screenshots/mission-deployment.png)
+![Mission Deployment](docs/screenshots/mission-deployment.jpg)
 *Defenders deployed at real buildings — turrets guarding structures, rovers on street patrols*
 
-![Mission Combat](docs/screenshots/mission-combat.png)
+![Mission Combat](docs/screenshots/mission-combat.jpg)
 *Mid-battle — green friendlies engage red hostiles across the neighborhood*
 
 **How it works:**
