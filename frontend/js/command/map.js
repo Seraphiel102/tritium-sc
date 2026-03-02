@@ -3483,7 +3483,9 @@ export function getMapState() {
     return {
         showSatellite: _state.showSatellite,
         showRoads: _state.showRoads,
+        showBuildings: _state.showBuildings,
         showGrid: _state.showGrid,
+        showFog: _state.fogEnabled,
         fogEnabled: _state.fogEnabled,
         showMesh: _state.showMesh,
         showThoughts: _state.showThoughts,
