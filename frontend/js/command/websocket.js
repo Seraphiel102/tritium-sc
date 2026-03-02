@@ -131,6 +131,7 @@ export class WebSocketManager {
         if (t.fsm_state !== undefined) { update.fsmState = t.fsm_state; update.fsm_state = t.fsm_state; }
         if (t.degradation !== undefined) update.degradation = t.degradation;
         if (t.weapon_range !== undefined) update.weaponRange = t.weapon_range;
+        if (t.vision_range !== undefined) update.vision_range = t.vision_range;
         if (t.is_combatant !== undefined) update.isCombatant = t.is_combatant;
         // Vision and squad fields
         if (t.visible !== undefined) update.visible = t.visible;

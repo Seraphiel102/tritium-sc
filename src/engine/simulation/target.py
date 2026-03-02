@@ -496,6 +496,7 @@ class SimulationTarget:
     last_fired: float = 0.0       # timestamp of last shot
     kills: int = 0
     is_combatant: bool = True     # False for civilians/animals
+    vision_range: float = 15.0    # meters — how far this unit can see
 
     # FSM state name (set by engine from unit FSM, None when no FSM assigned)
     fsm_state: str | None = None
@@ -572,6 +573,13 @@ class SimulationTarget:
             self.inventory = build_loadout(
                 self.target_id, self.asset_type, self.alliance,
             )
+
+        # Set vision_range from unit type registry if still at default
+        if self.vision_range == 15.0:
+            from engine.units import get_type
+            utype = get_type(self.asset_type)
+            if utype is not None:
+                self.vision_range = utype.vision_radius
 
         if self.speed > 0 and self.is_combatant and self.alliance != "neutral":
             from .movement import MovementController
@@ -865,6 +873,7 @@ class SimulationTarget:
             "radio_detected": self.radio_detected,
             "radio_signal_strength": round(self.radio_signal_strength, 3),
             "weapon_range": round(self.weapon_range, 1),
+            "vision_range": round(self.vision_range, 1),
             "crowd_role": self.crowd_role,
             "drone_variant": self.drone_variant,
             "instigator_state": self.instigator_state,
