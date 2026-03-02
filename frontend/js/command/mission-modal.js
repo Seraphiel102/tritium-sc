@@ -179,6 +179,7 @@ function _createModal() {
 async function _loadModels() {
     try {
         const resp = await fetch('/api/game/models');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         const dropdown = _overlay?.querySelector('[data-field="model"]');
         const recEl = _overlay?.querySelector('[data-field="recommendation"]');
@@ -241,6 +242,10 @@ async function _startGeneration(useLLM) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
+        if (!resp.ok) {
+            const errBody = await resp.json().catch(() => ({}));
+            throw new Error(errBody.detail || `HTTP ${resp.status}`);
+        }
         const data = await resp.json();
 
         if (data.status === 'complete') {
@@ -250,7 +255,7 @@ async function _startGeneration(useLLM) {
         }
         // For LLM generation, progress comes via WebSocket events
     } catch (e) {
-        _statusLabel.textContent = 'GENERATION FAILED';
+        _statusLabel.textContent = `GENERATION FAILED: ${e.message || 'Unknown error'}`;
         _isGenerating = false;
         _resetButtons();
     }

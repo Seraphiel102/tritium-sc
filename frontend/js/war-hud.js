@@ -538,10 +538,18 @@ function _warHudFetchMvp() {
 function warHudPlayAgain() {
     const el = document.getElementById('war-game-over');
     if (el) el.style.display = 'none';
+    // Also dismiss the main game-over overlay if visible
+    const goOverlay = document.getElementById('game-over-overlay');
+    if (goOverlay) goOverlay.hidden = true;
 
     fetch('/api/game/reset', { method: 'POST' })
         .then(r => r.ok ? r.json() : null)
         .catch(err => console.error('[WAR-HUD] Reset failed:', err));
+
+    // Clear store state so stale overlay data does not leak into next game
+    if (typeof TritiumStore !== 'undefined' && typeof TritiumStore.resetGameState === 'function') {
+        TritiumStore.resetGameState();
+    }
 
     // Reset local state
     _hudState.score = 0;

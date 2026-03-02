@@ -983,8 +983,13 @@ async function resetGame() {
         await fetch('/api/game/reset', { method: 'POST' });
         const overlay = document.getElementById('game-over-overlay');
         if (overlay) overlay.hidden = true;
+        // Also dismiss the war-hud canvas overlay if visible
+        const warOverlay = document.getElementById('war-game-over');
+        if (warOverlay) warOverlay.style.display = 'none';
         // Clear all game-related state so stale data does not leak into the next game
         TritiumStore.resetGameState();
+        // Clear projectiles, particles, and screen effects from previous game
+        if (typeof warCombatReset === 'function') warCombatReset();
     } catch (e) {
         showToast('Failed to reset game', 'alert');
     }
