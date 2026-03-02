@@ -217,6 +217,10 @@ export const TritiumStore = {
      */
     removeUnit(id) {
         this.units.delete(id);
+        // Clear selection if the removed unit was selected
+        if (this.map.selectedUnitId === id) {
+            this.set('map.selectedUnitId', null);
+        }
         this._scheduleNotify('units');
     },
 

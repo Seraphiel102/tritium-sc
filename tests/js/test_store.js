@@ -497,6 +497,24 @@ console.log('\n--- Unit Telemetry ---');
     assert(notified, 'removeUnit notifies units listeners');
 })();
 
+(function testRemoveSelectedUnitClearsSelection() {
+    const store = createStore();
+    store.updateUnit('turret-1', { type: 'turret' });
+    store.set('map.selectedUnitId', 'turret-1');
+    assertEqual(store.map.selectedUnitId, 'turret-1', 'unit is selected before remove');
+    store.removeUnit('turret-1');
+    assertEqual(store.map.selectedUnitId, null, 'removeUnit clears selectedUnitId when selected');
+})();
+
+(function testRemoveNonSelectedUnitKeepsSelection() {
+    const store = createStore();
+    store.updateUnit('turret-1', { type: 'turret' });
+    store.updateUnit('drone-1', { type: 'drone' });
+    store.set('map.selectedUnitId', 'turret-1');
+    store.removeUnit('drone-1');
+    assertEqual(store.map.selectedUnitId, 'turret-1', 'removeUnit does not clear selection for other units');
+})();
+
 (function testRemoveNonexistentUnit() {
     const store = createStore();
     let notified = false;
