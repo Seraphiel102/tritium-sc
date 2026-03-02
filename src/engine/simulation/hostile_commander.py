@@ -52,11 +52,37 @@ class HostileCommander:
     # Assess every N seconds (not every tick)
     ASSESS_INTERVAL = 1.0
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus=None) -> None:
         self._objectives: dict[str, Objective] = {}  # hostile_id -> objective
         self._last_assess: float = 0.0
         self._assess_count: int = 0
         self._last_assessment: dict = {}
+        self._game_mode_type: str | None = None
+        self._event_bus = event_bus
+        self._router = None  # Callable[[start, end, asset_type, alliance], list]
+
+    def set_router(self, route_fn) -> None:
+        """Set the pathfinding router callback.
+
+        route_fn signature: (start, end, unit_type, alliance) -> list[waypoints]
+        """
+        self._router = route_fn
+
+    def _route(self, start: tuple[float, float], end: tuple[float, float],
+               asset_type: str = "person", alliance: str = "hostile") -> list[tuple[float, float]]:
+        """Route a waypoint through the pathfinder, or direct if no router set."""
+        if self._router is not None:
+            try:
+                path = self._router(start, end, asset_type, alliance)
+                if path:
+                    return path
+            except Exception:
+                pass
+        return [end]
+
+    def set_game_mode_type(self, mode_type: str | None) -> None:
+        """Set the current game mode type for coordination dispatch."""
+        self._game_mode_type = mode_type
 
     def tick(self, dt: float, targets: dict[str, SimulationTarget]) -> None:
         """Called each engine tick. Reassesses at ASSESS_INTERVAL."""
@@ -68,16 +94,41 @@ class HostileCommander:
 
         # Assess and assign
         self._last_assessment = self.assess(targets)
+
+        # Publish hostile intel to EventBus so the WebSocket bridge can
+        # forward it to the frontend in real time (no polling needed).
+        # Only sends summary fields; per-unit objectives available via
+        # GET /api/game/hostile-intel for detailed view.
+        if self._event_bus is not None:
+            self._event_bus.publish("hostile_intel", dict(self._last_assessment))
+
+        hostiles = [t for t in targets.values()
+                    if t.alliance == "hostile" and t.status == "active"]
+        friendlies = [t for t in targets.values()
+                      if t.alliance == "friendly" and t.status == "active"
+                      and t.is_combatant]
+
+        # Mode-specific coordination
+        if self._game_mode_type == "drone_swarm":
+            self._coordinate_saturation(hostiles, friendlies)
+            self._assign_screening(hostiles, friendlies)
+            self._scout_relay(hostiles, friendlies)
+        elif self._game_mode_type == "civil_unrest":
+            self._manage_instigator_cycle(hostiles)
+            self._civilian_conversion_check(hostiles, targets)
+
         raw_orders = self._assign_objectives_raw(targets)
 
-        # Apply orders: set waypoints on hostile units
+        # Apply orders: set waypoints on hostile units (routed through pathfinder)
         for tid, obj in raw_orders.items():
             t = targets.get(tid)
             if t is None or t.status != "active":
                 continue
-            # Set waypoints toward objective
+            # Set waypoints toward objective via pathfinder
             if obj.type in ("retreat", "assault", "flank", "advance"):
-                t.waypoints = [obj.target_position]
+                t.waypoints = self._route(t.position, obj.target_position,
+                                          t.asset_type, t.alliance)
+                t._waypoint_index = 0
             # Store objective for reference
             self._objectives[tid] = obj
 
@@ -293,9 +344,179 @@ class HostileCommander:
         distances.sort(key=lambda d: d[0])
         return distances[0][1]
 
+    # -- Mode-specific coordination -----------------------------------------------
+
+    def _coordinate_saturation(
+        self,
+        hostiles: list[SimulationTarget],
+        friendlies: list[SimulationTarget],
+    ) -> None:
+        """Coordinate saturation attack with 120-degree separated approaches.
+
+        When 5+ attack_swarm drones are alive, assign waypoints at
+        120-degree-separated approach angles toward the center of friendlies.
+        """
+        attack_drones = [h for h in hostiles
+                         if getattr(h, "drone_variant", None) == "attack_swarm"
+                         and h.status == "active"]
+
+        if len(attack_drones) < 5 or not friendlies:
+            return
+
+        # Center of friendlies
+        fx = sum(f.position[0] for f in friendlies) / len(friendlies)
+        fy = sum(f.position[1] for f in friendlies) / len(friendlies)
+
+        # Assign approach angles at 120-degree separation (3 prongs)
+        for i, drone in enumerate(attack_drones):
+            prong = i % 3
+            angle = math.radians(prong * 120 + random.uniform(-10, 10))
+            approach_dist = 15.0
+            wp_x = fx + approach_dist * math.cos(angle)
+            wp_y = fy + approach_dist * math.sin(angle)
+            drone.waypoints = self._route(drone.position, (wp_x, wp_y),
+                                          drone.asset_type, drone.alliance)
+
+    def _assign_screening(
+        self,
+        hostiles: list[SimulationTarget],
+        friendlies: list[SimulationTarget],
+    ) -> None:
+        """Position attack drones between bombers and nearest missile turret.
+
+        When bombers are present, assign attack drones as sacrificial
+        screens to absorb missile turret fire.
+        """
+        bombers = [h for h in hostiles
+                   if getattr(h, "drone_variant", None) == "bomber_swarm"
+                   and h.status == "active"]
+        attack_drones = [h for h in hostiles
+                         if getattr(h, "drone_variant", None) == "attack_swarm"
+                         and h.status == "active"]
+        missile_turrets = [f for f in friendlies
+                           if f.asset_type == "missile_turret"
+                           and f.status in ("active", "stationary")]
+
+        if not bombers or not attack_drones or not missile_turrets:
+            return
+
+        # For each attack drone, position between nearest bomber and nearest missile turret
+        for ad in attack_drones:
+            # Find nearest bomber
+            nearest_bomber = min(bombers, key=lambda b: math.hypot(
+                b.position[0] - ad.position[0],
+                b.position[1] - ad.position[1],
+            ))
+            # Find nearest missile turret
+            nearest_turret = min(missile_turrets, key=lambda t: math.hypot(
+                t.position[0] - ad.position[0],
+                t.position[1] - ad.position[1],
+            ))
+            # Position midpoint between bomber and turret
+            mid_x = (nearest_bomber.position[0] + nearest_turret.position[0]) / 2.0
+            mid_y = (nearest_bomber.position[1] + nearest_turret.position[1]) / 2.0
+            ad.waypoints = self._route(ad.position, (mid_x, mid_y),
+                                       ad.asset_type, ad.alliance)
+
+    def _scout_relay(
+        self,
+        hostiles: list[SimulationTarget],
+        friendlies: list[SimulationTarget],
+    ) -> None:
+        """Scout drone SIGNAL_CONTACT triggers attack drone convergence.
+
+        When scouts have marked targets, direct attack drones to converge.
+        """
+        scouts = [h for h in hostiles
+                  if getattr(h, "drone_variant", None) == "scout_swarm"
+                  and h.status == "active"]
+        attack_drones = [h for h in hostiles
+                         if getattr(h, "drone_variant", None) == "attack_swarm"
+                         and h.status == "active"]
+
+        if not scouts or not attack_drones or not friendlies:
+            return
+
+        # Find nearest friendly to any scout
+        for scout in scouts:
+            nearest = min(friendlies, key=lambda f: math.hypot(
+                f.position[0] - scout.position[0],
+                f.position[1] - scout.position[1],
+            ))
+            dist = math.hypot(
+                nearest.position[0] - scout.position[0],
+                nearest.position[1] - scout.position[1],
+            )
+            if dist <= 40.0:
+                # Direct attack drones to converge on target
+                for ad in attack_drones:
+                    ad.waypoints = self._route(ad.position, nearest.position,
+                                               ad.asset_type, ad.alliance)
+                break
+
+    def _manage_instigator_cycle(
+        self,
+        hostiles: list[SimulationTarget],
+    ) -> None:
+        """Coordinate instigator activation timing for maximum disruption.
+
+        Stagger instigator activations so they don't all activate simultaneously.
+        """
+        instigators = [h for h in hostiles
+                       if getattr(h, "crowd_role", None) == "instigator"
+                       and h.status == "active"]
+
+        if len(instigators) <= 1:
+            return
+
+        # Ensure instigators are staggered: at most one active at a time
+        active_count = sum(1 for i in instigators
+                           if i.instigator_state == "active")
+        if active_count > 1:
+            # Force extras back to hidden
+            forced = 0
+            for i in instigators:
+                if i.instigator_state == "active":
+                    if forced > 0:
+                        i.instigator_state = "hidden"
+                        i.instigator_timer = 0.0
+                    forced += 1
+
+    def _civilian_conversion_check(
+        self,
+        hostiles: list[SimulationTarget],
+        all_targets: dict[str, SimulationTarget],
+    ) -> None:
+        """When instigator activates near civilians: 20% chance per civilian to convert to rioter.
+
+        Conversion range is 15m from the active instigator.
+        """
+        active_instigators = [h for h in hostiles
+                              if getattr(h, "crowd_role", None) == "instigator"
+                              and getattr(h, "instigator_state", None) == "active"]
+
+        if not active_instigators:
+            return
+
+        for instigator in active_instigators:
+            for t in all_targets.values():
+                if t.crowd_role != "civilian":
+                    continue
+                dx = t.position[0] - instigator.position[0]
+                dy = t.position[1] - instigator.position[1]
+                if math.hypot(dx, dy) <= 15.0:
+                    if random.random() < 0.2:
+                        t.crowd_role = "rioter"
+                        t.is_combatant = True
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove objective state for a single unit."""
+        self._objectives.pop(target_id, None)
+
     def reset(self) -> None:
         """Clear all objectives."""
         self._objectives.clear()
         self._assess_count = 0
         self._last_assess = 0.0
         self._last_assessment = {}
+        self._game_mode_type = None

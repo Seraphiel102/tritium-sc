@@ -50,36 +50,54 @@ from .target import SimulationTarget
 if TYPE_CHECKING:
     from .engine import SimulationEngine
 
-# Map bounds (same as engine)
-_MAP_MIN = -30.0
-_MAP_MAX = 30.0
+# Default map bounds -- overridden by engine's actual bounds at runtime.
+# These are only used if the spawner is somehow constructed without an engine.
+_DEFAULT_MAP_BOUNDS = 200.0
 
 # -- Neighborhood street grid ------------------------------------------------
-# Two north-south streets and two east-west streets form a grid through the
-# map.  Paths snap to these corridors so targets follow roads rather than
-# cutting through houses diagonally.
-#
-# Scale: 1 unit = 1 meter.  Map is 60m x 60m (roughly one residential block).
-# Streets are at the 1/3 and 2/3 lines: x = -10, x = +10, y = -10, y = +10.
-_STREETS_NS_X = [-10.0, 10.0]   # North-south street X coordinates
-_STREETS_EW_Y = [-10.0, 10.0]   # East-west street Y coordinates
+# Street grid is generated dynamically based on map bounds.  Streets are
+# placed every ~60m to form a realistic residential grid at any scale.
+# The old hardcoded +-10 grid only covered a 60m map.  Now the grid scales
+# with the simulation bounds (default 200m = 400m x 400m area).
 _STREET_JITTER = 1.5            # Lateral jitter to avoid single-file lines
+_STREET_SPACING = 60.0          # Meters between parallel streets
 
 
-def _snap_to_nearest_street(x: float, y: float) -> tuple[float, float]:
+def _generate_street_grid(bounds: float) -> tuple[list[float], list[float]]:
+    """Generate NS and EW street coordinates for a given map half-extent.
+
+    Places streets every _STREET_SPACING meters from -bounds to +bounds.
+    Always includes a street at 0.  Returns (ns_x_list, ew_y_list).
+    """
+    streets = []
+    pos = 0.0
+    while pos <= bounds:
+        streets.append(pos)
+        if pos > 0:
+            streets.append(-pos)
+        pos += _STREET_SPACING
+    streets.sort()
+    return streets, list(streets)  # NS and EW use same spacing
+
+
+def _snap_to_nearest_street(
+    x: float, y: float, streets_ns: list[float], streets_ew: list[float]
+) -> tuple[float, float]:
     """Snap a point to the nearest street intersection or corridor."""
-    # Find nearest NS street
-    best_ns = min(_STREETS_NS_X, key=lambda sx: abs(sx - x))
-    # Find nearest EW street
-    best_ew = min(_STREETS_EW_Y, key=lambda sy: abs(sy - y))
-    # Snap to whichever is closer
+    best_ns = min(streets_ns, key=lambda sx: abs(sx - x))
+    best_ew = min(streets_ew, key=lambda sy: abs(sy - y))
     if abs(best_ns - x) < abs(best_ew - y):
         return (best_ns + random.uniform(-_STREET_JITTER, _STREET_JITTER), y)
     else:
         return (x, best_ew + random.uniform(-_STREET_JITTER, _STREET_JITTER))
 
 
-def _street_path(start: tuple[float, float], end: tuple[float, float]) -> list[tuple[float, float]]:
+def _street_path(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    streets_ns: list[float],
+    streets_ew: list[float],
+) -> list[tuple[float, float]]:
     """Generate an L-shaped path following the street grid from start to end.
 
     Instead of cutting diagonally through yards, the path walks along the
@@ -91,9 +109,9 @@ def _street_path(start: tuple[float, float], end: tuple[float, float]) -> list[t
     ex, ey = end
 
     # Pick the NS street closest to the start
-    ns_x = min(_STREETS_NS_X, key=lambda s: abs(s - sx))
+    ns_x = min(streets_ns, key=lambda s: abs(s - sx))
     # Pick the EW street closest to the end
-    ew_y = min(_STREETS_EW_Y, key=lambda s: abs(s - ey))
+    ew_y = min(streets_ew, key=lambda s: abs(s - ey))
 
     jx = random.uniform(-_STREET_JITTER, _STREET_JITTER)
     jy = random.uniform(-_STREET_JITTER, _STREET_JITTER)
@@ -170,6 +188,12 @@ class AmbientSpawner:
         self._thread: threading.Thread | None = None
         self._used_names: set[str] = set()
         self._enabled = True
+        # Derive map bounds from engine (defaults to _DEFAULT_MAP_BOUNDS)
+        self._map_bounds = getattr(engine, '_map_bounds', _DEFAULT_MAP_BOUNDS)
+        self._map_min = -self._map_bounds
+        self._map_max = self._map_bounds
+        # Generate street grid scaled to map bounds
+        self._streets_ns, self._streets_ew = _generate_street_grid(self._map_bounds)
 
     @property
     def enabled(self) -> bool:
@@ -257,30 +281,31 @@ class AmbientSpawner:
     def _random_edge(self) -> tuple[float, float]:
         """Random position on one of the four map edges."""
         edge = random.randint(0, 3)
-        coord = random.uniform(_MAP_MIN * 0.8, _MAP_MAX * 0.8)
+        coord = random.uniform(self._map_min * 0.9, self._map_max * 0.9)
         if edge == 0:
-            return (coord, _MAP_MAX)
+            return (coord, self._map_max)
         elif edge == 1:
-            return (coord, _MAP_MIN)
+            return (coord, self._map_min)
         elif edge == 2:
-            return (_MAP_MAX, coord)
+            return (self._map_max, coord)
         else:
-            return (_MAP_MIN, coord)
+            return (self._map_min, coord)
 
     def _opposite_edge(self, pos: tuple[float, float]) -> tuple[float, float]:
         """Return a position on the opposite edge from the given position."""
         x, y = pos
-        if abs(y - _MAP_MAX) < 2:
-            return (self._clamp(x + random.uniform(-10, 10)), _MAP_MIN)
-        elif abs(y - _MAP_MIN) < 2:
-            return (self._clamp(x + random.uniform(-10, 10)), _MAP_MAX)
-        elif abs(x - _MAP_MAX) < 2:
-            return (_MAP_MIN, self._clamp(y + random.uniform(-10, 10)))
+        spread = self._map_bounds * 0.1  # 10% lateral spread
+        if abs(y - self._map_max) < 2:
+            return (self._clamp(x + random.uniform(-spread, spread)), self._map_min)
+        elif abs(y - self._map_min) < 2:
+            return (self._clamp(x + random.uniform(-spread, spread)), self._map_max)
+        elif abs(x - self._map_max) < 2:
+            return (self._map_min, self._clamp(y + random.uniform(-spread, spread)))
         else:
-            return (_MAP_MAX, self._clamp(y + random.uniform(-10, 10)))
+            return (self._map_max, self._clamp(y + random.uniform(-spread, spread)))
 
     def _clamp(self, v: float) -> float:
-        return max(_MAP_MIN, min(_MAP_MAX, v))
+        return max(self._map_min, min(self._map_max, v))
 
     def _sidewalk_path(self, start: tuple[float, float]) -> list[tuple[float, float]]:
         """Generate a path along sidewalks following the street grid.
@@ -291,7 +316,7 @@ class AmbientSpawner:
         against building obstacles.
         """
         end = self._opposite_edge(start)
-        path = _street_path(start, end)
+        path = _street_path(start, end, self._streets_ns, self._streets_ew)
         # Validate all waypoints against buildings
         return [self._safe_point(p[0], p[1]) for p in path]
 
@@ -303,7 +328,7 @@ class AmbientSpawner:
         along a road.  Corner points validated against building obstacles.
         """
         end = self._opposite_edge(start)
-        path = _street_path(start, end)
+        path = _street_path(start, end, self._streets_ns, self._streets_ew)
         return [self._safe_point(p[0], p[1]) for p in path]
 
     def _point_in_building(self, x: float, y: float) -> bool:
@@ -320,8 +345,8 @@ class AmbientSpawner:
         for _ in range(max_attempts):
             jx = x + random.uniform(-5, 5)
             jy = y + random.uniform(-5, 5)
-            jx = max(_MAP_MIN, min(_MAP_MAX, jx))
-            jy = max(_MAP_MIN, min(_MAP_MAX, jy))
+            jx = max(self._map_min, min(self._map_max, jx))
+            jy = max(self._map_min, min(self._map_max, jy))
             if not self._point_in_building(jx, jy):
                 return (jx, jy)
         # Fallback: edge point (always safe)
@@ -331,10 +356,12 @@ class AmbientSpawner:
         """Generate a start + wander path within a yard area.
 
         All generated points are validated against building obstacles.
+        Yard areas are scattered across the full map, not just near center.
         """
-        # Pick a random yard area (not at edges)
-        cx = random.uniform(-15, 15)
-        cy = random.uniform(-15, 15)
+        # Pick a random yard area anywhere within 80% of map bounds
+        yard_range = self._map_bounds * 0.8
+        cx = random.uniform(-yard_range, yard_range)
+        cy = random.uniform(-yard_range, yard_range)
         start = self._safe_point(cx + random.uniform(-3, 3), cy + random.uniform(-3, 3))
         points = []
         for _ in range(random.randint(3, 5)):
@@ -352,10 +379,15 @@ class AmbientSpawner:
         """Generate delivery path: road edge -> front door -> pause -> back.
 
         Front door position validated against building obstacles.
+        Delivers to random locations across the full map area.
         """
         start = self._random_edge()
         # "Front door" somewhere in the interior — avoid buildings
-        door = self._safe_point(random.uniform(-10, 10), random.uniform(-10, 10))
+        interior_range = self._map_bounds * 0.7
+        door = self._safe_point(
+            random.uniform(-interior_range, interior_range),
+            random.uniform(-interior_range, interior_range),
+        )
         # Path: approach -> door -> wait (same point, speed makes them pause) -> back to edge
         return_point = self._random_edge()
         return start, [door, door, return_point]

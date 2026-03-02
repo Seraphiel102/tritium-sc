@@ -50,10 +50,15 @@ class VisibilityState:
     can_see: dict[str, list[str]] = field(default_factory=dict)     # observer_id -> target_ids
     friendly_visible: set[str] = field(default_factory=set)         # union of all friendly vision
     drone_relayed: set[str] = field(default_factory=set)            # targets shared via drone relay
+    radio_detected: set[str] = field(default_factory=set)           # target_ids detected via radio
+    radio_signal_strength: dict[str, float] = field(default_factory=dict)  # target_id -> strength 0-1
 
 
 # Types that relay vision to all friendlies
 _DRONE_TYPES = {"drone", "scout_drone"}
+
+# Radio detection range in meters (BLE/WiFi/cellular)
+_RADIO_DETECTION_RANGE = 100.0
 
 
 class VisionSystem:
@@ -205,6 +210,43 @@ class VisionSystem:
         # Clear external sightings after processing
         self._external_sightings.clear()
 
+        # Radio detection pass: detect targets with radio signatures
+        # (bluetooth_mac, wifi_mac, cell_id) through walls at extended range.
+        # Only hostile/unknown targets are tracked via radio.
+        for unit in friendlies:
+            radio_candidates = spatial_grid.query_radius(
+                unit.position, _RADIO_DETECTION_RANGE,
+            )
+            for candidate in radio_candidates:
+                if candidate.target_id == unit.target_id:
+                    continue
+                if candidate.alliance not in ("hostile", "unknown"):
+                    continue
+                if candidate.status in (
+                    "destroyed", "eliminated", "neutralized", "despawned",
+                ):
+                    continue
+                # Check if target has radio signatures
+                ident = candidate.identity
+                if ident is None:
+                    continue
+                if not (ident.bluetooth_mac or ident.wifi_mac or ident.cell_id):
+                    continue
+
+                dx = candidate.position[0] - unit.position[0]
+                dy = candidate.position[1] - unit.position[1]
+                dist = math.hypot(dx, dy)
+                if dist > _RADIO_DETECTION_RANGE:
+                    continue
+
+                tid = candidate.target_id
+                # Signal strength: inverse-square falloff, clamped to [0, 1]
+                strength = max(0.0, 1.0 - (dist / _RADIO_DETECTION_RANGE) ** 2)
+                state.radio_detected.add(tid)
+                # Keep strongest signal from any friendly observer
+                if tid not in state.radio_signal_strength or strength > state.radio_signal_strength[tid]:
+                    state.radio_signal_strength[tid] = strength
+
         self._last_state = state
         return state
 
@@ -247,3 +289,11 @@ class VisionSystem:
         if self._terrain_map is None:
             return True
         return self._terrain_map.line_of_sight(pos_a, pos_b)
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove per-unit vision state for a single unit."""
+        self._sweep_angles.pop(target_id, None)
+
+    def reset(self) -> None:
+        """Clear all per-unit vision state."""
+        self._sweep_angles.clear()

@@ -32,11 +32,12 @@ class CoverObject:
 class CoverSystem:
     """Tracks cover objects and computes damage reduction for targets."""
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus: object | None = None) -> None:
         self._cover_objects: list[CoverObject] = []
         self._unit_cover: dict[str, float] = {}  # target_id -> cover bonus
         self._cover_points: list[CoverObject] = []
         self._assignments: dict[str, CoverObject] = {}  # target_id -> assigned cover point
+        self._event_bus = event_bus
 
     def add_cover(self, cover: CoverObject) -> None:
         """Add a cover object to the system."""
@@ -124,6 +125,25 @@ class CoverSystem:
                     bonus = cover.cover_value * proximity_factor
                     best_cover = max(best_cover, bonus)
         return min(best_cover, 0.8)
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove per-unit cover state for a single unit."""
+        self._unit_cover.pop(target_id, None)
+        self._assignments.pop(target_id, None)
+
+    def publish_cover_state(self) -> None:
+        """Publish current cover objects to the EventBus for frontend rendering."""
+        if self._event_bus is None:
+            return
+        points = [
+            {
+                "position": list(c.position),
+                "radius": c.radius,
+                "cover_value": c.cover_value,
+            }
+            for c in self._cover_objects
+        ]
+        self._event_bus.publish("cover_points", {"points": points})
 
     def reset(self) -> None:
         """Clear all cover state."""

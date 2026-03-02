@@ -112,6 +112,11 @@ class PursuitSystem:
         predicted_y = hostile.position[1] + math.cos(heading_rad) * hostile.speed * look_ahead
         return (predicted_x, predicted_y)
 
+    def remove_unit(self, target_id: str) -> None:
+        """Remove all pursuit state for a single unit."""
+        self._intercept_points.pop(target_id, None)
+        self._pursuit_assignments.pop(target_id, None)
+
     def reset(self) -> None:
         """Clear all pursuit state."""
         self._intercept_points.clear()

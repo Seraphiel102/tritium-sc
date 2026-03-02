@@ -91,6 +91,23 @@ class TerrainMap:
         self._grid_size = int(2 * self._bounds / resolution) + 1
         self._cells: dict[tuple[int, int], TerrainCell] = {}
 
+    # -- Public grid properties ------------------------------------------------
+
+    @property
+    def grid_size(self) -> int:
+        """Number of cells along each axis."""
+        return self._grid_size
+
+    @property
+    def bounds(self) -> float:
+        """Map half-extent in meters."""
+        return self._bounds
+
+    @property
+    def resolution(self) -> float:
+        """Cell size in meters."""
+        return self._resolution
+
     # -- Grid coordinate conversion -------------------------------------------
 
     def _world_to_grid(self, x: float, y: float) -> tuple[int, int]:
@@ -181,6 +198,31 @@ class TerrainMap:
     def get_visibility(self, x: float, y: float) -> float:
         """Get visibility (how easy to spot a unit here)."""
         return self.get_cell(x, y).visibility
+
+    def get_cost(self, col: int, row: int) -> float:
+        """Get movement cost for a grid cell by column/row index.
+
+        Returns inf for out-of-bounds cells. This avoids world<->grid
+        conversion overhead on every A* neighbor check.
+        """
+        if col < 0 or row < 0 or col >= self._grid_size or row >= self._grid_size:
+            return float("inf")
+        cell = self._cells.get((col, row))
+        if cell is None:
+            return 1.0  # open terrain default
+        return cell.movement_cost
+
+    def get_terrain_at(self, col: int, row: int) -> str:
+        """Get terrain type string by grid column/row index.
+
+        Returns "open" for unset cells, "out_of_bounds" for invalid indices.
+        """
+        if col < 0 or row < 0 or col >= self._grid_size or row >= self._grid_size:
+            return "out_of_bounds"
+        cell = self._cells.get((col, row))
+        if cell is None:
+            return "open"
+        return cell.terrain_type
 
     # -- Layout loading --------------------------------------------------------
 

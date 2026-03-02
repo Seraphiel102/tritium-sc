@@ -179,12 +179,15 @@ class NPCIntelligencePlugin(PluginInterface):
                 brain.apply_action(action)
                 brain._needs_fallback = False
                 brain.mark_thought()
-                # Publish thought bubble for fallback action
+                # Publish thought bubble for fallback action (low importance —
+                # idle chatter that the frontend won't auto-display).
                 if self._thought_registry is not None:
+                    from .thought_registry import IMPORTANCE_LOW
                     self._thought_registry.set_thought(
                         brain.target_id,
                         action.capitalize(),
                         duration=3.0,
+                        importance=IMPORTANCE_LOW,
                     )
 
     def _on_think_result(self, target_id: str, action: str) -> None:

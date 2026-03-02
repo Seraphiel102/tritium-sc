@@ -142,6 +142,9 @@ class ReplayRecorder:
                 "max_health": t.max_health,
                 "fsm_state": t.fsm_state,
                 "status": t.status,
+                "visible": t.visible,
+                "radio_detected": t.radio_detected,
+                "morale": getattr(t, "morale", 1.0),
             })
 
         frame = {

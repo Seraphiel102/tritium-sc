@@ -29,6 +29,7 @@ class SpawnGroup:
     count: int
     speed: float = 1.5
     health: float = 80.0
+    drone_variant: str | None = None  # "scout_swarm", "attack_swarm", "bomber_swarm"
 
 
 @dataclass
@@ -69,9 +70,10 @@ class BattleScenario:
     defenders: list[DefenderConfig] = field(default_factory=list)
     max_hostiles: int = 200
     tags: list[str] = field(default_factory=list)
+    mode_config: dict[str, Any] | None = None  # Mode-specific settings (civil_unrest, drone_swarm)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "scenario_id": self.scenario_id,
             "name": self.name,
             "description": self.description,
@@ -87,6 +89,7 @@ class BattleScenario:
                             "count": g.count,
                             "speed": g.speed,
                             "health": g.health,
+                            **({"drone_variant": g.drone_variant} if g.drone_variant else {}),
                         }
                         for g in w.groups
                     ],
@@ -107,6 +110,9 @@ class BattleScenario:
                 for d in self.defenders
             ],
         }
+        if self.mode_config is not None:
+            result["mode_config"] = self.mode_config
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BattleScenario:
@@ -118,6 +124,7 @@ class BattleScenario:
                     count=g["count"],
                     speed=g.get("speed", 1.5),
                     health=g.get("health", 80.0),
+                    drone_variant=g.get("drone_variant"),
                 )
                 for g in w["groups"]
             ]
@@ -149,6 +156,7 @@ class BattleScenario:
             defenders=defenders,
             max_hostiles=data.get("max_hostiles", 200),
             tags=data.get("tags", []),
+            mode_config=data.get("mode_config"),
         )
 
 
@@ -163,3 +171,85 @@ def load_battle_scenario(path: str) -> BattleScenario:
     with open(path) as f:
         data = json.load(f)
     return BattleScenario.from_dict(data)
+
+
+# Default defender types to cycle through when none are specified
+_DEFAULT_DEFENDER_TYPES = [
+    "turret", "rover", "drone", "heavy_turret",
+    "missile_turret", "scout_drone", "tank", "apc",
+]
+
+
+def spread_defenders(
+    count: int,
+    map_bounds: float,
+    unit_types: list[str] | None = None,
+) -> list[DefenderConfig]:
+    """Distribute *count* defenders across the map in strategic positions.
+
+    Positions are arranged in concentric rings so they cover multiple
+    quadrants and are not all clustered at the center.  A single
+    defender is placed near center; 2-4 form a ring at 30% bounds;
+    5+ add an outer ring at 60% bounds.
+
+    Args:
+        count: Number of defenders to place.
+        map_bounds: Map half-size (e.g. 200.0 for a 400m map).
+        unit_types: Optional list of asset_type strings (length must
+            match *count*).  If ``None``, cycles through default types.
+
+    Returns:
+        List of DefenderConfig with spread positions.
+    """
+    import math
+
+    if unit_types is None:
+        types = [_DEFAULT_DEFENDER_TYPES[i % len(_DEFAULT_DEFENDER_TYPES)]
+                 for i in range(count)]
+    else:
+        types = list(unit_types)
+
+    configs: list[DefenderConfig] = []
+
+    if count == 0:
+        return configs
+
+    if count == 1:
+        configs.append(DefenderConfig(
+            asset_type=types[0],
+            position=(0.0, 0.0),
+            name=f"Defender-1",
+        ))
+        return configs
+
+    # Place defenders in a ring pattern
+    # Inner ring (30% of bounds) for first min(count, 4) defenders
+    inner_count = min(count, 4)
+    inner_radius = map_bounds * 0.30
+    for i in range(inner_count):
+        angle = (2 * math.pi * i) / inner_count
+        x = inner_radius * math.cos(angle)
+        y = inner_radius * math.sin(angle)
+        configs.append(DefenderConfig(
+            asset_type=types[i],
+            position=(round(x, 1), round(y, 1)),
+            name=f"Defender-{i + 1}",
+        ))
+
+    # Outer ring (60% of bounds) for remaining defenders
+    remaining = count - inner_count
+    if remaining > 0:
+        outer_radius = map_bounds * 0.60
+        for i in range(remaining):
+            # Offset angle so outer ring doesn't align with inner
+            angle = (2 * math.pi * i) / remaining + math.pi / remaining
+            x = outer_radius * math.cos(angle)
+            y = outer_radius * math.sin(angle)
+            idx = inner_count + i
+            configs.append(DefenderConfig(
+                asset_type=types[idx],
+                position=(round(x, 1), round(y, 1)),
+                name=f"Defender-{idx + 1}",
+            ))
+
+    return configs

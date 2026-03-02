@@ -106,6 +106,11 @@ class MoraleSystem:
         """Return True if the unit's morale is above the emboldened threshold."""
         return self.get_morale(target_id) > EMBOLDENED_THRESHOLD
 
+    def remove_unit(self, target_id: str) -> None:
+        """Remove all morale state for a single unit."""
+        self._morale.pop(target_id, None)
+        self._last_hit_time.pop(target_id, None)
+
     def reset(self) -> None:
         """Clear all morale state."""
         self._morale.clear()

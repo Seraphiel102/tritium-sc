@@ -75,6 +75,8 @@ class Projectile:
     speed: float = 25.0
     damage: float = 10.0
     projectile_type: str = "nerf_dart"  # nerf_dart, nerf_rocket, water_balloon
+    source_type: str = ""  # asset_type of the firing unit
+    source_pos: tuple[float, float] = (0.0, 0.0)  # origin position at time of fire
     created_at: float = field(default_factory=time.time)
     hit: bool = False
     missed: bool = False
@@ -84,9 +86,11 @@ class Projectile:
             "id": self.id,
             "source_id": self.source_id,
             "source_name": self.source_name,
+            "source_type": self.source_type,
             "target_id": self.target_id,
             "position": {"x": self.position[0], "y": self.position[1]},
             "target_pos": {"x": self.target_pos[0], "y": self.target_pos[1]},
+            "source_pos": {"x": self.source_pos[0], "y": self.source_pos[1]},
             "speed": self.speed,
             "damage": self.damage,
             "projectile_type": self.projectile_type,
@@ -117,6 +121,7 @@ class CombatSystem:
         target: SimulationTarget,
         projectile_type: str = "nerf_dart",
         terrain_map=None,
+        aim_pos: tuple[float, float] | None = None,
     ) -> Projectile | None:
         """Fire a projectile from *source* at *target*.
 
@@ -126,6 +131,21 @@ class CombatSystem:
         """
         if not source.can_fire():
             return None
+
+        # Ammo check: if ammo_count == 0, cannot fire; if > 0, decrement
+        if source.ammo_count == 0:
+            return None
+        if source.ammo_count > 0:
+            source.ammo_count -= 1
+
+        # Sync inventory weapon ammo with target.ammo_count depletion
+        if hasattr(source, 'inventory') and source.inventory is not None:
+            active_wp = source.inventory.get_active_weapon()
+            if active_wp is not None and active_wp.ammo > 0:
+                active_wp.ammo -= 1
+                # Auto-switch when active weapon runs dry
+                if active_wp.ammo <= 0:
+                    source.inventory.auto_switch_weapon()
 
         # Check range (with upgrade modifier)
         dx = target.position[0] - source.position[0]
@@ -157,8 +177,18 @@ class CombatSystem:
 
         source.last_fired = time.time()
 
-        # Apply damage modifier from upgrades
+        # Determine effective damage from the best available source:
+        #   1. Weapon system weapon (synced from inventory at add_target time)
+        #   2. target.weapon_damage (flat combat profile fallback)
+        # The weapon system is the canonical source of weapon stats during
+        # engine-integrated combat.  Direct inventory damage lookup is NOT
+        # used here because __post_init__ auto-builds inventory with catalog
+        # stats that may differ from the combat profile weapon_damage.
         effective_damage = source.weapon_damage
+        if self._weapon_system is not None:
+            ws_weapon = self._weapon_system.get_weapon(source.target_id)
+            if ws_weapon is not None and ws_weapon.damage > 0:
+                effective_damage = ws_weapon.damage
         if self._upgrade_system is not None:
             effective_damage *= self._upgrade_system.get_stat_modifier(
                 source.target_id, "weapon_damage"
@@ -170,10 +200,12 @@ class CombatSystem:
             source_name=source.name,
             target_id=target.target_id,
             position=source.position,
-            target_pos=target.position,
+            target_pos=aim_pos if aim_pos is not None else target.position,
             speed=80.0,
             damage=effective_damage,
             projectile_type=projectile_type,
+            source_type=source.asset_type,
+            source_pos=source.position,
         )
         self._projectiles[proj.id] = proj
 
@@ -245,6 +277,16 @@ class CombatSystem:
                             target.target_id, "damage_reduction"
                         )
                         effective_damage *= (1.0 - reduction)
+                    # Apply inventory armor damage reduction
+                    if hasattr(target, 'inventory') and target.inventory is not None:
+                        armor_reduction = target.inventory.total_damage_reduction()
+                        if armor_reduction > 0:
+                            effective_damage *= (1.0 - armor_reduction)
+                            target.inventory.damage_armor(1)
+                    # Cap total damage reduction at 80% (minimum 20% of original damage)
+                    min_damage = proj.damage * 0.2
+                    if effective_damage < min_damage:
+                        effective_damage = min_damage
                     eliminated = target.apply_damage(effective_damage)
                     self._event_bus.publish("projectile_hit", {
                         "projectile_id": proj.id,
@@ -253,6 +295,9 @@ class CombatSystem:
                         "damage": effective_damage,
                         "remaining_health": target.health,
                         "source_id": proj.source_id,
+                        "source_type": proj.source_type,
+                        "source_name": proj.source_name,
+                        "source_pos": {"x": proj.source_pos[0], "y": proj.source_pos[1]},
                         "projectile_type": proj.projectile_type,
                         "position": {"x": target.position[0], "y": target.position[1]},
                     })
@@ -273,8 +318,10 @@ class CombatSystem:
                         self._event_bus.publish("target_eliminated", {
                             "target_id": target.target_id,
                             "target_name": target.name,
+                            "target_type": target.asset_type,
                             "interceptor_id": proj.source_id,
                             "interceptor_name": interceptor_name,
+                            "interceptor_type": proj.source_type,
                             "position": {"x": target.position[0], "y": target.position[1]},
                             "method": proj.projectile_type,
                         })
@@ -322,6 +369,52 @@ class CombatSystem:
         """Return serializable list of active projectiles for frontend rendering."""
         return [p.to_dict() for p in self._projectiles.values()
                 if not p.hit and not p.missed]
+
+    def detonate_bomber(
+        self,
+        bomber: SimulationTarget,
+        targets: dict[str, SimulationTarget],
+        radius: float = 5.0,
+    ) -> list[str]:
+        """Detonate a bomber drone, applying AoE damage.
+
+        Applies bomber's weapon_damage to all targets within *radius*
+        (excluding the bomber itself). Returns list of damaged target IDs.
+
+        Args:
+            bomber: The bomber drone detonating.
+            targets: All targets in the simulation.
+            radius: Blast radius in meters.
+
+        Returns:
+            List of target IDs that were damaged.
+        """
+        damage = bomber.weapon_damage
+        damaged: list[str] = []
+        r2 = radius * radius
+
+        for tid, t in targets.items():
+            if tid == bomber.target_id:
+                continue
+            dx = t.position[0] - bomber.position[0]
+            dy = t.position[1] - bomber.position[1]
+            if dx * dx + dy * dy <= r2:
+                t.apply_damage(damage)
+                damaged.append(tid)
+
+        # Publish detonation event
+        self._event_bus.publish("bomber_detonation", {
+            "bomber_id": bomber.target_id,
+            "position": {"x": bomber.position[0], "y": bomber.position[1]},
+            "radius": radius,
+            "damage": damage,
+        })
+
+        # Mark bomber as eliminated
+        bomber.health = 0
+        bomber.status = "eliminated"
+
+        return damaged
 
     def clear(self) -> None:
         """Remove all projectiles."""

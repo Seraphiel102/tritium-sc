@@ -385,6 +385,20 @@ class NPCManager:
 
         return target
 
+    # -- Cleanup ------------------------------------------------------------
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove all per-unit state for a target.
+
+        Called by engine.remove_target() to prevent memory leaks.
+        Cleans up: _npc_ids, _missions, _vehicle_types, _bindings.
+        Safe to call with unknown target_ids (no-op).
+        """
+        self._npc_ids.discard(target_id)
+        self._missions.pop(target_id, None)
+        self._vehicle_types.pop(target_id, None)
+        self._bindings.pop(target_id, None)
+
     # -- Queries ------------------------------------------------------------
 
     def get_mission(self, target_id: str) -> NPCMission | None:

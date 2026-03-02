@@ -55,7 +55,7 @@ _GROUP_RUSH_SPEED_MULT = 1.2  # 20% speed boost during rush
 _COVER_HEALTH_THRESHOLD = 0.5  # seek cover below this health fraction
 
 # Weapon projectile type by asset_type (matches weapons.py loadouts)
-_WEAPON_TYPES: dict[str, str] = {
+_WEAPON_TYPES: dict[str, str | None] = {
     "turret": "nerf_turret_gun",
     "heavy_turret": "nerf_heavy_turret",
     "missile_turret": "nerf_missile_launcher",
@@ -69,7 +69,40 @@ _WEAPON_TYPES: dict[str, str] = {
     "hostile_leader": "nerf_pistol",
     "hostile_vehicle": "nerf_cannon",
     "swarm_drone": "nerf_dart_gun",
+    # Mission-type weapon mappings
+    "instigator": "thrown_object",
+    "rioter": "melee_strike",
+    "scout_swarm": None,           # Cannot fire
+    "attack_swarm": "nerf_dart_gun",
+    "bomber_swarm": None,          # Detonation, not projectile
 }
+
+
+def _effective_range_3d(
+    attacker_altitude: float,
+    target_altitude: float,
+    weapon_range: float,
+    attacker_type: str,
+) -> float:
+    """Calculate effective weapon range accounting for 3D altitude.
+
+    AA penalty: if target altitude > 5.0 and attacker is on the ground
+    (altitude < 5.0) and attacker is NOT a missile_turret, reduce
+    effective weapon_range by 40%.
+
+    Args:
+        attacker_altitude: Attacker's altitude in meters.
+        target_altitude: Target's altitude in meters.
+        weapon_range: Base weapon range.
+        attacker_type: Asset type of the attacker.
+
+    Returns:
+        Effective weapon range after any altitude penalties.
+    """
+    if target_altitude > 5.0 and attacker_altitude < 5.0:
+        if attacker_type != "missile_turret":
+            return weapon_range * 0.6
+    return weapon_range
 
 
 class UnitBehaviors:
@@ -85,10 +118,26 @@ class UnitBehaviors:
         self._spatial_grid = None                   # SpatialGrid for O(1) neighbor queries
         self._terrain_map = None                    # TerrainMap for LOS checks when firing
         self._comms = None                             # UnitComms for inter-unit signals
+        self._game_mode_type: str | None = None    # "civil_unrest", "drone_swarm", etc.
+        self._de_escalation_timers: dict[str, float] = {}  # rioter_id -> accumulated proximity time
+        self._bomber_original_speeds: dict[str, float] = {}  # bomber_id -> speed before dive
 
         # Sensor awareness tracking
         self._detected_base_speeds: dict[str, float] = {}  # speeds before detection boost
         self._detected_ids: set[str] = set()                # hostiles with active detection boost
+
+        # Upgrade system reference (for EMP stun checks)
+        self._upgrade_system = None
+
+        # Pathfinding router callback
+        self._router = None  # Callable[[start, end, asset_type, alliance], list]
+
+    def set_router(self, route_fn) -> None:
+        """Set the pathfinding router callback.
+
+        route_fn signature: (start, end, unit_type, alliance) -> list[waypoints]
+        """
+        self._router = route_fn
 
     def set_obstacles(self, obstacles) -> None:
         """Set obstacle geometry for cover-seeking behavior.
@@ -119,6 +168,31 @@ class UnitBehaviors:
         """Set the UnitComms for inter-unit signal broadcasting."""
         self._comms = comms
 
+    def set_game_mode_type(self, mode_type: str | None) -> None:
+        """Set the current game mode type for behavior dispatch.
+
+        Args:
+            mode_type: "civil_unrest", "drone_swarm", or None for standard.
+        """
+        self._game_mode_type = mode_type
+
+    def set_upgrade_system(self, upgrade_system) -> None:
+        """Set the UpgradeSystem for EMP stun checks.
+
+        When set, stunned units (is_emp_stunned) skip all behavior
+        (cannot move or fire) for the stun duration.
+        """
+        self._upgrade_system = upgrade_system
+
+    def _is_emp_stunned(self, target_id: str) -> bool:
+        """Check if a unit is EMP stunned via the UpgradeSystem.
+
+        Returns False if no UpgradeSystem is wired (backward compatible).
+        """
+        if self._upgrade_system is None:
+            return False
+        return self._upgrade_system.is_emp_stunned(target_id)
+
     def tick(self, dt: float, targets: dict[str, SimulationTarget],
              vision_state=None) -> None:
         """For each active combatant, run its type-specific behavior."""
@@ -134,7 +208,13 @@ class UnitBehaviors:
         }
 
         for tid, t in friendlies.items():
-            if t.asset_type == "turret":
+            # EMP-stunned friendlies cannot act
+            if self._is_emp_stunned(tid):
+                continue
+
+            if t.asset_type == "missile_turret" and self._game_mode_type == "drone_swarm":
+                self._missile_turret_aa_priority(t, hostiles, vision_state=vision_state)
+            elif t.asset_type == "turret":
                 self._turret_behavior(t, hostiles, vision_state=vision_state)
             elif t.asset_type in ("heavy_turret", "missile_turret"):
                 self._turret_behavior(t, hostiles, vision_state=vision_state)
@@ -147,11 +227,32 @@ class UnitBehaviors:
             elif t.asset_type in ("tank", "apc"):
                 self._rover_behavior(t, hostiles, vision_state=vision_state)
 
+            # Rover de-escalation in civil_unrest mode
+            if t.asset_type == "rover" and self._game_mode_type == "civil_unrest":
+                self._rover_de_escalation(t, targets, dt=dt)
+
         # Detect group rushes before individual hostile ticks
         self._detect_group_rush(hostiles)
 
         for tid, t in hostiles.items():
-            self._hostile_kid_behavior(t, friendlies)
+            # EMP-stunned hostiles cannot act (no movement, no firing)
+            if self._is_emp_stunned(tid):
+                continue
+
+            # Dispatch based on crowd_role and drone_variant
+            if t.crowd_role == "civilian":
+                self._civilian_behavior(t, friendlies)
+            elif t.crowd_role == "instigator":
+                self._instigator_behavior(t, friendlies, dt=dt)
+            elif t.crowd_role == "rioter":
+                self._rioter_behavior(t, friendlies)
+            elif t.drone_variant == "bomber_swarm":
+                self._bomber_behavior(t, friendlies, dt=dt)
+            elif t.drone_variant == "scout_swarm":
+                # Scout drones: emit contact signals but don't fire
+                self._scout_swarm_behavior(t, friendlies)
+            else:
+                self._hostile_kid_behavior(t, friendlies)
 
     def _turret_behavior(
         self,
@@ -223,13 +324,44 @@ class UnitBehaviors:
             dy = any_target.position[1] - drone.position[1]
             drone.heading = math.degrees(math.atan2(dx, dy))
 
+            # Altitude matching: adjust to hostile drone altitude band
+            if any_target.altitude > 5.0:
+                alt_diff = any_target.altitude - drone.altitude
+                # Move altitude toward target's band (within 10m)
+                if abs(alt_diff) > 10.0:
+                    step = 5.0 * 0.1  # 5m/s * dt approximation
+                    if alt_diff > 0:
+                        drone.altitude += step
+                    else:
+                        drone.altitude -= step
+
         # In scouting or orbiting, observe but don't fire
         if fsm in ("scouting", "orbiting"):
+            return
+
+        # Scout drones in civil_unrest: emit contact signal for active instigators
+        if self._game_mode_type == "civil_unrest" and drone.asset_type == "scout_drone":
+            for h in hostiles.values():
+                if getattr(h, "crowd_role", None) == "instigator" and \
+                   getattr(h, "instigator_state", None) == "active":
+                    if self._comms is not None:
+                        from .comms import SIGNAL_CONTACT
+                        self._comms.emit_contact(
+                            drone.target_id, drone.position, drone.alliance,
+                            enemy_pos=h.position,
+                        )
+
+        # In civil_unrest mode, drones track but do NOT fire
+        if self._game_mode_type == "civil_unrest":
             return
 
         # Only fire at vision-confirmed targets
         target = self._nearest_in_range(drone, hostiles, vision_state=vision_state)
         if target is None:
+            return
+
+        # Ammo check
+        if drone.ammo_count == 0:
             return
 
         # Fire if in range (engaging state, or no FSM set, terrain LOS check)
@@ -301,13 +433,25 @@ class UnitBehaviors:
             return
         morale_suppressed = morale < 0.3
 
-        # Reconning: reduce speed (cautious scouting)
+        # Reconning: reduce speed (cautious scouting) — apply once on entry
         if fsm_state == "reconning":
-            kid.speed = kid.speed * 0.6
+            if not getattr(kid, '_reconning_speed_set', False):
+                kid._reconning_base_speed = kid.speed
+                kid.speed = kid.speed * 0.6
+                kid._reconning_speed_set = True
+        elif getattr(kid, '_reconning_speed_set', False):
+            kid.speed = kid._reconning_base_speed
+            kid._reconning_speed_set = False
 
-        # Suppressing: increase fire rate (reduced cooldown)
+        # Suppressing: increase fire rate (reduced cooldown) — apply once on entry
         if fsm_state == "suppressing":
-            kid.weapon_cooldown = kid.weapon_cooldown * 0.5
+            if not getattr(kid, '_suppressing_cooldown_set', False):
+                kid._suppressing_base_cooldown = kid.weapon_cooldown
+                kid.weapon_cooldown = kid.weapon_cooldown * 0.5
+                kid._suppressing_cooldown_set = True
+        elif getattr(kid, '_suppressing_cooldown_set', False):
+            kid.weapon_cooldown = kid._suppressing_base_cooldown
+            kid._suppressing_cooldown_set = False
 
         # Retreating under fire: move toward cover with zigzag
         if fsm_state == "retreating_under_fire":
@@ -400,7 +544,21 @@ class UnitBehaviors:
                     break
 
         if target_pos is not None:
-            # Insert as first waypoint (priority destination)
+            # Route through pathfinder then insert as priority waypoints
+            if self._router is not None:
+                try:
+                    routed = self._router(kid.position, target_pos,
+                                          kid.asset_type, kid.alliance)
+                    if routed:
+                        if kid.waypoints:
+                            kid.waypoints = list(routed) + kid.waypoints
+                        else:
+                            kid.waypoints = list(routed)
+                        kid._waypoint_index = 0
+                        return
+                except Exception:
+                    pass
+            # Fallback: insert direct waypoint
             if kid.waypoints:
                 kid.waypoints.insert(0, target_pos)
                 kid._waypoint_index = 0
@@ -715,6 +873,252 @@ class UnitBehaviors:
                     best = enemy
         return best
 
+    # -- Mission-type behaviors ---------------------------------------------------
+
+    def _instigator_behavior(
+        self,
+        instigator: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+        dt: float = 0.1,
+    ) -> None:
+        """Instigator activation cycle: hidden(8s)->activating(2s)->active(5s)->hidden.
+
+        During 'active': fires thrown_object projectiles at nearest friendly.
+        During 'hidden' and 'activating': acts like civilian, no combat.
+        """
+        state = instigator.instigator_state
+        instigator.instigator_timer += dt
+
+        if state == "hidden":
+            if instigator.instigator_timer >= 8.0:
+                instigator.instigator_state = "activating"
+                instigator.instigator_timer = 0.0
+            # Act like civilian -- no combat
+            return
+
+        elif state == "activating":
+            if instigator.instigator_timer >= 2.0:
+                instigator.instigator_state = "active"
+                instigator.instigator_timer = 0.0
+            # Still passive during activation
+            return
+
+        elif state == "active":
+            if instigator.instigator_timer >= 5.0:
+                instigator.instigator_state = "hidden"
+                instigator.instigator_timer = 0.0
+                return
+
+            # During active: fire thrown_object at nearest friendly (range 15m, cooldown 3s)
+            if instigator.ammo_count == 0:
+                return
+            target = self._nearest_in_range(instigator, friendlies)
+            if target is not None:
+                ptype = _WEAPON_TYPES.get("instigator", "thrown_object")
+                if ptype is not None:
+                    self._combat.fire(instigator, target, projectile_type=ptype,
+                                      terrain_map=self._terrain_map)
+
+    def _bomber_behavior(
+        self,
+        bomber: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+        dt: float = 0.1,
+    ) -> None:
+        """Bomber drone: dives and detonates on target.
+
+        Does NOT fire projectiles. When within 40m: enters diving state.
+        Diving: altitude decreases 10m/s, horizontal speed halved.
+        Detonation: when altitude <= 0 or distance < 3m.
+        If eliminated during dive: no detonation (harmless crash).
+        """
+        # Dead bombers don't detonate
+        if bomber.status in ("eliminated", "destroyed", "neutralized"):
+            return
+
+        state = bomber.instigator_state  # repurposed: "approaching" / "diving"
+
+        # Find nearest friendly target
+        nearest = None
+        nearest_dist = float("inf")
+        for f in friendlies.values():
+            dx = f.position[0] - bomber.position[0]
+            dy = f.position[1] - bomber.position[1]
+            dist = math.hypot(dx, dy)
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest = f
+
+        if nearest is None:
+            return
+
+        if state != "diving" and nearest_dist <= 40.0:
+            # Enter diving state
+            bomber.instigator_state = "diving"
+            if bomber.target_id not in self._bomber_original_speeds:
+                self._bomber_original_speeds[bomber.target_id] = bomber.speed
+            bomber.speed = bomber.speed / 2.0
+
+        if bomber.instigator_state == "diving":
+            # Altitude decreases at 10m/s
+            bomber.altitude -= 10.0 * dt
+
+            # Check detonation: altitude <= 0 or distance < 3m
+            if bomber.altitude <= 0 or nearest_dist < 3.0:
+                # Bomber is still alive at detonation time
+                if bomber.health > 0:
+                    # Build targets dict for detonation
+                    all_targets = dict(friendlies)
+                    all_targets[bomber.target_id] = bomber
+                    self._combat.detonate_bomber(bomber, all_targets, radius=5.0)
+
+    def _rover_de_escalation(
+        self,
+        rover: SimulationTarget,
+        targets: dict[str, SimulationTarget],
+        dt: float = 0.1,
+        rover_fired: bool = False,
+    ) -> None:
+        """De-escalation: rover within 15m of rioter for 3s converts to civilian.
+
+        Only in civil_unrest mode. If rover fires during de-escalation:
+        timer resets, nearby civilians have 30% conversion-to-rioter chance.
+        """
+        if self._game_mode_type != "civil_unrest":
+            return
+
+        # If rover fired, reset all timers and convert nearby civilians
+        if rover_fired:
+            self._de_escalation_timers.clear()
+            # 30% chance to convert nearby civilians to rioters
+            for t in targets.values():
+                if t.crowd_role == "civilian" and t.alliance == "hostile":
+                    dx = t.position[0] - rover.position[0]
+                    dy = t.position[1] - rover.position[1]
+                    if math.hypot(dx, dy) <= 15.0:
+                        if random.random() < 0.3:
+                            t.crowd_role = "rioter"
+                            t.is_combatant = True
+            return
+
+        # Check rioters within 15m and accumulate proximity time
+        for tid, t in targets.items():
+            if t.crowd_role != "rioter":
+                continue
+            dx = t.position[0] - rover.position[0]
+            dy = t.position[1] - rover.position[1]
+            dist = math.hypot(dx, dy)
+
+            if dist <= 15.0:
+                timer = self._de_escalation_timers.get(tid, 0.0)
+                timer += dt
+                self._de_escalation_timers[tid] = timer
+
+                if timer >= 3.0:
+                    # Convert rioter to civilian
+                    t.crowd_role = "civilian"
+                    t.is_combatant = False
+                    self._de_escalation_timers.pop(tid, None)
+                    # Award de-escalation points via event bus
+                    self._combat._event_bus.publish("de_escalation", {
+                        "rover_id": rover.target_id,
+                        "rioter_id": tid,
+                        "points": 200,
+                    })
+            else:
+                # Out of range: reset timer
+                self._de_escalation_timers.pop(tid, None)
+
+    def _civilian_behavior(
+        self,
+        civilian: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+    ) -> None:
+        """Civilian: random wandering within crowd zone, no combat.
+
+        Does NOT fire, does NOT engage.
+        """
+        # Civilians just follow their waypoints (handled by tick()).
+        # No combat actions.
+        pass
+
+    def _rioter_behavior(
+        self,
+        rioter: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+    ) -> None:
+        """Rioter: melee-range only attacks using melee_strike weapon type.
+
+        Rioters can only attack targets within 3m range.
+        """
+        if not can_fire_degraded(rioter):
+            return
+
+        if rioter.ammo_count == 0:
+            return
+
+        target = self._nearest_in_range(rioter, friendlies)
+        if target is not None:
+            ptype = _WEAPON_TYPES.get("rioter", "melee_strike")
+            if ptype is not None:
+                self._combat.fire(rioter, target, projectile_type=ptype,
+                                  terrain_map=self._terrain_map)
+
+    def _scout_swarm_behavior(
+        self,
+        scout: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+    ) -> None:
+        """Scout swarm drone: recon only, emits contact signals but no weapons.
+
+        When a friendly is within detection range, emits SIGNAL_CONTACT
+        for attack drones to converge on.
+        """
+        if self._comms is None:
+            return
+
+        # Find nearest friendly in detection range (use a generous scan radius)
+        scan_range = 40.0  # Scout detection range
+        for f in friendlies.values():
+            dx = f.position[0] - scout.position[0]
+            dy = f.position[1] - scout.position[1]
+            dist = math.hypot(dx, dy)
+            if dist <= scan_range:
+                from .comms import SIGNAL_CONTACT
+                self._comms.emit_contact(
+                    scout.target_id, scout.position, scout.alliance,
+                    enemy_pos=f.position,
+                )
+                break  # One signal per tick
+
+    def _missile_turret_aa_priority(
+        self,
+        turret: SimulationTarget,
+        hostiles: dict[str, SimulationTarget],
+        vision_state=None,
+    ) -> None:
+        """Missile turret with AA priority: targets aerial units first.
+
+        In drone_swarm mode, filter hostiles to aerial targets first.
+        If no aerial targets, fall back to ground targets.
+        """
+        # Filter to aerial targets (altitude > 5.0)
+        aerial = {k: v for k, v in hostiles.items()
+                  if getattr(v, "altitude", 0.0) > 5.0}
+
+        if aerial:
+            self._turret_behavior(turret, aerial, vision_state=vision_state)
+        else:
+            self._turret_behavior(turret, hostiles, vision_state=vision_state)
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove all per-unit state for a single unit."""
+        self._last_dodge.pop(target_id, None)
+        self._last_flank.pop(target_id, None)
+        self._base_speeds.pop(target_id, None)
+        self._detected_base_speeds.pop(target_id, None)
+        self._bomber_original_speeds.pop(target_id, None)
+
     def clear_dodge_state(self) -> None:
         """Reset all dodge timers and tactical state (for game reset)."""
         self._last_dodge.clear()
@@ -723,3 +1127,5 @@ class UnitBehaviors:
         self._base_speeds.clear()
         self._detected_base_speeds.clear()
         self._detected_ids.clear()
+        self._de_escalation_timers.clear()
+        self._bomber_original_speeds.clear()

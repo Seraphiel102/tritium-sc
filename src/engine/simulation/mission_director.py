@@ -53,6 +53,8 @@ _MODE_RADIUS = {
     "defense": 150,
     "patrol": 300,
     "escort": 400,
+    "civil_unrest": 200,
+    "drone_swarm": 250,
 }
 
 
@@ -126,6 +128,47 @@ GAME_MODES = {
             {"type": "tank", "count": 1},
         ],
         "default_hostiles_per_wave": 5,
+    },
+    "civil_unrest": {
+        "description": "Crowd control and de-escalation scenario",
+        "prompt": (
+            "Design a crowd control and de-escalation scenario for a neighborhood security system. "
+            "A large crowd has gathered, with hidden instigators trying to incite violence. "
+            "The security system must identify instigators, protect civilians, and restore order "
+            "WITHOUT lethal force. Only rovers, drones, and scout drones are available. "
+            "Respond in JSON format: "
+            '{"trigger_event": "...", "crowd_size": 100, "instigator_count": 10, '
+            '"escalation_phases": 8, "civilian_sentiment": "angry|scared|mixed", '
+            '"time_of_day": "...", "theme": "..."}'
+        ),
+        "default_waves": 8,
+        "default_defenders": [
+            {"type": "rover", "count": 3},
+            {"type": "drone", "count": 2},
+            {"type": "scout_drone", "count": 2},
+        ],
+        "default_hostiles_per_wave": 15,
+    },
+    "drone_swarm": {
+        "description": "Mass drone attack defense with AA priority",
+        "prompt": (
+            "Design a mass drone attack defense scenario for a neighborhood security system. "
+            "Waves of hostile drones (scout, attack, bomber types) assault critical infrastructure. "
+            "Defenders use missile turrets, counter-drones, and EMP to protect a key building. "
+            "Respond in JSON format: "
+            '{"target_building": "...", "drone_origin": "north|south|east|west|multi", '
+            '"total_drones": 150, "attack_waves": 10, "bomber_waves": [7, 8, 9, 10], '
+            '"emp_available": true, "theme": "..."}'
+        ),
+        "default_waves": 10,
+        "default_defenders": [
+            {"type": "missile_turret", "count": 2},
+            {"type": "drone", "count": 3},
+            {"type": "turret", "count": 1},
+            {"type": "scout_drone", "count": 1},
+            {"type": "rover", "count": 1},
+        ],
+        "default_hostiles_per_wave": 10,
     },
 }
 
@@ -315,6 +358,247 @@ _SCRIPTED_LOADING = [
 ]
 
 
+# -- Civil Unrest scripted data ---------------------------------------------
+
+_CIVIL_UNREST_CONTEXT_TEMPLATES = [
+    {
+        "reason": "A contentious zoning decision has drawn hundreds of protesters to {center_name}. "
+                  "Agitators are embedded in the crowd, turning a legal assembly into a flashpoint.",
+        "attacker_name": "Embedded Agitators",
+        "attacker_motivation": "Provoke overreaction from security forces",
+        "stakes": "Protecting both the crowd and {center_address} without a PR disaster",
+        "urgency": "high",
+        "atmosphere": "Chanting echoes off the buildings, punctuated by breaking glass",
+    },
+    {
+        "reason": "A viral social media post has mobilized a flash mob at {center_name}. "
+                  "What started as a peaceful vigil is being hijacked by outside agitators arriving via {streets}.",
+        "attacker_name": "Outside Agitators Network",
+        "attacker_motivation": "Create chaos for media attention",
+        "stakes": "De-escalate before the situation becomes national news",
+        "urgency": "medium",
+        "atmosphere": "Phone flashlights flicker like a sea of stars, but the mood is shifting",
+    },
+    {
+        "reason": "A power outage has triggered looting near {center_name}. Opportunistic criminals are "
+                  "using the blackout as cover. Most people on the street are scared residents, not looters.",
+        "attacker_name": "Opportunistic Looters",
+        "attacker_motivation": "Theft under cover of darkness",
+        "stakes": "Restoring order near {center_address} while protecting displaced residents",
+        "urgency": "critical",
+        "atmosphere": "Emergency lights cast red shadows. Car alarms compete with distant sirens",
+    },
+    {
+        "reason": "A labor dispute at {center_name} has escalated. Striking workers have blocked {streets} "
+                  "and unknown provocateurs are inciting violence to discredit the movement.",
+        "attacker_name": "Unidentified Provocateurs",
+        "attacker_motivation": "Sabotage legitimate labor action through violence",
+        "stakes": "Identify provocateurs without suppressing the legal protest at {center_address}",
+        "urgency": "medium",
+        "atmosphere": "Bullhorns and chanting mix with the smell of smoke from burning tires",
+    },
+]
+
+_CIVIL_UNREST_CONTEXTS_FALLBACK = [
+    {
+        "reason": "A contentious public decision has drawn hundreds of protesters. "
+                  "Agitators are embedded in the crowd, turning a legal assembly into a flashpoint.",
+        "attacker_name": "Embedded Agitators",
+        "attacker_motivation": "Provoke overreaction from security forces",
+        "stakes": "Protecting the crowd and infrastructure without escalating",
+        "urgency": "high",
+        "atmosphere": "Chanting echoes off the buildings, punctuated by breaking glass",
+    },
+    {
+        "reason": "A viral social media post has mobilized a flash mob. "
+                  "What started as a peaceful vigil is being hijacked by outside agitators.",
+        "attacker_name": "Outside Agitators Network",
+        "attacker_motivation": "Create chaos for media attention",
+        "stakes": "De-escalate before the situation becomes national news",
+        "urgency": "medium",
+        "atmosphere": "Phone flashlights flicker like a sea of stars, but the mood is shifting",
+    },
+    {
+        "reason": "A power outage has triggered looting in the area. Opportunistic criminals are "
+                  "using the blackout as cover. Most people on the street are scared residents, not looters.",
+        "attacker_name": "Opportunistic Looters",
+        "attacker_motivation": "Theft under cover of darkness",
+        "stakes": "Restoring order while protecting displaced residents",
+        "urgency": "critical",
+        "atmosphere": "Emergency lights cast red shadows. Car alarms compete with distant sirens",
+    },
+    {
+        "reason": "A labor dispute has escalated. Striking workers have blocked key roads "
+                  "and unknown provocateurs are inciting violence to discredit the movement.",
+        "attacker_name": "Unidentified Provocateurs",
+        "attacker_motivation": "Sabotage legitimate labor action through violence",
+        "stakes": "Identify provocateurs without suppressing the legal protest",
+        "urgency": "medium",
+        "atmosphere": "Bullhorns and chanting mix with the smell of smoke from burning tires",
+    },
+]
+
+_CIVIL_UNREST_LOADING = [
+    "Activating crowd monitoring sensors...",
+    "Calibrating non-lethal response protocols...",
+    "Loading facial recognition watchlist...",
+    "Mapping crowd density zones...",
+    "Establishing communication cordons...",
+    "Deploying overwatch drones...",
+    "Analyzing social media feeds for flash mob indicators...",
+    "Loading de-escalation playbook...",
+    "Reviewing rules of engagement: RESTRICTIVE...",
+    "Identifying critical infrastructure in area...",
+    "Scanning for known agitator signatures...",
+    "Establishing safe corridors for civilian egress...",
+]
+
+_CIVIL_UNREST_WEATHER = [
+    {"weather": "Warm evening, streetlights on", "visibility": "good", "temperature": "Warm",
+     "wind": "Still", "special_conditions": "Urban heat island", "mood_description": "Charged atmosphere"},
+    {"weather": "Overcast afternoon, drizzle", "visibility": "fair", "temperature": "Cool",
+     "wind": "Light", "special_conditions": "Slick sidewalks", "mood_description": "Tension building under gray skies"},
+    {"weather": "Hot midday sun", "visibility": "good", "temperature": "Hot",
+     "wind": "None", "special_conditions": "Heat stress on crowd", "mood_description": "Tempers rising with the heat"},
+]
+
+# Civil unrest wave composition — 8 waves matching spec section 2.2 table
+# Keys: wave, name, civilians, instigators, vehicles, speed_mult, health_mult
+_CIVIL_UNREST_WAVES = [
+    {"wave": 1, "name": "Peaceful Assembly",  "civilians": 12, "instigators":  0, "vehicles": 0, "speed_mult": 0.5, "health_mult": 0.8},
+    {"wave": 2, "name": "Heated Protest",      "civilians": 15, "instigators":  2, "vehicles": 0, "speed_mult": 0.6, "health_mult": 0.8},
+    {"wave": 3, "name": "Isolated Scuffles",   "civilians": 18, "instigators":  4, "vehicles": 0, "speed_mult": 0.7, "health_mult": 1.0},
+    {"wave": 4, "name": "Coordinated Riot",    "civilians": 20, "instigators":  6, "vehicles": 1, "speed_mult": 0.8, "health_mult": 1.0},
+    {"wave": 5, "name": "Vehicular Chaos",     "civilians": 15, "instigators":  5, "vehicles": 3, "speed_mult": 1.0, "health_mult": 1.2},
+    {"wave": 6, "name": "Looting Surge",       "civilians": 25, "instigators":  8, "vehicles": 2, "speed_mult": 1.1, "health_mult": 1.0},
+    {"wave": 7, "name": "Armed Standoff",      "civilians": 10, "instigators":  8, "vehicles": 2, "speed_mult": 0.6, "health_mult": 1.5},
+    {"wave": 8, "name": "Final Escalation",    "civilians": 20, "instigators": 10, "vehicles": 4, "speed_mult": 1.2, "health_mult": 1.5},
+]
+
+
+# -- Drone Swarm scripted data ----------------------------------------------
+
+_DRONE_SWARM_CONTEXT_TEMPLATES = [
+    {
+        "reason": "Unidentified drone swarms detected on approach vectors toward {center_name}. "
+                  "SIGINT suggests a coordinated attack on rooftop infrastructure. ETA 2 minutes.",
+        "attacker_name": "Unknown Drone Operator",
+        "attacker_motivation": "Destroy communications infrastructure",
+        "stakes": "The communications relay at {center_address} serves 12,000 residents",
+        "urgency": "critical",
+        "atmosphere": "A low buzzing grows louder from the east. Shadows cross the streetlights",
+    },
+    {
+        "reason": "A rogue drone fleet has been spotted assembling 2km north of {center_name}. "
+                  "Pattern analysis indicates a multi-wave saturation attack incoming via {streets}.",
+        "attacker_name": "Phantom Swarm",
+        "attacker_motivation": "Test neighborhood defenses for future operations",
+        "stakes": "Proving the AA defense grid can protect {center_address}",
+        "urgency": "high",
+        "atmosphere": "Stars disappear behind a moving cloud of blinking red lights",
+    },
+    {
+        "reason": "Commercial delivery drones near {center_name} have been hijacked remotely. "
+                  "Their payload bays have been weaponized. Friendly drones are scrambling to intercept.",
+        "attacker_name": "Hijacked Commercial Fleet",
+        "attacker_motivation": "Weaponized commercial infrastructure",
+        "stakes": "Neutralize the hijacked fleet before they reach {center_address}",
+        "urgency": "critical",
+        "atmosphere": "The familiar hum of delivery drones takes on a menacing tone",
+    },
+    {
+        "reason": "An underground drone racing league has been repurposed for an attack on {center_name}. "
+                  "Racing drones modified with improvised weapons are approaching from {streets}.",
+        "attacker_name": "Modded Racing Swarm",
+        "attacker_motivation": "Proving ground for weaponized hobby drones",
+        "stakes": "Protecting the solar array and HVAC systems at {center_address}",
+        "urgency": "high",
+        "atmosphere": "High-pitched whines of racing motors echo through the streets",
+    },
+]
+
+_DRONE_SWARM_CONTEXTS_FALLBACK = [
+    {
+        "reason": "Unidentified drone swarms detected on multiple approach vectors. "
+                  "SIGINT suggests a coordinated attack on critical infrastructure.",
+        "attacker_name": "Unknown Drone Operator",
+        "attacker_motivation": "Destroy communications infrastructure",
+        "stakes": "The communications relay serves 12,000 residents",
+        "urgency": "critical",
+        "atmosphere": "A low buzzing grows louder from the east",
+    },
+    {
+        "reason": "A rogue drone fleet has been spotted assembling nearby. "
+                  "Pattern analysis indicates a multi-wave saturation attack incoming.",
+        "attacker_name": "Phantom Swarm",
+        "attacker_motivation": "Test neighborhood defenses for future operations",
+        "stakes": "Proving the AA defense grid can hold",
+        "urgency": "high",
+        "atmosphere": "Stars disappear behind a moving cloud of blinking red lights",
+    },
+    {
+        "reason": "Commercial delivery drones in the area have been hijacked remotely. "
+                  "Their payload bays have been weaponized. Friendly drones are scrambling.",
+        "attacker_name": "Hijacked Commercial Fleet",
+        "attacker_motivation": "Weaponized commercial infrastructure",
+        "stakes": "Neutralize the hijacked fleet before they reach the objective",
+        "urgency": "critical",
+        "atmosphere": "The familiar hum of delivery drones takes on a menacing tone",
+    },
+    {
+        "reason": "An underground drone racing league has been repurposed for an attack. "
+                  "Racing drones modified with improvised weapons are approaching.",
+        "attacker_name": "Modded Racing Swarm",
+        "attacker_motivation": "Proving ground for weaponized hobby drones",
+        "stakes": "Protecting rooftop infrastructure from precision strikes",
+        "urgency": "high",
+        "atmosphere": "High-pitched whines of racing motors echo through the streets",
+    },
+]
+
+_DRONE_SWARM_LOADING = [
+    "Activating anti-air tracking radar...",
+    "Loading missile turret targeting firmware...",
+    "Calibrating drone intercept algorithms...",
+    "Scanning airspace for hostile signatures...",
+    "Arming missile tubes (20 rounds per launcher)...",
+    "Launching counter-drone interceptors...",
+    "Establishing aerial deconfliction zones...",
+    "Warming up EMP capacitor banks...",
+    "Mapping 3D threat envelope...",
+    "Loading hostile drone recognition profiles...",
+    "Synchronizing AA fire control network...",
+    "Calculating intercept trajectories...",
+]
+
+_DRONE_SWARM_WEATHER = [
+    {"weather": "Clear sky, high visibility", "visibility": "good", "temperature": "Cool",
+     "wind": "Light crosswind", "special_conditions": "Good radar conditions",
+     "mood_description": "Perfect hunting weather for anti-air"},
+    {"weather": "Low clouds at 200m", "visibility": "fair", "temperature": "Mild",
+     "wind": "Moderate gusts", "special_conditions": "Drones may use cloud cover",
+     "mood_description": "They could be hiding above the cloud layer"},
+    {"weather": "Night, clear, new moon", "visibility": "poor", "temperature": "Cold",
+     "wind": "Still", "special_conditions": "Thermal signatures only",
+     "mood_description": "Darkness favors the swarm. Rely on sensors, not eyes"},
+]
+
+# Drone swarm wave composition — 10 waves matching spec section 3.2 table
+# Keys: wave, name, scout, attack, bomber, speed_mult, health_mult
+_DRONE_SWARM_WAVES = [
+    {"wave":  1, "name": "Probing Flight",       "scout": 5, "attack":  0, "bomber": 0, "speed_mult": 0.8, "health_mult": 0.7},
+    {"wave":  2, "name": "First Strike",          "scout": 3, "attack":  4, "bomber": 0, "speed_mult": 1.0, "health_mult": 1.0},
+    {"wave":  3, "name": "Harassment Run",         "scout": 4, "attack":  6, "bomber": 1, "speed_mult": 1.0, "health_mult": 1.0},
+    {"wave":  4, "name": "Coordinated Assault",    "scout": 3, "attack":  8, "bomber": 2, "speed_mult": 1.1, "health_mult": 1.2},
+    {"wave":  5, "name": "Saturation Attack",      "scout": 2, "attack": 12, "bomber": 3, "speed_mult": 1.2, "health_mult": 1.0},
+    {"wave":  6, "name": "Electronic Probe",       "scout": 8, "attack":  5, "bomber": 0, "speed_mult": 1.3, "health_mult": 1.0},
+    {"wave":  7, "name": "Bomber Wave",            "scout": 0, "attack":  6, "bomber": 8, "speed_mult": 0.9, "health_mult": 1.5},
+    {"wave":  8, "name": "Adaptive Swarm",         "scout": 4, "attack": 10, "bomber": 4, "speed_mult": 1.3, "health_mult": 1.3},
+    {"wave":  9, "name": "Overwhelming Force",     "scout": 6, "attack": 15, "bomber": 6, "speed_mult": 1.4, "health_mult": 1.2},
+    {"wave": 10, "name": "FINAL SWARM",            "scout": 8, "attack": 20, "bomber": 8, "speed_mult": 1.5, "health_mult": 1.5},
+]
+
+
 # -- Unit placement helpers --------------------------------------------------
 
 def _place_defenders(game_mode: str, map_bounds: float = 200.0) -> list[dict]:
@@ -407,11 +691,16 @@ class MissionDirector:
 
         self._mission_area = build_mission_area(center, pois, radius_m=radius)
 
-    def _resolve_context_template(self, template: dict) -> dict:
+    def _resolve_context_template(
+        self,
+        template: dict,
+        fallback_list: list[dict] | None = None,
+    ) -> dict:
         """Fill {center_name}, {center_address}, {streets} in a context template."""
         if self._mission_area is None:
             # Strip template placeholders, use clean fallback
-            return random.choice(_SCRIPTED_CONTEXTS_FALLBACK)
+            fb = fallback_list if fallback_list is not None else _SCRIPTED_CONTEXTS_FALLBACK
+            return random.choice(fb)
 
         area = self._mission_area
         center_name = area.center_poi.name or "the objective"
@@ -549,8 +838,15 @@ class MissionDirector:
         }
 
         # Step 1: Scenario context (uses real names when POIs available)
-        template = random.choice(_SCRIPTED_CONTEXT_TEMPLATES)
-        ctx = self._resolve_context_template(template)
+        if game_mode == "civil_unrest":
+            template = random.choice(_CIVIL_UNREST_CONTEXT_TEMPLATES)
+            ctx = self._resolve_context_template(template, _CIVIL_UNREST_CONTEXTS_FALLBACK)
+        elif game_mode == "drone_swarm":
+            template = random.choice(_DRONE_SWARM_CONTEXT_TEMPLATES)
+            ctx = self._resolve_context_template(template, _DRONE_SWARM_CONTEXTS_FALLBACK)
+        else:
+            template = random.choice(_SCRIPTED_CONTEXT_TEMPLATES)
+            ctx = self._resolve_context_template(template)
         scenario["scenario_context"] = ctx
         self._emit_progress({
             "status": "step_complete",
@@ -607,21 +903,57 @@ class MissionDirector:
             "source": "scripted",
         })
 
-        # Step 4: Win conditions
-        wc = {
-            "victory": {
-                "condition": f"Survive all {mode['default_waves']} waves",
-                "description": f"Eliminate all hostiles across {mode['default_waves']} waves to secure the neighborhood.",
-            },
-            "defeat": {
-                "condition": "All defenders eliminated",
-                "description": "If all friendly units are destroyed, the neighborhood falls.",
-            },
-            "bonus_objectives": [
-                {"name": "No casualties", "description": "Complete without losing any defenders", "reward": 1000},
-                {"name": "Speed run", "description": "Complete in under 5 minutes", "reward": 500},
-            ],
-        }
+        # Step 4: Win conditions (mode-specific)
+        if game_mode == "civil_unrest":
+            wc = {
+                "victory": {
+                    "condition": "Survive all 8 escalation phases with fewer than 5 civilian casualties",
+                    "description": "De-escalate the situation and restore order to the neighborhood.",
+                },
+                "defeat": {
+                    "condition": "5+ civilian casualties OR infrastructure overwhelmed OR all defenders eliminated",
+                    "description": "Excessive force, unchecked destruction, or total defensive failure.",
+                },
+                "bonus_objectives": [
+                    {"name": "Zero Collateral", "description": "Complete with 0 civilian casualties", "reward": 2000},
+                    {"name": "Master De-escalator", "description": "De-escalate 20+ rioters back to civilian", "reward": 1500},
+                    {"name": "All Instigators Identified", "description": "Neutralize every instigator per wave", "reward": 1000},
+                    {"name": "Quick Containment", "description": "No critical density zones form", "reward": 1000},
+                ],
+            }
+        elif game_mode == "drone_swarm":
+            wc = {
+                "victory": {
+                    "condition": "Survive all 10 waves with infrastructure intact",
+                    "description": "Eliminate or repel all hostile drones. Protect the defended building.",
+                },
+                "defeat": {
+                    "condition": "Infrastructure destroyed OR all defenders eliminated",
+                    "description": "Critical building systems destroyed by drone strikes or defensive collapse.",
+                },
+                "bonus_objectives": [
+                    {"name": "Perfect Defense", "description": "Complete with infrastructure health > 800", "reward": 2000},
+                    {"name": "Ace Pilot", "description": "Single drone eliminates 15+ hostile drones", "reward": 1500},
+                    {"name": "No Bombers Through", "description": "Zero bomber detonations on infrastructure", "reward": 1000},
+                    {"name": "EMP Master", "description": "Disable 10+ drones with a single EMP burst", "reward": 500},
+                    {"name": "Flawless AA", "description": "No friendly units lost", "reward": 1000},
+                ],
+            }
+        else:
+            wc = {
+                "victory": {
+                    "condition": f"Survive all {mode['default_waves']} waves",
+                    "description": f"Eliminate all hostiles across {mode['default_waves']} waves to secure the neighborhood.",
+                },
+                "defeat": {
+                    "condition": "All defenders eliminated",
+                    "description": "If all friendly units are destroyed, the neighborhood falls.",
+                },
+                "bonus_objectives": [
+                    {"name": "No casualties", "description": "Complete without losing any defenders", "reward": 1000},
+                    {"name": "Speed run", "description": "Complete in under 5 minutes", "reward": 500},
+                ],
+            }
         scenario["win_conditions"] = wc
         self._emit_progress({
             "status": "step_complete",
@@ -632,8 +964,13 @@ class MissionDirector:
             "source": "scripted",
         })
 
-        # Step 5: Weather
-        weather = random.choice(_SCRIPTED_WEATHER)
+        # Step 5: Weather (mode-specific)
+        if game_mode == "civil_unrest":
+            weather = random.choice(_CIVIL_UNREST_WEATHER)
+        elif game_mode == "drone_swarm":
+            weather = random.choice(_DRONE_SWARM_WEATHER)
+        else:
+            weather = random.choice(_SCRIPTED_WEATHER)
         scenario["weather"] = weather
         self._emit_progress({
             "status": "step_complete",
@@ -644,8 +981,14 @@ class MissionDirector:
             "source": "scripted",
         })
 
-        # Step 6: Loading messages
-        msgs = random.sample(_SCRIPTED_LOADING, min(8, len(_SCRIPTED_LOADING)))
+        # Step 6: Loading messages (mode-specific)
+        if game_mode == "civil_unrest":
+            loading_pool = _CIVIL_UNREST_LOADING
+        elif game_mode == "drone_swarm":
+            loading_pool = _DRONE_SWARM_LOADING
+        else:
+            loading_pool = _SCRIPTED_LOADING
+        msgs = random.sample(loading_pool, min(8, len(loading_pool)))
         scenario["loading_messages"] = msgs
         self._emit_progress({
             "status": "step_complete",
@@ -684,7 +1027,7 @@ class MissionDirector:
         })
 
         # Step 8: Wave composition (concrete spawn data from briefings)
-        wave_comp = self._briefings_to_composition(waves, mode)
+        wave_comp = self._briefings_to_composition(waves, mode, game_mode=game_mode)
         scenario["wave_composition"] = wave_comp
         self._emit_progress({
             "status": "step_complete",
@@ -809,7 +1152,7 @@ class MissionDirector:
         # Ensure required fields exist (fill from scripted if LLM missed them)
         mode = GAME_MODES.get(game_mode, GAME_MODES["battle"])
         if "scenario_context" not in scenario:
-            scenario["scenario_context"] = random.choice(_SCRIPTED_CONTEXTS)
+            scenario["scenario_context"] = random.choice(_SCRIPTED_CONTEXTS_FALLBACK)
         if "units" not in scenario:
             # Check if unit_composition has defenders
             uc = scenario.get("unit_composition", {})
@@ -835,7 +1178,7 @@ class MissionDirector:
         if "wave_composition" not in scenario:
             briefings = scenario.get("wave_briefings", [])
             if briefings:
-                scenario["wave_composition"] = self._briefings_to_composition(briefings, mode)
+                scenario["wave_composition"] = self._briefings_to_composition(briefings, mode, game_mode=game_mode)
         else:
             # LLM may return composition under a "waves" key — normalize
             wc = scenario["wave_composition"]
@@ -907,12 +1250,23 @@ class MissionDirector:
             })
         return targets
 
-    def _briefings_to_composition(self, briefings: list[dict], mode: dict) -> list[dict]:
+    def _briefings_to_composition(
+        self,
+        briefings: list[dict],
+        mode: dict,
+        game_mode: str = "battle",
+    ) -> list[dict]:
         """Convert narrative wave briefings to concrete spawn composition data.
 
+        Dispatches to mode-specific methods for civil_unrest and drone_swarm.
         Returns list of dicts: [{wave, groups: [{type, count, speed, health}],
         speed_mult, health_mult}]
         """
+        if game_mode == "civil_unrest":
+            return self._briefings_to_composition_civil_unrest()
+        elif game_mode == "drone_swarm":
+            return self._briefings_to_composition_drone_swarm()
+
         base_hostiles = mode.get("default_hostiles_per_wave", 4)
         total_waves = max(len(briefings), 1)
         result = []
@@ -962,6 +1316,81 @@ class MissionDirector:
 
         return result
 
+    def _briefings_to_composition_civil_unrest(self) -> list[dict]:
+        """Build civil unrest wave composition from the spec table data."""
+        result = []
+        for w in _CIVIL_UNREST_WAVES:
+            groups = []
+            if w["civilians"] > 0:
+                groups.append({
+                    "type": "person",
+                    "count": w["civilians"],
+                    "speed": 1.0,
+                    "health": 50.0,
+                    "crowd_role": "civilian",
+                })
+            if w["instigators"] > 0:
+                groups.append({
+                    "type": "person",
+                    "count": w["instigators"],
+                    "speed": 1.2,
+                    "health": 60.0,
+                    "crowd_role": "instigator",
+                })
+            if w["vehicles"] > 0:
+                groups.append({
+                    "type": "hostile_vehicle",
+                    "count": w["vehicles"],
+                    "speed": 0.5,
+                    "health": 250.0,
+                })
+            result.append({
+                "wave": w["wave"],
+                "groups": groups,
+                "speed_mult": w["speed_mult"],
+                "health_mult": w["health_mult"],
+                "briefing": f"Wave {w['wave']}: {w['name']}",
+            })
+        return result
+
+    def _briefings_to_composition_drone_swarm(self) -> list[dict]:
+        """Build drone swarm wave composition from the spec table data."""
+        result = []
+        for w in _DRONE_SWARM_WAVES:
+            groups = []
+            if w["scout"] > 0:
+                groups.append({
+                    "type": "swarm_drone",
+                    "count": w["scout"],
+                    "speed": 4.0,
+                    "health": 15.0,
+                    "drone_variant": "scout_swarm",
+                })
+            if w["attack"] > 0:
+                groups.append({
+                    "type": "swarm_drone",
+                    "count": w["attack"],
+                    "speed": 3.0,
+                    "health": 30.0,
+                    "drone_variant": "attack_swarm",
+                })
+            if w["bomber"] > 0:
+                groups.append({
+                    "type": "swarm_drone",
+                    "count": w["bomber"],
+                    "speed": 1.5,
+                    "health": 50.0,
+                    "drone_variant": "bomber_swarm",
+                })
+            result.append({
+                "wave": w["wave"],
+                "groups": groups,
+                "speed_mult": w["speed_mult"],
+                "health_mult": w["health_mult"],
+                "briefing": f"Wave {w['wave']}: {w['name']}",
+            })
+        return result
+
     def scenario_to_battle_scenario(self, scenario: dict):
         """Convert a MissionDirector scenario dict into a BattleScenario.
 
@@ -992,7 +1421,7 @@ class MissionDirector:
         wave_comp = scenario.get("wave_composition")
         if not wave_comp:
             briefings = scenario.get("wave_briefings", [])
-            wave_comp = self._briefings_to_composition(briefings, mode)
+            wave_comp = self._briefings_to_composition(briefings, mode, game_mode=game_mode)
 
         # Build lookup for wave briefings (narrative data: threat_level, intel)
         briefing_lookup = {}
@@ -1011,6 +1440,7 @@ class MissionDirector:
                     count=g.get("count", 3),
                     speed=g.get("speed", 1.5),
                     health=g.get("health", 80.0),
+                    drone_variant=g.get("drone_variant"),
                 ))
             waves.append(WaveDefinition(
                 name=wc.get("briefing", brief.get("briefing", f"Wave {wave_num}")),
@@ -1028,6 +1458,17 @@ class MissionDirector:
         else:
             map_bounds = 200.0
 
+        # Build mode-specific config so GameMode.load_scenario() can apply settings
+        mode_config = None
+        if game_mode == "civil_unrest":
+            mode_config = {
+                "civilian_harm_limit": scenario.get("civilian_harm_limit", 5),
+            }
+        elif game_mode == "drone_swarm":
+            mode_config = {
+                "infrastructure_max": scenario.get("infrastructure_max", 1000.0),
+            }
+
         return BattleScenario(
             scenario_id=f"mission-{game_mode}",
             name=ctx.get("reason", f"Generated {game_mode.title()} Mission"),
@@ -1036,6 +1477,7 @@ class MissionDirector:
             waves=waves,
             defenders=defenders,
             max_hostiles=200,
+            mode_config=mode_config,
         )
 
     # -- State management ---------------------------------------------------

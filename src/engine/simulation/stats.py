@@ -458,6 +458,11 @@ class StatsTracker:
 
     # -- Lifecycle ----------------------------------------------------------
 
+    def remove_unit(self, target_id: str) -> None:
+        """Remove per-unit stats for a single unit."""
+        self._unit_stats.pop(target_id, None)
+        self._last_positions.pop(target_id, None)
+
     def reset(self) -> None:
         """Clear all stats for a new game."""
         self._unit_stats.clear()
