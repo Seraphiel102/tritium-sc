@@ -90,6 +90,38 @@ assert(w.PROJECTILE_STYLES.water_balloon.color === '#00a0ff', 'water_balloon is 
 assert(w.PROJECTILE_STYLES.default.speed === 20, 'default speed is 20');
 assert(w.PROJECTILE_STYLES.nerf_dart.trailLen === 8, 'nerf_dart trail length 8');
 
+// Expanded weapon type coverage
+assert(w.PROJECTILE_STYLES.nerf_turret_gun !== undefined, 'nerf_turret_gun style defined');
+assert(w.PROJECTILE_STYLES.nerf_turret_gun.color === '#00f0ff', 'turret gun is cyan');
+assert(w.PROJECTILE_STYLES.nerf_heavy_turret !== undefined, 'nerf_heavy_turret style defined');
+assert(w.PROJECTILE_STYLES.nerf_heavy_turret.radius > w.PROJECTILE_STYLES.nerf_dart.radius,
+    'heavy turret has larger radius than nerf dart');
+assert(w.PROJECTILE_STYLES.nerf_missile_launcher !== undefined, 'nerf_missile_launcher style defined');
+assert(w.PROJECTILE_STYLES.nerf_missile_launcher.trailLen > 10, 'missile launcher has long trail');
+assert(w.PROJECTILE_STYLES.nerf_tank_cannon !== undefined, 'nerf_tank_cannon style defined');
+assert(w.PROJECTILE_STYLES.nerf_tank_cannon.radius >= 10, 'tank cannon has large radius');
+assert(w.PROJECTILE_STYLES.nerf_apc_mg !== undefined, 'nerf_apc_mg style defined');
+assert(w.PROJECTILE_STYLES.nerf_apc_mg.speed > 30, 'apc mg is fast (burst fire)');
+assert(w.PROJECTILE_STYLES.nerf_cannon !== undefined, 'nerf_cannon style defined');
+assert(w.PROJECTILE_STYLES.nerf_pistol !== undefined, 'nerf_pistol style defined');
+assert(w.PROJECTILE_STYLES.nerf_scout_gun !== undefined, 'nerf_scout_gun style defined');
+assert(w.PROJECTILE_STYLES.thrown_object !== undefined, 'thrown_object style defined');
+assert(w.PROJECTILE_STYLES.thrown_object.speed < 15, 'thrown_object is slow');
+assert(w.PROJECTILE_STYLES.melee_strike !== undefined, 'melee_strike style defined');
+assert(w.PROJECTILE_STYLES.melee_strike.trailLen <= 3, 'melee_strike has very short trail');
+assert(w.PROJECTILE_STYLES.nerf_dart_gun !== undefined, 'nerf_dart_gun style defined');
+
+// All 15 weapon types should have distinct styles (not falling to default)
+const weaponTypes = [
+    'nerf_dart', 'nerf_dart_gun', 'nerf_pistol', 'nerf_scout_gun',
+    'nerf_turret_gun', 'nerf_heavy_turret', 'nerf_rocket', 'nerf_missile_launcher',
+    'nerf_cannon', 'nerf_tank_cannon', 'nerf_apc_mg', 'water_balloon',
+    'thrown_object', 'melee_strike',
+];
+for (const wt of weaponTypes) {
+    assert(w.PROJECTILE_STYLES[wt] !== undefined, `${wt} has explicit style (not default)`);
+}
+
 // ============================================================
 // warCombatAddProjectile
 // ============================================================

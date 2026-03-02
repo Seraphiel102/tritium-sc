@@ -308,7 +308,7 @@ function makeMockMapActions() {
     const state = {
         showSatellite: true, showRoads: false, showBuildings: true,
         showWaterways: false, showParks: false, showGrid: false,
-        showModels3d: false, showLabels: true, showMesh: true, showThoughts: true, showFog: false,
+        showUnits: true, showModels3d: false, showLabels: true, showMesh: true, showThoughts: true, showFog: false,
         showTerrain: false, tiltMode: 'flat',
         showTracers: true, showExplosions: true, showParticles: true,
         showHitFlashes: true, showFloatingText: true,
@@ -324,6 +324,7 @@ function makeMockMapActions() {
         toggleWaterways() { state.showWaterways = !state.showWaterways; calls.push('toggleWaterways'); },
         toggleParks() { state.showParks = !state.showParks; calls.push('toggleParks'); },
         toggleGrid() { state.showGrid = !state.showGrid; calls.push('toggleGrid'); },
+        toggleUnits() { state.showUnits = !state.showUnits; calls.push('toggleUnits'); },
         toggleModels() { state.showModels3d = !state.showModels3d; calls.push('toggleModels'); },
         toggleLabels() { state.showLabels = !state.showLabels; calls.push('toggleLabels'); },
         toggleMesh() { state.showMesh = !state.showMesh; calls.push('toggleMesh'); },
@@ -357,6 +358,12 @@ const defaultPanels = [
     { id: 'units', title: 'UNITS', isOpen: false },
     { id: 'alerts', title: 'ALERTS', isOpen: true },
     { id: 'game', title: 'GAME HUD', isOpen: false },
+    { id: 'mesh', title: 'MESH', isOpen: false },
+    { id: 'cameras', title: 'CAMERA FEEDS', isOpen: false },
+    { id: 'search', title: 'INTEL', isOpen: false },
+    { id: 'tak', title: 'TAK', isOpen: false },
+    { id: 'videos', title: 'RECORDINGS', isOpen: false },
+    { id: 'zones', title: 'ZONES', isOpen: false },
 ];
 
 // Helper: clear doc listeners between groups that depend on them
@@ -612,8 +619,8 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    // 4 panel buttons + 1 save input = 5 children
-    assert(right.children.length === 5, 'right has 5 children (4 panel buttons + save input), got ' + right.children.length);
+    // 10 panel buttons + 1 save input = 11 children
+    assert(right.children.length === 11, 'right has 11 children (10 panel buttons + save input), got ' + right.children.length);
 })();
 
 (function testPanelButtonLabels() {
@@ -626,8 +633,8 @@ console.log('\n--- Quick-access panel buttons ---');
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
     // _shortLabel takes first word of title and uppercases it
-    const expected = ['AMY', 'UNITS', 'ALERTS', 'GAME'];
-    for (let i = 0; i < 4; i++) {
+    const expected = ['AMY', 'UNITS', 'ALERTS', 'GAME', 'MESH', 'CAMERA', 'INTEL', 'TAK', 'RECORDINGS', 'ZONES'];
+    for (let i = 0; i < expected.length; i++) {
         const btn = right.children[i];
         assert(btn.textContent === expected[i],
             'panel button ' + i + ' text is "' + expected[i] + '", got "' + btn.textContent + '"');
@@ -643,7 +650,7 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < defaultPanels.length; i++) {
         const btn = right.children[i];
         assert(btn.className === 'command-bar-btn', 'panel button ' + i + ' has className command-bar-btn');
     }
@@ -658,8 +665,8 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const expectedIds = ['amy', 'units', 'alerts', 'game'];
-    for (let i = 0; i < 4; i++) {
+    const expectedIds = ['amy', 'units', 'alerts', 'game', 'mesh', 'cameras', 'search', 'tak', 'videos', 'zones'];
+    for (let i = 0; i < expectedIds.length; i++) {
         const btn = right.children[i];
         assert(btn.dataset.panel === expectedIds[i],
             'panel button ' + i + ' data-panel is "' + expectedIds[i] + '", got "' + btn.dataset.panel + '"');
@@ -730,7 +737,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4]; // last child
+    const saveInput = right.children[10]; // last child
     assert(saveInput.className === 'command-bar-save-input', 'save input has correct className');
 })();
 
@@ -743,7 +750,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     assert(saveInput.hidden === true, 'save input starts hidden');
 })();
 
@@ -756,7 +763,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     assert(saveInput.type === 'text', 'save input type is "text"');
 })();
 
@@ -769,7 +776,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     assert(saveInput.placeholder === 'Layout name...', 'save input has correct placeholder');
 })();
 
@@ -782,7 +789,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     assert(saveInput.maxLength === 24, 'save input maxLength is 24');
 })();
 
@@ -795,7 +802,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     saveInput.hidden = false;
     saveInput.value = 'test-layout';
     // Simulate Enter keydown
@@ -817,7 +824,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     saveInput.hidden = false;
     const handlers = saveInput._eventListeners['keydown'];
     if (handlers && handlers.length > 0) {
@@ -835,7 +842,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     saveInput.hidden = false;
     saveInput.value = '   '; // whitespace only
     const handlers = saveInput._eventListeners['keydown'];
@@ -860,7 +867,7 @@ console.log('\n--- focusSaveInput ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[4];
+    const saveInput = right.children[10];
     saveInput.value = 'old-value';
 
     ctx._bar = bar;
@@ -1127,9 +1134,9 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // VIEW menu: 4 panel items + separator + Show All + Hide All + separator + Fullscreen = 9
-    assert(viewDropdown.children.length === 9,
-        'VIEW dropdown has 9 items (4 panels + sep + show all + hide all + sep + fullscreen), got ' + viewDropdown.children.length);
+    // VIEW menu: 10 panel items + separator + Show All + Hide All + separator + Fullscreen = 15
+    assert(viewDropdown.children.length === 15,
+        'VIEW dropdown has 15 items (10 panels + sep + show all + hide all + sep + fullscreen), got ' + viewDropdown.children.length);
 
     // First item (AMY COMMANDER) should be checkable with check indicator
     const amyItem = viewDropdown.children[0];
@@ -1173,9 +1180,9 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // 5th item (index 4) should be a separator
-    const sep = viewDropdown.children[4];
-    assert(sep.className === 'menu-separator', 'item at index 4 is a separator');
+    // 11th item (index 10) should be a separator (after 10 panel items)
+    const sep = viewDropdown.children[10];
+    assert(sep.className === 'menu-separator', 'item at index 10 is a separator, got class "' + sep.className + '"');
 })();
 
 (function testViewMenuShortcuts() {
@@ -1301,14 +1308,14 @@ console.log('\n--- Dropdown items structure ---');
     mapTrigger.click();
     // MAP menu: Toggle All, sep,
     //           Satellite, Roads, Buildings, Waterways, Parks, Grid, sep,
-    //           3D Models, Labels, Mesh Network, sep,
+    //           Unit Markers, 3D Models, Labels, Mesh Network, Thought Bubbles, sep,
     //           Tracers, Explosions, Particles, Hit Flashes, Floating Text, sep,
     //           Kill Feed, Screen FX, Banners, Layer HUD, sep,
+    //           Health Bars, Selection FX, sep,
     //           Fog, Terrain, 3D Mode, sep,
-    //           Center on Action, Reset Camera, Zoom In, Zoom Out = 32
-    //           + Thought Bubbles = 36
-    assert(mapDropdown.children.length === 36,
-        'MAP dropdown has 36 items, got ' + mapDropdown.children.length);
+    //           Center on Action, Reset Camera, Zoom In, Zoom Out = 37
+    assert(mapDropdown.children.length === 37,
+        'MAP dropdown has 37 items, got ' + mapDropdown.children.length);
 
     // First item: Toggle All (action, not checkable)
     const toggleAllItem = mapDropdown.children[0];
@@ -1375,14 +1382,14 @@ console.log('\n--- Dropdown items structure ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    // Separators at indices 1, 8, 12, 18, 23, 27 (shifted +2 from Toggle All + sep at top)
+    // Separators at indices 1, 8, 14, 20, 25, 28, 32
     assert(mapDropdown.children[1].className === 'menu-separator', 'MAP has separator at index 1 (after Toggle All)');
-    assert(mapDropdown.children[8].className === 'menu-separator', 'MAP has separator at index 8');
-    assert(mapDropdown.children[13].className === 'menu-separator', 'MAP has separator at index 13');
-    assert(mapDropdown.children[19].className === 'menu-separator', 'MAP has separator at index 19');
-    assert(mapDropdown.children[24].className === 'menu-separator', 'MAP has separator at index 24');
-    assert(mapDropdown.children[27].className === 'menu-separator', 'MAP has separator at index 27 (after unit decorations)');
-    assert(mapDropdown.children[31].className === 'menu-separator', 'MAP has separator at index 31');
+    assert(mapDropdown.children[8].className === 'menu-separator', 'MAP has separator at index 8 (after base layers)');
+    assert(mapDropdown.children[14].className === 'menu-separator', 'MAP has separator at index 14 (after unit layers)');
+    assert(mapDropdown.children[20].className === 'menu-separator', 'MAP has separator at index 20 (after combat FX)');
+    assert(mapDropdown.children[25].className === 'menu-separator', 'MAP has separator at index 25 (after overlays)');
+    assert(mapDropdown.children[28].className === 'menu-separator', 'MAP has separator at index 28 (after unit decorations)');
+    assert(mapDropdown.children[32].className === 'menu-separator', 'MAP has separator at index 32 (after environment)');
 })();
 
 (function testHelpMenuItems() {
@@ -1843,7 +1850,7 @@ console.log('\n--- GAME menu ---');
             for (const c of child.children) {
                 if (c.className === 'menu-item-shortcut') sc = c.textContent;
             }
-            assert(sc === 'R', 'Reset Game shortcut is R, got "' + sc + '"');
+            assert(sc === '', 'Reset Game has no shortcut (R removed to avoid conflict), got "' + sc + '"');
         }
     }
 })();
@@ -1876,10 +1883,10 @@ console.log('\n--- GAME menu ---');
     assert(labels.length === 2, 'GAME menu has 2 items (New Mission + Reset Game), got ' + labels.length);
 })();
 
-(function test_getSelectedScenario_always_null() {
-    clearDocListeners(); clearEventBus();
-    const scenario = vm.runInContext('getSelectedScenario()', ctx);
-    assert(scenario === null, 'getSelectedScenario always returns null, got "' + scenario + '"');
+(function test_getSelectedScenario_removed() {
+    // getSelectedScenario was dead code (always returned null), now removed
+    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    assert(!src.includes('getSelectedScenario'), 'getSelectedScenario dead code removed');
 })();
 
 (function testGameMenuNewMissionCallsMapActions() {
@@ -2022,17 +2029,17 @@ console.log('\n--- MAP menu — Combat FX layer toggles ---');
 
 // Verify each new toggle item exists and calls the right action
 const _fxToggleTests = [
-    { label: 'Tracers', stateKey: 'showTracers', action: 'toggleTracers', index: 14 },
-    { label: 'Explosions', stateKey: 'showExplosions', action: 'toggleExplosions', index: 15 },
-    { label: 'Particles', stateKey: 'showParticles', action: 'toggleParticles', index: 16 },
-    { label: 'Hit Flashes', stateKey: 'showHitFlashes', action: 'toggleHitFlashes', index: 17 },
-    { label: 'Floating Text', stateKey: 'showFloatingText', action: 'toggleFloatingText', index: 18 },
-    { label: 'Kill Feed', stateKey: 'showKillFeed', action: 'toggleKillFeed', index: 20 },
-    { label: 'Screen FX', stateKey: 'showScreenFx', action: 'toggleScreenFx', index: 21 },
-    { label: 'Banners', stateKey: 'showBanners', action: 'toggleBanners', index: 22 },
-    { label: 'Layer HUD', stateKey: 'showLayerHud', action: 'toggleLayerHud', index: 23 },
-    { label: 'Health Bars', stateKey: 'showHealthBars', action: 'toggleHealthBars', index: 25 },
-    { label: 'Selection FX', stateKey: 'showSelectionFx', action: 'toggleSelectionFx', index: 26 },
+    { label: 'Tracers', stateKey: 'showTracers', action: 'toggleTracers', index: 15 },
+    { label: 'Explosions', stateKey: 'showExplosions', action: 'toggleExplosions', index: 16 },
+    { label: 'Particles', stateKey: 'showParticles', action: 'toggleParticles', index: 17 },
+    { label: 'Hit Flashes', stateKey: 'showHitFlashes', action: 'toggleHitFlashes', index: 18 },
+    { label: 'Floating Text', stateKey: 'showFloatingText', action: 'toggleFloatingText', index: 19 },
+    { label: 'Kill Feed', stateKey: 'showKillFeed', action: 'toggleKillFeed', index: 21 },
+    { label: 'Screen FX', stateKey: 'showScreenFx', action: 'toggleScreenFx', index: 22 },
+    { label: 'Banners', stateKey: 'showBanners', action: 'toggleBanners', index: 23 },
+    { label: 'Layer HUD', stateKey: 'showLayerHud', action: 'toggleLayerHud', index: 24 },
+    { label: 'Health Bars', stateKey: 'showHealthBars', action: 'toggleHealthBars', index: 26 },
+    { label: 'Selection FX', stateKey: 'showSelectionFx', action: 'toggleSelectionFx', index: 27 },
 ];
 
 for (const tt of _fxToggleTests) {
@@ -2117,6 +2124,61 @@ for (const tt of _fxToggleTests) {
             tt.label + ' state is false after clicking');
     })();
 }
+
+// ============================================================
+// Dead code removal: getSelectedScenario removed
+// ============================================================
+
+(function testGetSelectedScenarioRemoved() {
+    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const hasDeadFunction = src.includes('getSelectedScenario');
+    assert(!hasDeadFunction, 'Dead getSelectedScenario() function removed from menu-bar.js');
+})();
+
+// ============================================================
+// Keyboard shortcut consistency: no conflicts between menus
+// ============================================================
+
+console.log('\n--- Shortcut consistency ---');
+
+(function testNoResetCameraShortcutR() {
+    // 'R' key is assigned to replay panel toggle in main.js keyboard handler.
+    // MAP > Reset Camera must NOT claim 'R' shortcut — that's a lie.
+    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    // Find Reset Camera line and check its shortcut
+    const resetCameraLine = src.split('\n').find(l => l.includes("'Reset Camera'"));
+    const hasR = resetCameraLine && /shortcut:\s*'R'/.test(resetCameraLine);
+    assert(!hasR, 'Reset Camera does not claim shortcut R (R = toggle replay)');
+})();
+
+(function testNoResetGameShortcutR() {
+    // GAME > Reset Game must NOT claim 'R' shortcut
+    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const resetGameLine = src.split('\n').find(l => l.includes("'Reset Game'"));
+    const hasR = resetGameLine && /shortcut:\s*'R'/.test(resetGameLine);
+    assert(!hasR, 'Reset Game does not claim shortcut R');
+})();
+
+(function testNoDuplicateShortcutsAcrossMenus() {
+    // Parse all shortcut labels from menu-bar.js source and verify no duplicates
+    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const shortcutRegex = /shortcut:\s*'([^']+)'/g;
+    const shortcuts = [];
+    let m;
+    while ((m = shortcutRegex.exec(src)) !== null) {
+        // Ignore compound shortcuts like Ctrl+Shift+S
+        if (!m[1].includes('+')) {
+            shortcuts.push(m[1]);
+        }
+    }
+    const counts = {};
+    for (const s of shortcuts) {
+        counts[s] = (counts[s] || 0) + 1;
+    }
+    const duplicates = Object.entries(counts).filter(([, c]) => c > 1).map(([k]) => k);
+    assert(duplicates.length === 0,
+        'No duplicate single-key shortcuts across menus (dupes: ' + (duplicates.join(', ') || 'none') + ')');
+})();
 
 // ============================================================
 // Summary

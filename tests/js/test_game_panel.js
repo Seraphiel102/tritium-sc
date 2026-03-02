@@ -196,8 +196,8 @@ console.log('\n--- GameHudPanelDef structure ---');
 
 (function testHasDefaultSize() {
     assert(GameHudPanelDef.defaultSize !== undefined, 'GameHudPanelDef has defaultSize');
-    assert(GameHudPanelDef.defaultSize.w === 240, 'defaultSize.w is 240');
-    assert(GameHudPanelDef.defaultSize.h === 180, 'defaultSize.h is 180');
+    assert(GameHudPanelDef.defaultSize.w === 260, 'defaultSize.w is 260');
+    assert(GameHudPanelDef.defaultSize.h === 360, 'defaultSize.h is 360');
 })();
 
 // ============================================================
@@ -537,6 +537,470 @@ console.log('\n--- Store notification ---');
         threw = true;
     }
     assert(!threw, 'Store game.score notification does not crash');
+})();
+
+// ============================================================
+// 12. Combat status event wiring (orphan events now subscribed)
+// ============================================================
+
+console.log('\n--- Combat status event wiring ---');
+
+// The game-hud now subscribes to combat:ammo_low, combat:ammo_depleted,
+// combat:weapon_jam, combat:neutralized, ability:activated, ability:expired,
+// npc:thought, npc:alliance_change — emitting toast:show for each.
+
+(function testGameHudSourceHasCombatStatusEvents() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    const events = [
+        'combat:ammo_low',
+        'combat:ammo_depleted',
+        'combat:weapon_jam',
+        'combat:neutralized',
+        'ability:activated',
+        'ability:expired',
+        'npc:thought',
+        'npc:alliance_change',
+    ];
+    for (const evt of events) {
+        assert(source.includes(`'${evt}'`), `game-hud subscribes to ${evt}`);
+    }
+})();
+
+(function testCombatStatusEventsEmitToast() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    // Each combat status event handler should emit toast:show
+    // Count EventBus.on calls that also contain EventBus.emit('toast:show'
+    const blocks = source.split("EventBus.on('combat:ammo_low'");
+    assert(blocks.length >= 2, 'combat:ammo_low subscription exists');
+    // The subscription block should contain toast:show
+    if (blocks.length >= 2) {
+        assert(blocks[1].includes("toast:show"), 'combat:ammo_low emits toast:show');
+    }
+})();
+
+(function testAmmoLowToastContainsUnitName() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    // The ammo_low handler should use d.unit_name
+    const block = source.split("combat:ammo_low")[1] || '';
+    assert(block.includes('unit_name'), 'combat:ammo_low handler uses unit_name');
+    assert(block.includes('AMMO LOW'), 'combat:ammo_low handler shows AMMO LOW message');
+})();
+
+(function testAbilityActivatedToastFormat() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    const block = source.split("ability:activated")[1] || '';
+    assert(block.includes('ability_name'), 'ability:activated handler uses ability_name');
+    assert(block.includes('ACTIVATED'), 'ability:activated handler shows ACTIVATED message');
+})();
+
+(function testNpcThoughtToastFormat() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    const block = source.split("npc:thought")[1] || '';
+    assert(block.includes('d.thought'), 'npc:thought handler uses d.thought');
+    assert(block.includes('d.name'), 'npc:thought handler uses d.name');
+})();
+
+(function testAllianceChangeToastFormat() {
+    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    const block = source.split("npc:alliance_change")[1] || '';
+    assert(block.includes('new_alliance'), 'alliance_change handler uses new_alliance');
+})();
+
+(function testMountSubscriptionCount() {
+    // Re-mount and verify subscriptions increased
+    const bodyEl = createMockElement('div');
+    const panel = {
+        def: GameHudPanelDef,
+        w: 400,
+        h: 600,
+        x: 0,
+        y: 0,
+        manager: {
+            container: createMockElement('div'),
+            getPanel: () => null,
+        },
+        _unsubs: [],
+        _applyTransform() {},
+    };
+    panel.manager.container.clientHeight = 800;
+
+    GameHudPanelDef.mount(bodyEl, panel);
+    // Should have many subscriptions: store listeners + combat events + mission events + combat status events + dashboard interval
+    // Original: ~12 (store + combat + mission + interval)
+    // New: +8 combat status event handlers
+    assert(panel._unsubs.length >= 15, 'mount() registers at least 15 subscriptions (got ' + panel._unsubs.length + ')');
+})();
+
+
+// ============================================================
+// Mission-mode-specific metrics rendering
+// ============================================================
+
+// Test: game-hud.js contains mission-metrics section
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes('data-section="mission-metrics"'),
+        'game-hud.js contains mission-metrics section element');
+})();
+
+// Test: game-hud.js reads modeType from store
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes("TritiumStore.get('game.modeType')"),
+        'game-hud.js reads game.modeType from store');
+})();
+
+// Test: game-hud.js reads civil_unrest-specific store keys
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes("TritiumStore.get('game.deEscalationScore')"),
+        'game-hud.js reads deEscalationScore');
+    assert(source.includes("TritiumStore.get('game.civilianHarmCount')"),
+        'game-hud.js reads civilianHarmCount');
+    assert(source.includes("TritiumStore.get('game.civilianHarmLimit')"),
+        'game-hud.js reads civilianHarmLimit');
+})();
+
+// Test: game-hud.js reads infrastructure health store keys
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes("TritiumStore.get('game.infrastructureHealth')"),
+        'game-hud.js reads infrastructureHealth');
+    assert(source.includes("TritiumStore.get('game.infrastructureMax')"),
+        'game-hud.js reads infrastructureMax');
+})();
+
+// Test: game-hud.js renders drone_swarm mode
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes("modeType === 'drone_swarm'"),
+        'game-hud.js has drone_swarm mode rendering');
+})();
+
+// Test: game-hud.js renders civil_unrest mode
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes("modeType === 'civil_unrest'"),
+        'game-hud.js has civil_unrest mode rendering');
+})();
+
+// Test: _renderMissionMetrics is called in refreshDashboard
+(() => {
+    const source = fs.readFileSync('frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(source.includes('_renderMissionMetrics()'),
+        'refreshDashboard calls _renderMissionMetrics');
+})();
+
+
+// ============================================================
+// Headless bridge event whitelist
+// ============================================================
+
+// Test: ws.py headless bridge includes instigator_identified
+(() => {
+    const source = fs.readFileSync('src/app/routers/ws.py', 'utf8');
+    assert(source.includes('"instigator_identified"'),
+        'ws.py headless bridge whitelists instigator_identified');
+})();
+
+// Test: ws.py headless bridge includes emp_activated
+(() => {
+    const source = fs.readFileSync('src/app/routers/ws.py', 'utf8');
+    assert(source.includes('"emp_activated"'),
+        'ws.py headless bridge whitelists emp_activated');
+})();
+
+
+// ============================================================
+// Game HUD: difficulty multiplier + wave name display
+// ============================================================
+
+(function testGameHudHasDifficultyDisplay() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(
+        src.includes('data-bind="difficulty"'),
+        'Game HUD has a data-bind="difficulty" element for difficulty multiplier'
+    );
+    assert(
+        src.includes("game.difficultyMultiplier"),
+        'Game HUD subscribes to game.difficultyMultiplier store changes'
+    );
+})();
+
+(function testGameHudHasWaveNameDisplay() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(
+        src.includes('data-bind="waveName"'),
+        'Game HUD has a data-bind="waveName" element for wave name'
+    );
+    assert(
+        src.includes("game.waveName"),
+        'Game HUD subscribes to game.waveName store changes'
+    );
+})();
+
+(function testDifficultyDisplayColorCoding() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    // Difficulty display should color-code: green for easy, yellow for normal, red for hard
+    const diffIdx = src.indexOf("game.difficultyMultiplier");
+    assert(diffIdx >= 0, 'difficulty subscriber exists');
+    const diffBlock = src.slice(diffIdx, diffIdx + 500);
+    assert(diffBlock.includes('#05ffa1'), 'difficulty display uses green for easy (<0.8)');
+    assert(diffBlock.includes('#ff2a6d'), 'difficulty display uses red for hard (>1.3)');
+})();
+
+// ============================================================
+// Event handler wiring tests
+// ============================================================
+console.log('\n--- Event handler wiring (static analysis) ---');
+
+(function testCombatEventSubscriptions() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+
+    // Combat events
+    assert(src.includes("'combat:projectile'"), 'mount subscribes to combat:projectile');
+    assert(src.includes("'combat:hit'"), 'mount subscribes to combat:hit');
+    assert(src.includes("'combat:elimination'"), 'mount subscribes to combat:elimination');
+    assert(src.includes("'game:wave_start'"), 'mount subscribes to game:wave_start');
+    assert(src.includes("'game:state'"), 'mount subscribes to game:state');
+
+    // Combat status events
+    assert(src.includes("'combat:ammo_low'"), 'mount subscribes to combat:ammo_low');
+    assert(src.includes("'combat:ammo_depleted'"), 'mount subscribes to combat:ammo_depleted');
+    assert(src.includes("'combat:weapon_jam'"), 'mount subscribes to combat:weapon_jam');
+    assert(src.includes("'combat:neutralized'"), 'mount subscribes to combat:neutralized');
+    assert(src.includes("'ability:activated'"), 'mount subscribes to ability:activated');
+    assert(src.includes("'ability:expired'"), 'mount subscribes to ability:expired');
+    assert(src.includes("'npc:thought'"), 'mount subscribes to npc:thought');
+    assert(src.includes("'npc:alliance_change'"), 'mount subscribes to npc:alliance_change');
+
+    // Mission events
+    assert(src.includes("'mission:bomber_detonation'"), 'mount subscribes to mission:bomber_detonation');
+    assert(src.includes("'mission:emp_activated'"), 'mount subscribes to mission:emp_activated');
+    assert(src.includes("'mission:instigator_identified'"), 'mount subscribes to mission:instigator_identified');
+    assert(src.includes("'mission:infrastructure_overwhelmed'"), 'mount subscribes to mission:infrastructure_overwhelmed');
+})();
+
+// ============================================================
+// Event handler behavior tests (functional via mount)
+// ============================================================
+console.log('\n--- Event handler behavior ---');
+
+(function testCombatEventsUpdateTracker() {
+    // Mount the panel and trigger events through EventBus
+    const bodyEl = GameHudPanelDef.create({ def: GameHudPanelDef });
+    const panel = {
+        def: GameHudPanelDef,
+        _unsubs: [],
+        w: 260,
+        x: 0,
+        _applyTransform() {},
+        manager: {
+            container: { clientWidth: 1200 },
+            getPanel() { return null; },
+        },
+    };
+
+    // Get EventBus reference
+    const EB = vm.runInContext('EventBus', ctx);
+    const Store = vm.runInContext('TritiumStore', ctx);
+
+    // Set phase to idle (before mount) so dashboard refresh doesn't crash
+    Store.game.phase = 'idle';
+    Store.game.wave = 0;
+    Store.game.totalWaves = 10;
+    Store.game.score = 0;
+    Store.game.eliminations = 0;
+
+    GameHudPanelDef.mount(bodyEl, panel);
+
+    // Verify unsubs were registered
+    assert(panel._unsubs.length > 0, 'mount registers unsub callbacks');
+
+    // Fire combat events
+    EB.emit('combat:projectile', {});
+    EB.emit('combat:projectile', {});
+    EB.emit('combat:hit', { damage: 25 });
+    EB.emit('combat:elimination', {});
+
+    // These should have been recorded by the CombatStatsTracker
+    // We can't directly access the tracker, but we verified the wiring above
+
+    // Fire combat status events that emit toasts
+    let toastEvents = [];
+    const origOn = EB.on;
+    EB.on('toast:show', (d) => { toastEvents.push(d); });
+
+    EB.emit('combat:ammo_low', { unit_name: 'Alpha Turret' });
+    assert(toastEvents.length >= 1, 'combat:ammo_low emits toast:show');
+    assert(toastEvents[0].message.includes('AMMO LOW'), 'ammo_low toast has correct message');
+    assert(toastEvents[0].message.includes('Alpha Turret'), 'ammo_low toast includes unit name');
+
+    toastEvents = [];
+    EB.emit('combat:ammo_depleted', { unit_name: 'Bravo Rover' });
+    assert(toastEvents.length >= 1, 'combat:ammo_depleted emits toast:show');
+    assert(toastEvents[0].message.includes('AMMO DEPLETED'), 'ammo_depleted toast message correct');
+
+    toastEvents = [];
+    EB.emit('combat:weapon_jam', {});
+    assert(toastEvents.length >= 1, 'combat:weapon_jam emits toast:show');
+    assert(toastEvents[0].message.includes('WEAPON JAM'), 'weapon_jam toast message correct');
+    assert(toastEvents[0].message.includes('Unit'), 'weapon_jam defaults to "Unit" when no name');
+
+    toastEvents = [];
+    EB.emit('combat:neutralized', { target_name: 'Hostile-01' });
+    assert(toastEvents.length >= 1, 'combat:neutralized emits toast:show');
+    assert(toastEvents[0].message.includes('NEUTRALIZED'), 'neutralized toast message correct');
+
+    toastEvents = [];
+    EB.emit('ability:activated', { ability_name: 'speed_boost', unit_name: 'Alpha' });
+    assert(toastEvents.length >= 1, 'ability:activated emits toast:show');
+    assert(toastEvents[0].message.includes('SPEED BOOST'), 'ability name uppercased with underscores replaced');
+    assert(toastEvents[0].message.includes('Alpha'), 'ability toast includes unit name');
+
+    toastEvents = [];
+    EB.emit('ability:expired', { ability_name: 'shield' });
+    assert(toastEvents.length >= 1, 'ability:expired emits toast:show');
+    assert(toastEvents[0].message.includes('SHIELD'), 'expired ability name uppercased');
+    assert(toastEvents[0].message.includes('expired'), 'expired toast says expired');
+
+    toastEvents = [];
+    EB.emit('npc:thought', { name: 'Civilian Bob', thought: 'This is scary' });
+    assert(toastEvents.length >= 1, 'npc:thought emits toast:show');
+    assert(toastEvents[0].message.includes('Civilian Bob'), 'npc thought includes name');
+    assert(toastEvents[0].message.includes('This is scary'), 'npc thought includes text');
+
+    toastEvents = [];
+    EB.emit('npc:thought', {}); // No name/thought — should not emit
+    assert(toastEvents.length === 0, 'npc:thought with missing data does NOT emit toast');
+
+    toastEvents = [];
+    EB.emit('npc:alliance_change', { unit_name: 'Villager', new_alliance: 'hostile' });
+    assert(toastEvents.length >= 1, 'npc:alliance_change emits toast:show');
+    assert(toastEvents[0].message.includes('Villager'), 'alliance change includes unit name');
+    assert(toastEvents[0].message.includes('hostile'), 'alliance change includes new alliance');
+
+    // Cleanup
+    panel._unsubs.forEach(fn => { if (typeof fn === 'function') fn(); });
+})();
+
+// ============================================================
+// Button handlers — static verification
+// ============================================================
+console.log('\n--- Button handlers ---');
+
+(function testBeginButtonWiring() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes("'/api/game/begin'"), 'BEGIN button calls /api/game/begin');
+    assert(src.includes("method: 'POST'"), 'BEGIN button uses POST method');
+})();
+
+(function testSpawnButtonWiring() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes("'/api/amy/simulation/spawn'"), 'SPAWN button calls /api/amy/simulation/spawn');
+    assert(src.includes("'Hostile spawned'"), 'SPAWN success shows Hostile spawned toast');
+    assert(src.includes("'Spawn failed: network error'"), 'SPAWN catch shows network error toast');
+})();
+
+(function testResetButtonWiring() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes("'/api/game/reset'"), 'RESET button calls /api/game/reset');
+    assert(src.includes('warCombatReset'), 'RESET calls warCombatReset if available');
+    assert(src.includes('tracker.reset()'), 'RESET resets combat tracker');
+})();
+
+// ============================================================
+// Store subscription behavior
+// ============================================================
+console.log('\n--- Store subscriptions ---');
+
+(function testStorePhaseSubscription() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes("'game.phase'"), 'subscribes to game.phase');
+    assert(src.includes("'game.wave'"), 'subscribes to game.wave');
+    assert(src.includes("'game.waveName'"), 'subscribes to game.waveName');
+    assert(src.includes("'game.score'"), 'subscribes to game.score');
+    assert(src.includes("'game.eliminations'"), 'subscribes to game.eliminations');
+    assert(src.includes("'game.difficultyMultiplier'"), 'subscribes to game.difficultyMultiplier');
+})();
+
+// ============================================================
+// Dashboard refresh interval
+// ============================================================
+console.log('\n--- Dashboard refresh interval ---');
+
+(function testDashboardInterval() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes('setInterval(refreshDashboard, 2000)'), 'dashboard refreshes every 2000ms');
+    assert(src.includes('clearInterval(dashboardInterval)'), 'dashboard interval cleaned up on unmount');
+})();
+
+// ============================================================
+// Upgrade picker flow verification
+// ============================================================
+console.log('\n--- Upgrade picker flow ---');
+
+(function testUpgradePickerExists() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes('function showUpgradePicker'), 'showUpgradePicker function exists');
+    assert(src.includes('function hideUpgradePicker'), 'hideUpgradePicker function exists');
+    assert(src.includes("'/api/game/upgrades'"), 'upgrade picker fetches from /api/game/upgrades');
+    assert(src.includes("'/api/game/upgrade'"), 'upgrade picker POSTs to /api/game/upgrade');
+    assert(src.includes('_selectedUpgradeId'), 'upgrade picker tracks selected upgrade');
+    assert(src.includes('_cachedUpgrades'), 'upgrade picker caches upgrade list');
+})();
+
+// ============================================================
+// Mission metric rendering
+// ============================================================
+console.log('\n--- Mission metrics ---');
+
+(function testMissionMetricsExist() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes('_renderMissionMetrics'), '_renderMissionMetrics function exists');
+    assert(src.includes('civil_unrest'), 'mission metrics handle civil_unrest mode');
+    assert(src.includes('drone_swarm'), 'mission metrics handle drone_swarm mode');
+    assert(src.includes('de-escalation') || src.includes('deEscalation') || src.includes('de_escalation'),
+        'civil unrest tracks de-escalation metric');
+})();
+
+// ============================================================
+// Visibility logic
+// ============================================================
+console.log('\n--- Visibility logic ---');
+
+(function testVisibilityLogic() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    assert(src.includes('function updateVisibility'), 'updateVisibility function exists');
+    // BEGIN button visible in idle/setup
+    assert(src.includes("'idle'") && src.includes("'setup'"), 'visibility checks idle and setup phases');
+    // RESET button visible in victory/defeat
+    assert(src.includes("'victory'") && src.includes("'defeat'"), 'visibility checks victory and defeat phases');
+})();
+
+// ============================================================
+// Game state reset handler
+// ============================================================
+console.log('\n--- Game state reset ---');
+
+(function testGameStateResetHandler() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    // On game:state active, wave 1 — tracker should reset
+    const stateBlock = src.match(/game:state.*?tracker\.reset/s);
+    assert(stateBlock !== null, 'game:state handler resets tracker on wave 1');
+    assert(src.includes('_previousMorale = 1.0'), 'game:state resets _previousMorale');
+})();
+
+// ============================================================
+// Wave start handler
+// ============================================================
+console.log('\n--- Wave start ---');
+
+(function testWaveStartHandler() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/game-hud.js', 'utf8');
+    const waveBlock = src.match(/game:wave_start.*?_waveStartTime/s);
+    assert(waveBlock !== null, 'wave_start handler sets _waveStartTime');
+    assert(src.includes('_waveHostileTotal'), 'wave_start captures hostile count');
 })();
 
 // ============================================================

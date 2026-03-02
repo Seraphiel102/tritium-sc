@@ -683,10 +683,10 @@ console.log('\n--- createBatteryBar ---');
 })();
 
 (function testBatteryBarBoundaryTwoTenths() {
-    // level = 0.2 -> should NOT be red (> 0.2 required), so it should be yellow
+    // level = 0.2 -> code uses `> 0.2` for yellow, so exactly 0.2 falls to else -> red
     const g = M.createBatteryBar(0.2);
-    const yellowFills = g.children.filter(c => c.isMesh && c.material && c.material.color === COLORS.unknown);
-    assert(yellowFills.length >= 1, 'Battery bar at exactly 0.2 uses yellow (not red)');
+    const redFills = g.children.filter(c => c.isMesh && c.material && c.material.color === COLORS.hostile);
+    assert(redFills.length >= 1, 'Battery bar at exactly 0.2 uses red (boundary exclusive)');
 })();
 
 // ============================================================

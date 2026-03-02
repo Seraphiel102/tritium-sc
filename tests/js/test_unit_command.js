@@ -30,9 +30,14 @@ function createMockElement(tag) {
     let _innerHTML = '';
     let _textContent = '';
 
+    const attrs = {};
+
     const el = {
         tagName: (tag || 'DIV').toUpperCase(),
         className: '',
+        setAttribute(name, value) { attrs[name] = String(value); },
+        getAttribute(name) { return attrs[name] !== undefined ? attrs[name] : null; },
+        removeAttribute(name) { delete attrs[name]; },
         get innerHTML() { return _innerHTML; },
         set innerHTML(val) { _innerHTML = val; },
         get textContent() { return _textContent; },

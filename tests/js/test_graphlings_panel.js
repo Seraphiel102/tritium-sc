@@ -97,6 +97,39 @@ test('panel cleans up SSE on unmount', () => {
     );
 });
 
+// Test 7b: Cleanup is stored on bodyEl (not panel) so unmount can access it
+test('cleanup stored on bodyEl for unmount access', () => {
+    const content = fs.readFileSync(
+        path.join(__dirname, '../../frontend/js/command/panels/graphlings.js'), 'utf8'
+    );
+    assert.ok(
+        content.includes('bodyEl._glCleanup'),
+        'cleanup should be stored on bodyEl, not panel (bodyEl is passed to unmount)'
+    );
+});
+
+// Test 7c: unmount actually calls the cleanup function
+test('unmount calls _glCleanup', () => {
+    const content = fs.readFileSync(
+        path.join(__dirname, '../../frontend/js/command/panels/graphlings.js'), 'utf8'
+    );
+    assert.ok(
+        content.includes('unmount(bodyEl)') && content.includes('bodyEl._glCleanup()'),
+        'unmount should call bodyEl._glCleanup()'
+    );
+});
+
+// Test 7d: cleanup includes clearInterval
+test('cleanup clears polling interval', () => {
+    const content = fs.readFileSync(
+        path.join(__dirname, '../../frontend/js/command/panels/graphlings.js'), 'utf8'
+    );
+    assert.ok(
+        content.includes('clearInterval(statusInterval)'),
+        'cleanup should clearInterval for polling'
+    );
+});
+
 // Test 8: Panel has emotion/mood indicators
 test('panel shows emotion indicators', () => {
     const content = fs.readFileSync(

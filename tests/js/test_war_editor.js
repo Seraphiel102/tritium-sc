@@ -150,11 +150,11 @@ const sandbox = vm.createContext({
             return mockElements[id];
         },
         createElement(tag) {
-            return {
+            const el = {
                 id: '',
                 tagName: tag.toUpperCase(),
                 style: { display: '', cssText: '' },
-                textContent: '',
+                _textContent: '',
                 innerHTML: '',
                 dataset: {},
                 children: [],
@@ -163,6 +163,12 @@ const sandbox = vm.createContext({
                 querySelectorAll(sel) { return []; },
                 getContext() { return createMockCtx(); },
             };
+            // Link textContent -> innerHTML like a real browser DOM element
+            Object.defineProperty(el, 'textContent', {
+                get() { return el._textContent; },
+                set(v) { el._textContent = v; el.innerHTML = v; },
+            });
+            return el;
         },
         querySelectorAll(sel) { return []; },
     },

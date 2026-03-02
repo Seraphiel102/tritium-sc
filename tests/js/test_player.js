@@ -48,7 +48,7 @@ function createMockElement(tag) {
         className: '',
         id: '',
         get innerHTML() { return _innerHTML; },
-        set innerHTML(val) { _innerHTML = val; },
+        set innerHTML(val) { _innerHTML = val; if (val === '') children.length = 0; },
         get textContent() { return _textContent; },
         set textContent(val) { _textContent = String(val); },
         style,
@@ -229,9 +229,26 @@ const sandbox = {
 
 const ctx = vm.createContext(sandbox);
 
-// Load player.js
+// Load player.js — wrap in IIFE that exposes internal state via window
 const code = fs.readFileSync(__dirname + '/../../frontend/js/player.js', 'utf8');
 vm.runInContext(code, ctx);
+
+// Expose const-scoped internals to test harness via evaluation
+vm.runInContext(`
+    window._playerState = typeof playerState !== 'undefined' ? playerState : undefined;
+    window._playerElements = typeof playerElements !== 'undefined' ? playerElements : undefined;
+    window._formatDuration = typeof formatDuration !== 'undefined' ? formatDuration : undefined;
+    window._getCurrentFrameDetections = typeof getCurrentFrameDetections !== 'undefined' ? getCurrentFrameDetections : undefined;
+    window._updatePlayButton = typeof updatePlayButton !== 'undefined' ? updatePlayButton : undefined;
+    window._updateProgress = typeof updateProgress !== 'undefined' ? updateProgress : undefined;
+    window._updateTimeDisplay = typeof updateTimeDisplay !== 'undefined' ? updateTimeDisplay : undefined;
+    window._onVideoTimeUpdate = typeof onVideoTimeUpdate !== 'undefined' ? onVideoTimeUpdate : undefined;
+    window._handlePlayerKeyboard = typeof handlePlayerKeyboard !== 'undefined' ? handlePlayerKeyboard : undefined;
+    window._updateAnnotationButton = typeof updateAnnotationButton !== 'undefined' ? updateAnnotationButton : undefined;
+    window._createAnnotationOverlay = typeof createAnnotationOverlay !== 'undefined' ? createAnnotationOverlay : undefined;
+    window._hideAnnotationOverlay = typeof hideAnnotationOverlay !== 'undefined' ? hideAnnotationOverlay : undefined;
+    window._updateTimelineWithDetections = typeof updateTimelineWithDetections !== 'undefined' ? updateTimelineWithDetections : undefined;
+`, ctx);
 
 // Trigger DOMContentLoaded to initialize player
 if (_domContentLoadedHandler) {
@@ -257,20 +274,20 @@ const {
     analyzeCurrentVideo,
 } = ctx.window;
 
-// Access internal state (exposed as module globals within the sandbox)
-const playerState = ctx.playerState;
-const playerElements = ctx.playerElements;
-const formatDuration = ctx.formatDuration;
-const getCurrentFrameDetections = ctx.getCurrentFrameDetections;
-const updatePlayButton = ctx.updatePlayButton;
-const updateProgress = ctx.updateProgress;
-const updateTimeDisplay = ctx.updateTimeDisplay;
-const onVideoTimeUpdate = ctx.onVideoTimeUpdate;
-const handlePlayerKeyboard = ctx.handlePlayerKeyboard;
-const updateAnnotationButton = ctx.updateAnnotationButton;
-const createAnnotationOverlay = ctx.createAnnotationOverlay;
-const hideAnnotationOverlay = ctx.hideAnnotationOverlay;
-const updateTimelineWithDetections = ctx.updateTimelineWithDetections;
+// Access internal state (exposed via window._ prefix from post-load eval)
+const playerState = ctx.window._playerState;
+const playerElements = ctx.window._playerElements;
+const formatDuration = ctx.window._formatDuration;
+const getCurrentFrameDetections = ctx.window._getCurrentFrameDetections;
+const updatePlayButton = ctx.window._updatePlayButton;
+const updateProgress = ctx.window._updateProgress;
+const updateTimeDisplay = ctx.window._updateTimeDisplay;
+const onVideoTimeUpdate = ctx.window._onVideoTimeUpdate;
+const handlePlayerKeyboard = ctx.window._handlePlayerKeyboard;
+const updateAnnotationButton = ctx.window._updateAnnotationButton;
+const createAnnotationOverlay = ctx.window._createAnnotationOverlay;
+const hideAnnotationOverlay = ctx.window._hideAnnotationOverlay;
+const updateTimelineWithDetections = ctx.window._updateTimelineWithDetections;
 
 // ============================================================
 // Helper: reset state between groups

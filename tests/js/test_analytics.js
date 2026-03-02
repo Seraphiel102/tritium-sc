@@ -989,9 +989,14 @@ console.log('\n--- viewTargetFromAnalytics() ---');
 // 13. loadAnalytics() (async)
 // ============================================================
 
-console.log('\n--- loadAnalytics() ---');
+console.log('\n--- loadAnalytics() + initAnalyticsView() (async, sequential) ---');
 
-(async function testLoadAnalyticsFetchesCorrectUrl() {
+// Helper: flush cross-realm VM promises
+const _flush = () => new Promise(r => setTimeout(r, 20));
+
+// Chain all async tests sequentially to avoid shared-state races
+(async function runAsyncAnalyticsTests() {
+    // 1. loadAnalytics() calls fetch with correct URL
     resetState();
     fetchCalls = [];
     fetchResponse = {
@@ -1002,16 +1007,15 @@ console.log('\n--- loadAnalytics() ---');
             recent_targets: [], by_channel: {}
         })
     };
-    // Set the analytics-days element value
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '14';
-    await vm.runInContext('loadAnalytics()', ctx);
+    const daysEl1 = getOrCreateElement('analytics-days');
+    daysEl1.value = '14';
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
     assert(fetchCalls.length >= 1, 'loadAnalytics() calls fetch');
     assert(fetchCalls[0][0] === '/api/search/trends?days=14',
         'loadAnalytics() fetches correct URL with days param (got ' + fetchCalls[0][0] + ')');
-})();
 
-(async function testLoadAnalyticsUpdatesState() {
+    // 2. loadAnalytics() stores fetched data
     resetState();
     const mockData = {
         total_detections: 99, total_people: 60, total_vehicles: 39,
@@ -1022,15 +1026,15 @@ console.log('\n--- loadAnalytics() ---');
         ok: true, status: 200,
         json: () => Promise.resolve(mockData)
     };
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '7';
-    await vm.runInContext('loadAnalytics()', ctx);
+    const daysEl2 = getOrCreateElement('analytics-days');
+    daysEl2.value = '7';
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
     const data = vm.runInContext('analyticsState.data', ctx);
     assert(data !== null, 'loadAnalytics() sets analyticsState.data');
     assert(data.total_detections === 99, 'loadAnalytics() stores fetched data');
-})();
 
-(async function testLoadAnalyticsUpdatesDays() {
+    // 3. loadAnalytics() updates analyticsState.days
     resetState();
     fetchResponse = {
         ok: true, status: 200,
@@ -1040,42 +1044,41 @@ console.log('\n--- loadAnalytics() ---');
             recent_targets: [], by_channel: {}
         })
     };
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '30';
-    await vm.runInContext('loadAnalytics()', ctx);
+    const daysEl3 = getOrCreateElement('analytics-days');
+    daysEl3.value = '30';
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
     const days = vm.runInContext('analyticsState.days', ctx);
     assert(days === 30, 'loadAnalytics() updates analyticsState.days to 30');
-})();
 
-(async function testLoadAnalyticsHandlesHttpError() {
+    // 4. loadAnalytics() handles HTTP error
     resetState();
     consoleErrors = [];
     fetchResponse = {
         ok: false, status: 500,
         json: () => Promise.resolve({})
     };
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '7';
-    await vm.runInContext('loadAnalytics()', ctx);
+    const daysEl4 = getOrCreateElement('analytics-days');
+    daysEl4.value = '7';
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
     const hasError = consoleErrors.some(e => e.includes('Failed to load analytics'));
     assert(hasError, 'loadAnalytics() logs error on HTTP failure');
-})();
 
-(async function testLoadAnalyticsHandlesFetchException() {
+    // 5. loadAnalytics() handles fetch exception
     resetState();
     consoleErrors = [];
-    // Override fetch to throw
     const origFetch = sandbox.fetch;
     sandbox.fetch = () => Promise.reject(new Error('Network error'));
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '7';
-    await vm.runInContext('loadAnalytics()', ctx);
-    const hasError = consoleErrors.some(e => e.includes('Failed to load analytics'));
-    assert(hasError, 'loadAnalytics() catches fetch exceptions');
+    const daysEl5 = getOrCreateElement('analytics-days');
+    daysEl5.value = '7';
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
+    const hasExcError = consoleErrors.some(e => e.includes('Failed to load analytics'));
+    assert(hasExcError, 'loadAnalytics() catches fetch exceptions');
     sandbox.fetch = origFetch;
-})();
 
-(async function testLoadAnalyticsDefaultDays() {
+    // 6. loadAnalytics() defaults to 7 days when element missing
     resetState();
     fetchCalls = [];
     fetchResponse = {
@@ -1086,26 +1089,19 @@ console.log('\n--- loadAnalytics() ---');
             recent_targets: [], by_channel: {}
         })
     };
-    // Return null for the days element to test default
     const origGetById = sandbox.document.getElementById;
     sandbox.document.getElementById = (id) => {
         if (id === 'analytics-days') return null;
         return getOrCreateElement(id);
     };
-    await vm.runInContext('loadAnalytics()', ctx);
+    vm.runInContext('loadAnalytics()', ctx);
+    await _flush();
     assert(fetchCalls.length >= 1, 'loadAnalytics() calls fetch even without days element');
     assert(fetchCalls[0][0] === '/api/search/trends?days=7',
         'loadAnalytics() defaults to 7 days when element is missing');
     sandbox.document.getElementById = origGetById;
-})();
 
-// ============================================================
-// 14. initAnalyticsView() (async)
-// ============================================================
-
-console.log('\n--- initAnalyticsView() ---');
-
-(async function testInitAnalyticsViewCallsLoadAnalytics() {
+    // 7. initAnalyticsView() triggers loadAnalytics
     resetState();
     fetchCalls = [];
     fetchResponse = {
@@ -1116,9 +1112,10 @@ console.log('\n--- initAnalyticsView() ---');
             recent_targets: [], by_channel: {}
         })
     };
-    const daysEl = getOrCreateElement('analytics-days');
-    daysEl.value = '7';
-    await vm.runInContext('initAnalyticsView()', ctx);
+    const daysEl7 = getOrCreateElement('analytics-days');
+    daysEl7.value = '7';
+    vm.runInContext('initAnalyticsView()', ctx);
+    await _flush();
     assert(fetchCalls.length >= 1, 'initAnalyticsView() triggers a fetch call (delegates to loadAnalytics)');
 })();
 
@@ -1184,10 +1181,10 @@ console.log('\n--- CSS injection ---');
 // Summary
 // ============================================================
 
-// Allow async tests to settle
+// Allow async tests to settle (7 async tests * 20ms flush + margin)
 setTimeout(() => {
     console.log('\n' + '='.repeat(40));
     console.log(`Results: ${passed} passed, ${failed} failed`);
     console.log('='.repeat(40));
     process.exit(failed > 0 ? 1 : 0);
-}, 500);
+}, 1000);

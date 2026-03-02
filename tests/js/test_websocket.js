@@ -1500,6 +1500,1286 @@ console.log('\n--- Missing Telemetry Fields ---');
 })();
 
 // ============================================================
+// 18. Mission-specific WebSocket events
+// ============================================================
+
+console.log('\n--- Mission-specific events: crowd_density ---');
+
+(function testCrowdDensityEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:crowd_density');
+    sock._simulateMessage({
+        type: 'crowd_density',
+        data: { grid: [[0.1, 0.5], [0.3, 0.8]], resolution: 2 },
+    });
+
+    const stored = vm.runInContext('TritiumStore.get("game.crowdDensity")', ctx);
+    assertDefined(stored, 'crowd_density stored in game.crowdDensity');
+    assert(_bridge['mission:crowd_density'] !== undefined, 'crowd_density event emitted on EventBus');
+})();
+
+console.log('\n--- Mission-specific events: infrastructure_damage ---');
+
+(function testInfrastructureDamageEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:infrastructure_damage');
+    sock._simulateMessage({
+        type: 'infrastructure_damage',
+        data: { infrastructure_health: 750, infrastructure_max: 1000, poi_id: 'poi-1', damage: 50 },
+    });
+
+    const health = vm.runInContext('TritiumStore.get("game.infrastructureHealth")', ctx);
+    assertEqual(health, 750, 'infrastructure_health stored');
+    const max = vm.runInContext('TritiumStore.get("game.infrastructureMax")', ctx);
+    assertEqual(max, 1000, 'infrastructure_max stored');
+    assert(_bridge['mission:infrastructure_damage'] !== undefined, 'infrastructure_damage event emitted');
+})();
+
+console.log('\n--- Mission-specific events: civilian_harmed ---');
+
+(function testCivilianHarmedEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:civilian_harmed');
+    sock._simulateMessage({
+        type: 'civilian_harmed',
+        data: { civilian_harm_count: 3, civilian_harm_limit: 5, civilian_id: 'civ-1' },
+    });
+
+    const count = vm.runInContext('TritiumStore.get("game.civilianHarmCount")', ctx);
+    assertEqual(count, 3, 'civilian_harm_count stored');
+    const limit = vm.runInContext('TritiumStore.get("game.civilianHarmLimit")', ctx);
+    assertEqual(limit, 5, 'civilian_harm_limit stored');
+    assert(_bridge['mission:civilian_harmed'] !== undefined, 'civilian_harmed event emitted');
+})();
+
+console.log('\n--- Mission-specific events: bomber_detonation ---');
+
+(function testBomberDetonationEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:bomber_detonation');
+    sock._simulateMessage({
+        type: 'bomber_detonation',
+        data: { bomber_id: 'drone-b1', position: { x: 10, y: 20 }, damage: 100, radius: 15 },
+    });
+
+    assert(_bridge['mission:bomber_detonation'] !== undefined, 'bomber_detonation event emitted');
+})();
+
+console.log('\n--- Mission-specific events: de_escalation ---');
+
+(function testDeEscalationEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:de_escalation');
+    sock._simulateMessage({
+        type: 'de_escalation',
+        data: { de_escalation_score: 500, rioter_id: 'rioter-1', points: 100 },
+    });
+
+    const score = vm.runInContext('TritiumStore.get("game.deEscalationScore")', ctx);
+    assertEqual(score, 500, 'de_escalation_score stored');
+    assert(_bridge['mission:de_escalation'] !== undefined, 'de_escalation event emitted');
+})();
+
+console.log('\n--- Mission-specific events: game_state_change with game_mode_type ---');
+
+(function testGameStateChangeWithModeType() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    // Inject warHudUpdateGameState mock
+    vm.runInContext('var lastHudData = null; var warHudUpdateGameState = function(d) { lastHudData = d; };', ctx);
+
+    sock._simulateMessage({
+        type: 'game_state',
+        data: {
+            state: 'active',
+            game_mode_type: 'drone_swarm',
+            infrastructure_health: 900,
+            infrastructure_max: 1000,
+            wave: 2,
+        },
+    });
+
+    const modeType = vm.runInContext('TritiumStore.get("game.modeType")', ctx);
+    assertEqual(modeType, 'drone_swarm', 'game_mode_type stored in game.modeType');
+})();
+
+(function testGameStateChangeCivilUnrestFields() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    vm.runInContext('var warHudUpdateGameState = function(d) {};', ctx);
+
+    sock._simulateMessage({
+        type: 'game_state',
+        data: {
+            state: 'active',
+            game_mode_type: 'civil_unrest',
+            de_escalation_score: 300,
+            civilian_harm_count: 1,
+            civilian_harm_limit: 5,
+            weighted_total_score: 800,
+            wave: 1,
+        },
+    });
+
+    const modeType = vm.runInContext('TritiumStore.get("game.modeType")', ctx);
+    assertEqual(modeType, 'civil_unrest', 'civil_unrest game_mode_type stored');
+    const deesc = vm.runInContext('TritiumStore.get("game.deEscalationScore")', ctx);
+    assertEqual(deesc, 300, 'de_escalation_score from game_state stored');
+    const harm = vm.runInContext('TritiumStore.get("game.civilianHarmCount")', ctx);
+    assertEqual(harm, 1, 'civilian_harm_count from game_state stored');
+})();
+
+console.log('\n--- Mission-specific events: infrastructure_overwhelmed ---');
+
+(function testInfrastructureOverwhelmedEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const sock = createdSockets[createdSockets.length - 1];
+    sock._simulateOpen();
+
+    listenEvent(ctx, 'mission:infrastructure_overwhelmed');
+    sock._simulateMessage({
+        type: 'infrastructure_overwhelmed',
+        data: { poi_id: 'poi-3', poi_name: 'Town Hall' },
+    });
+
+    assert(_bridge['mission:infrastructure_overwhelmed'] !== undefined, 'infrastructure_overwhelmed event emitted');
+})();
+
+console.log('\n--- Mission-specific events: _updateUnit with mission fields ---');
+
+(function testUpdateUnitCrowdRole() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws._updateUnit({
+        target_id: 'civ-01',
+        alliance: 'neutral',
+        crowd_role: 'rioter',
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("civ-01")', ctx);
+    assertEqual(unit.crowdRole, 'rioter', 'crowd_role stored as crowdRole');
+})();
+
+(function testUpdateUnitDroneVariant() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws._updateUnit({
+        target_id: 'drone-01',
+        alliance: 'hostile',
+        drone_variant: 'bomber',
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("drone-01")', ctx);
+    assertEqual(unit.droneVariant, 'bomber', 'drone_variant stored as droneVariant');
+})();
+
+(function testUpdateUnitAmmoCount() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws._updateUnit({
+        target_id: 'turret-01',
+        alliance: 'friendly',
+        type: 'missile_turret',
+        ammo_count: 12,
+        ammo_max: 20,
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("turret-01")', ctx);
+    assertEqual(unit.ammoCount, 12, 'ammo_count stored as ammoCount');
+    assertEqual(unit.ammoMax, 20, 'ammo_max stored as ammoMax');
+})();
+
+(function testUpdateUnitAltitude() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws._updateUnit({
+        target_id: 'drone-02',
+        alliance: 'hostile',
+        altitude: 35.5,
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("drone-02")', ctx);
+    assertEqual(unit.altitude, 35.5, 'altitude stored');
+})();
+
+(function testUpdateUnitInstigatorState() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws._updateUnit({
+        target_id: 'instigator-01',
+        alliance: 'hostile',
+        instigator_state: 'activating',
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("instigator-01")', ctx);
+    assertEqual(unit.instigatorState, 'activating', 'instigator_state stored as instigatorState');
+})();
+
+// ============================================================
+// amy_ prefix: announcer
+// ============================================================
+
+console.log('\n--- amy_announcer prefix variant ---');
+
+(function testAmyAnnouncerPrefix() {
+    const ctx = createFreshContext();
+    listenEvent(ctx, 'announcer');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    // Bridge sends with amy_ prefix — handler should still emit announcer event
+    createdSockets[0]._simulateMessage({
+        type: 'amy_announcer',
+        data: { text: 'MEGA KILL!', category: 'streak' }
+    });
+    assertDefined(_bridge['announcer'], 'amy_announcer emits announcer event');
+    assertEqual(_bridge['announcer'].text, 'MEGA KILL!', 'amy_announcer data.text');
+})();
+
+// ============================================================
+// amy_ prefix: game_elimination
+// ============================================================
+
+console.log('\n--- amy_game_elimination prefix variant ---');
+
+(function testAmyGameEliminationPrefix() {
+    const ctx = createFreshContext();
+    listenEvent(ctx, 'game:elimination');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_game_elimination',
+        data: { target_id: 'hostile-99', killer_id: 'turret-01' }
+    });
+    assertDefined(_bridge['game:elimination'], 'amy_game_elimination emits game:elimination');
+})();
+
+// ============================================================
+// amy_ prefix: escalation_change
+// ============================================================
+
+console.log('\n--- amy_escalation_change prefix variant ---');
+
+(function testAmyEscalationChangePrefix() {
+    const ctx = createFreshContext();
+    listenEvent(ctx, 'alert:new');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_escalation_change',
+        data: { message: 'DEFCON 2' }
+    });
+    assertDefined(_bridge['alert:new'], 'amy_escalation_change emits alert:new');
+})();
+
+// ============================================================
+// amy_ prefix: robot_thought
+// ============================================================
+
+console.log('\n--- amy_robot_thought prefix variant ---');
+
+(function testAmyRobotThoughtPrefix() {
+    const ctx = createFreshContext();
+    listenEvent(ctx, 'robot:thought');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_robot_thought',
+        data: { robotId: 'rover-02', text: 'Enemy spotted' }
+    });
+    assertDefined(_bridge['robot:thought'], 'amy_robot_thought emits robot:thought');
+})();
+
+// ============================================================
+// amy_ prefix: detection
+// ============================================================
+
+console.log('\n--- amy_detection prefix variant ---');
+
+(function testAmyDetectionPrefix() {
+    const ctx = createFreshContext();
+    listenEvent(ctx, 'detection');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_detection',
+        data: { camera_id: 'cam-01', class: 'person', confidence: 0.95 }
+    });
+    assertDefined(_bridge['detection'], 'amy_detection emits detection');
+})();
+
+// ============================================================
+// amy_ prefix: upgrade_applied
+// ============================================================
+
+console.log('\n--- amy_upgrade_applied prefix variant ---');
+
+(function testAmyUpgradeAppliedPrefix() {
+    const ctx = createFreshContext();
+    // Pre-create a unit so the upgrade handler can find it
+    vm.runInContext('TritiumStore.updateUnit("tank-01", { name: "Tank" })', ctx);
+    listenEvent(ctx, 'upgrade:applied');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_upgrade_applied',
+        data: { unit_id: 'tank-01', upgrade_id: 'armor_plating' }
+    });
+    assertDefined(_bridge['upgrade:applied'], 'amy_upgrade_applied emits upgrade:applied');
+    const unit = vm.runInContext('TritiumStore.units.get("tank-01")', ctx);
+    assert(unit.upgrades && unit.upgrades.includes('armor_plating'), 'amy_upgrade_applied adds to unit.upgrades');
+})();
+
+// ============================================================
+// amy_ prefix: ability_activated / ability_expired
+// ============================================================
+
+console.log('\n--- amy_ability_activated / amy_ability_expired prefix variants ---');
+
+(function testAmyAbilityActivatedPrefix() {
+    const ctx = createFreshContext();
+    vm.runInContext('TritiumStore.updateUnit("rover-01", { name: "Rover" })', ctx);
+    listenEvent(ctx, 'ability:activated');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_ability_activated',
+        data: { unit_id: 'rover-01', ability_id: 'speed_boost', duration: 10 }
+    });
+    assertDefined(_bridge['ability:activated'], 'amy_ability_activated emits ability:activated');
+    const unit = vm.runInContext('TritiumStore.units.get("rover-01")', ctx);
+    assert(unit.activeAbilities && unit.activeAbilities.length === 1, 'amy_ability_activated adds to activeAbilities');
+})();
+
+(function testAmyAbilityExpiredPrefix() {
+    const ctx = createFreshContext();
+    vm.runInContext('TritiumStore.updateUnit("rover-01", { name: "Rover", activeAbilities: [{ ability_id: "speed_boost", remaining: 0 }] })', ctx);
+    listenEvent(ctx, 'ability:expired');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_ability_expired',
+        data: { unit_id: 'rover-01', ability_id: 'speed_boost' }
+    });
+    assertDefined(_bridge['ability:expired'], 'amy_ability_expired emits ability:expired');
+    const unit = vm.runInContext('TritiumStore.units.get("rover-01")', ctx);
+    assertEqual(unit.activeAbilities.length, 0, 'amy_ability_expired removes from activeAbilities');
+})();
+
+// ============================================================
+// Game reset should clear store units
+// ============================================================
+
+console.log('\n--- game reset clears store units ---');
+
+(function testGameResetClearsStoreUnits() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Populate some units in the store
+    vm.runInContext('TritiumStore.updateUnit("t1", { name: "Turret", alliance: "friendly", status: "active" })', ctx);
+    vm.runInContext('TritiumStore.updateUnit("h1", { name: "Hostile", alliance: "hostile", status: "active" })', ctx);
+    const before = vm.runInContext('TritiumStore.units.size', ctx);
+    assertEqual(before, 2, 'store has 2 units before reset');
+
+    // Send game_state_change to idle (game reset)
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'idle', wave: 0, total_waves: 10, score: 0 }
+    });
+
+    const after = vm.runInContext('TritiumStore.units.size', ctx);
+    assertEqual(after, 0, 'store units cleared on game reset to idle');
+})();
+
+(function testGameStateSetupDoesNotClearUnits() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Start in idle, populate a defender
+    vm.runInContext('TritiumStore.updateUnit("def1", { name: "Defender", alliance: "friendly", status: "active" })', ctx);
+
+    // Transition to setup (new game setup should NOT clear — defenders are being placed)
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'setup', wave: 0, total_waves: 10 }
+    });
+
+    const after = vm.runInContext('TritiumStore.units.size', ctx);
+    assertEqual(after, 1, 'store units preserved during setup');
+})();
+
+// Setup should still clear per-game overlays (hazards, intel, etc.)
+(function testGameStateSetupClearsOverlays() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Set some overlay state that should leak without cleanup
+    vm.runInContext('TritiumStore.set("game.hostileIntel", { plan: "attack" })', ctx);
+    vm.runInContext('TritiumStore.set("game.coverPoints", [{ x: 1, y: 2 }])', ctx);
+
+    // Transition to setup (game reset)
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'setup', wave: 0, total_waves: 10 }
+    });
+
+    const intel = vm.runInContext('TritiumStore.get("game.hostileIntel")', ctx);
+    assertEqual(intel, null, 'setup clears hostileIntel overlay');
+    const cover = vm.runInContext('JSON.stringify(TritiumStore.get("game.coverPoints"))', ctx);
+    assertEqual(cover, '[]', 'setup clears coverPoints overlay');
+})();
+
+// ============================================================
+// New event handlers: npc_alliance_change, weapon_jam, ammo
+// ============================================================
+
+(function testNpcAllianceChangeUpdatesStore() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Add a neutral person unit
+    vm.runInContext('TritiumStore.updateUnit("p1", { name: "Person", alliance: "neutral", status: "active" })', ctx);
+
+    // Simulate alliance change event
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_npc_alliance_change',
+        data: {
+            unit_id: 'p1',
+            old_alliance: 'neutral',
+            new_alliance: 'hostile',
+        }
+    });
+
+    const unit = vm.runInContext('TritiumStore.units.get("p1")', ctx);
+    assertEqual(unit.alliance, 'hostile', 'npc_alliance_change updates unit alliance in store');
+})();
+
+(function testWeaponJamUpdatesStore() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Add a turret
+    vm.runInContext('TritiumStore.updateUnit("t1", { name: "Turret", alliance: "friendly", status: "active" })', ctx);
+
+    // Simulate weapon jam event
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_weapon_jam',
+        data: {
+            unit_id: 't1',
+            jam_duration: 2.5,
+        }
+    });
+
+    const unit = vm.runInContext('TritiumStore.units.get("t1")', ctx);
+    assertEqual(unit.weaponJammed, true, 'weapon_jam sets weaponJammed on unit in store');
+})();
+
+(function testAmmoLowUpdatesStore() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Add a rover
+    vm.runInContext('TritiumStore.updateUnit("r1", { name: "Rover", alliance: "friendly", status: "active" })', ctx);
+
+    // Simulate ammo low event
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_ammo_low',
+        data: {
+            unit_id: 'r1',
+            ammo: 5,
+            max_ammo: 30,
+        }
+    });
+
+    const unit = vm.runInContext('TritiumStore.units.get("r1")', ctx);
+    assertEqual(unit.ammoLow, true, 'ammo_low sets ammoLow on unit in store');
+})();
+
+(function testAmmoDepletedUpdatesStore() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Add a turret
+    vm.runInContext('TritiumStore.updateUnit("t1", { name: "Turret", alliance: "friendly", status: "active" })', ctx);
+
+    // Simulate ammo depleted event
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_ammo_depleted',
+        data: {
+            unit_id: 't1',
+            weapon: 'turret_cannon',
+        }
+    });
+
+    const unit = vm.runInContext('TritiumStore.units.get("t1")', ctx);
+    assertEqual(unit.ammoDepleted, true, 'ammo_depleted sets ammoDepleted on unit in store');
+})();
+
+(function testTargetNeutralizedUpdatesStore() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Add a hostile
+    vm.runInContext('TritiumStore.updateUnit("h1", { name: "Hostile", alliance: "hostile", status: "active" })', ctx);
+
+    // Simulate target neutralized event
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_target_neutralized',
+        data: {
+            target_id: 'h1',
+            reason: 'stalled',
+        }
+    });
+
+    const unit = vm.runInContext('TritiumStore.units.get("h1")', ctx);
+    assertEqual(unit.status, 'neutralized', 'target_neutralized sets status to neutralized');
+})();
+
+// ============================================================
+// target_eliminated event handler (was game_elimination dead handler)
+// ============================================================
+
+// Test: target_eliminated triggers both game:elimination and combat:elimination
+(function testTargetEliminatedEmitsBothEvents() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    vm.runInContext(`
+        EventBus.on('game:elimination', function(data) {
+            globalThis._gameElim = data;
+        });
+        EventBus.on('combat:elimination', function(data) {
+            globalThis._combatElim = data;
+        });
+    `, ctx);
+
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'target_eliminated',
+        data: {
+            target_id: 'h1',
+            target_name: 'Hostile Alpha',
+            interceptor_id: 't1',
+            interceptor_name: 'Turret-01',
+            method: 'nerf_dart',
+        }
+    });
+
+    const gameData = vm.runInContext('globalThis._gameElim', ctx);
+    assertDefined(gameData, 'target_eliminated triggers game:elimination');
+    assertEqual(gameData.target_id, 'h1', 'target_eliminated game:elimination passes target_id');
+
+    const combatData = vm.runInContext('globalThis._combatElim', ctx);
+    assertDefined(combatData, 'target_eliminated triggers combat:elimination');
+    assertEqual(combatData.interceptor_name, 'Turret-01', 'target_eliminated combat:elimination passes interceptor_name');
+})();
+
+// Test: amy_target_eliminated also triggers both events
+(function testAmyTargetEliminatedEmitsBothEvents() {
+    const ctx = createFreshContext();
+    vm.runInContext('var _ws = new WebSocketManager(); _ws.connect();', ctx);
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    vm.runInContext(`
+        EventBus.on('game:elimination', function(data) {
+            globalThis._gameElim2 = data;
+        });
+        EventBus.on('combat:elimination', function(data) {
+            globalThis._combatElim2 = data;
+        });
+    `, ctx);
+
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_target_eliminated',
+        data: {
+            target_id: 'h2',
+            target_name: 'Hostile Bravo',
+            interceptor_id: 'd1',
+            interceptor_name: 'Drone-01',
+            method: 'turret_cannon',
+        }
+    });
+
+    const gameData = vm.runInContext('globalThis._gameElim2', ctx);
+    assertDefined(gameData, 'amy_target_eliminated triggers game:elimination');
+    assertEqual(gameData.target_id, 'h2', 'amy_target_eliminated game:elimination passes target_id');
+
+    const combatData = vm.runInContext('globalThis._combatElim2', ctx);
+    assertDefined(combatData, 'amy_target_eliminated triggers combat:elimination');
+})();
+
+// ============================================================
+// NPC thought triggers store notification
+// ============================================================
+
+console.log('\n--- NPC thought triggers store notification ---');
+
+(function testNpcThoughtCallsScheduleNotify() {
+    // The amy_npc_thought handler should call _scheduleNotify('units')
+    // so the detail panel updates when thought text changes
+    const code = require('fs').readFileSync(
+        require('path').join(__dirname, '..', '..', 'frontend', 'js', 'command', 'websocket.js'), 'utf8'
+    );
+    // Find the amy_npc_thought case and verify _scheduleNotify is called
+    const thoughtIdx = code.indexOf("case 'amy_npc_thought':");
+    const clearIdx = code.indexOf("case 'amy_npc_thought_clear':");
+    assert(thoughtIdx !== -1, 'websocket.js has amy_npc_thought handler');
+    assert(clearIdx !== -1, 'websocket.js has amy_npc_thought_clear handler');
+
+    const thoughtBlock = code.substring(thoughtIdx, clearIdx);
+    assert(thoughtBlock.includes("_scheduleNotify('units')"),
+        'amy_npc_thought handler calls _scheduleNotify("units") to trigger store update');
+})();
+
+(function testNpcThoughtClearCallsScheduleNotify() {
+    const code = require('fs').readFileSync(
+        require('path').join(__dirname, '..', '..', 'frontend', 'js', 'command', 'websocket.js'), 'utf8'
+    );
+    const clearIdx = code.indexOf("case 'amy_npc_thought_clear':");
+    const nextCase = code.indexOf('case ', clearIdx + 30);
+    const clearBlock = code.substring(clearIdx, nextCase !== -1 ? nextCase : clearIdx + 500);
+    assert(clearBlock.includes("_scheduleNotify('units')"),
+        'amy_npc_thought_clear handler calls _scheduleNotify("units") to trigger store update');
+})();
+
+// ============================================================
+// Radio detection fields in sim_telemetry
+// ============================================================
+
+console.log('\n--- Radio Detection Fields in Telemetry ---');
+
+(function testRadioDetectedFieldParsed() {
+    const rCtx = createFreshContext();
+    const mgr = vm.runInContext('new WebSocketManager()', rCtx);
+    mgr.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+    const ws = createdSockets[createdSockets.length - 1];
+
+    ws._simulateMessage({
+        type: 'sim_telemetry',
+        data: {
+            target_id: 'hostile-radio-1',
+            name: 'Scout Alpha',
+            alliance: 'hostile',
+            position: { x: 50, y: 100 },
+            heading: 90,
+            health: 80,
+            max_health: 100,
+            status: 'active',
+            visible: false,
+            radio_detected: true,
+            radio_signal_strength: 0.72,
+            identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF', wifi_mac: '11:22:33:44:55:66' },
+        },
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("hostile-radio-1")', rCtx);
+    assertDefined(unit, 'radio telemetry: unit created in store');
+    assertEqual(unit.radio_detected, true, 'radio telemetry: radio_detected parsed as true');
+    assertClose(unit.radio_signal_strength, 0.72, 0.01, 'radio telemetry: radio_signal_strength parsed');
+    assertEqual(unit.visible, false, 'radio telemetry: visible is false (not visually seen)');
+    assertDefined(unit.identity, 'radio telemetry: identity object present');
+    assertEqual(unit.identity.bluetooth_mac, 'AA:BB:CC:DD:EE:FF', 'radio telemetry: bluetooth_mac preserved');
+})();
+
+(function testRadioDetectedFalseNotSet() {
+    const rCtx = createFreshContext();
+    const mgr = vm.runInContext('new WebSocketManager()', rCtx);
+    mgr.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+    const ws = createdSockets[createdSockets.length - 1];
+
+    ws._simulateMessage({
+        type: 'sim_telemetry',
+        data: {
+            target_id: 'hostile-no-radio',
+            name: 'Foot Soldier',
+            alliance: 'hostile',
+            position: { x: 10, y: 20 },
+            heading: 0,
+            health: 100,
+            max_health: 100,
+            status: 'active',
+            visible: false,
+            radio_detected: false,
+            radio_signal_strength: 0.0,
+        },
+    });
+    const unit = vm.runInContext('TritiumStore.units.get("hostile-no-radio")', rCtx);
+    assertDefined(unit, 'no-radio: unit created in store');
+    assertEqual(unit.radio_detected, false, 'no-radio: radio_detected is false');
+    assertClose(unit.radio_signal_strength, 0.0, 0.01, 'no-radio: radio_signal_strength is 0');
+})();
+
+(function testRadioFieldsInBatchTelemetry() {
+    const rCtx = createFreshContext();
+    const mgr = vm.runInContext('new WebSocketManager()', rCtx);
+    mgr.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+    const ws = createdSockets[createdSockets.length - 1];
+
+    ws._simulateMessage({
+        type: 'amy_sim_telemetry_batch',
+        data: [
+            {
+                target_id: 'batch-radio-1',
+                alliance: 'hostile',
+                position: { x: 100, y: 200 },
+                heading: 45,
+                health: 60,
+                max_health: 100,
+                status: 'active',
+                visible: false,
+                radio_detected: true,
+                radio_signal_strength: 0.55,
+            },
+            {
+                target_id: 'batch-radio-2',
+                alliance: 'hostile',
+                position: { x: 150, y: 250 },
+                heading: 180,
+                health: 90,
+                max_health: 100,
+                status: 'active',
+                visible: true,
+                radio_detected: false,
+                radio_signal_strength: 0.0,
+            },
+        ],
+    });
+    const u1 = vm.runInContext('TritiumStore.units.get("batch-radio-1")', rCtx);
+    const u2 = vm.runInContext('TritiumStore.units.get("batch-radio-2")', rCtx);
+    assertDefined(u1, 'batch-radio: first unit created');
+    assertEqual(u1.radio_detected, true, 'batch-radio: first unit radio_detected');
+    assertClose(u1.radio_signal_strength, 0.55, 0.01, 'batch-radio: first unit signal strength');
+    assertDefined(u2, 'batch-radio: second unit created');
+    assertEqual(u2.radio_detected, false, 'batch-radio: second unit not radio detected');
+    assertEqual(u2.visible, true, 'batch-radio: second unit visually visible');
+})();
+
+// ============================================================
+// Game reset clears mission-mode-specific state
+// ============================================================
+
+console.log('\n--- game reset clears mission-mode state ---');
+
+(function testGameResetClearsMissionState() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[createdSockets.length - 1]._simulateOpen();
+
+    // Set mission-mode-specific state
+    vm.runInContext("TritiumStore.set('game.modeType', 'civil_unrest')", ctx);
+    vm.runInContext("TritiumStore.set('game.infrastructureHealth', 80)", ctx);
+    vm.runInContext("TritiumStore.set('game.infrastructureMax', 100)", ctx);
+    vm.runInContext("TritiumStore.set('game.deEscalationScore', 42)", ctx);
+    vm.runInContext("TritiumStore.set('game.civilianHarmCount', 3)", ctx);
+    vm.runInContext("TritiumStore.set('game.civilianHarmLimit', 10)", ctx);
+    vm.runInContext("TritiumStore.set('game.weightedTotalScore', 500)", ctx);
+    vm.runInContext("TritiumStore.set('game.signals', [{signal_type:'distress'}])", ctx);
+
+    // Verify pre-reset state
+    const preMode = vm.runInContext("TritiumStore.get('game.modeType')", ctx);
+    assertEqual(preMode, 'civil_unrest', 'mission modeType set before reset');
+
+    // Reset game to idle
+    createdSockets[createdSockets.length - 1]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'idle', wave: 0, total_waves: 10, score: 0 }
+    });
+
+    // Verify all mission state cleared
+    const postMode = vm.runInContext("TritiumStore.get('game.modeType')", ctx);
+    assertEqual(postMode, null, 'game.modeType cleared on reset');
+
+    const postInfra = vm.runInContext("TritiumStore.get('game.infrastructureHealth')", ctx);
+    assertEqual(postInfra, null, 'game.infrastructureHealth cleared on reset');
+
+    const postInfraMax = vm.runInContext("TritiumStore.get('game.infrastructureMax')", ctx);
+    assertEqual(postInfraMax, null, 'game.infrastructureMax cleared on reset');
+
+    const postDeEsc = vm.runInContext("TritiumStore.get('game.deEscalationScore')", ctx);
+    assertEqual(postDeEsc, null, 'game.deEscalationScore cleared on reset');
+
+    const postCivHarm = vm.runInContext("TritiumStore.get('game.civilianHarmCount')", ctx);
+    assertEqual(postCivHarm, null, 'game.civilianHarmCount cleared on reset');
+
+    const postCivLimit = vm.runInContext("TritiumStore.get('game.civilianHarmLimit')", ctx);
+    assertEqual(postCivLimit, null, 'game.civilianHarmLimit cleared on reset');
+
+    const postWeighted = vm.runInContext("TritiumStore.get('game.weightedTotalScore')", ctx);
+    assertEqual(postWeighted, null, 'game.weightedTotalScore cleared on reset');
+
+    const postSignals = vm.runInContext("TritiumStore.get('game.signals')", ctx);
+    assertEqual(Array.isArray(postSignals) ? postSignals.length : -1, 0, 'game.signals cleared on reset');
+})();
+
+
+// ============================================================
+// Auto-dispatch speech event
+// ============================================================
+
+console.log('\n--- Auto-dispatch Speech Event ---');
+
+(function testAutoDispatchSpeechAddsAlert() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const alertsBefore = vm.runInContext("TritiumStore.alerts.length", ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'auto_dispatch_speech',
+        data: { text: 'Dispatching Rover Alpha to intercept hostile-01.' },
+    });
+    const alertsAfter = vm.runInContext("TritiumStore.alerts.length", ctx);
+    assert(alertsAfter > alertsBefore, 'auto_dispatch_speech adds alert to store');
+})();
+
+(function testAutoDispatchSpeechEmitsEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    vm.runInContext(`
+        EventBus.on('dispatch:speech', (d) => { _testAutoDispatchData = d; });
+    `, ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'auto_dispatch_speech',
+        data: { text: 'Dispatch test' },
+    });
+    const data = vm.runInContext("_testAutoDispatchData", ctx);
+    assertEqual(data.text, 'Dispatch test', 'auto_dispatch_speech emits dispatch:speech event');
+})();
+
+// ============================================================
+// Zone violation event
+// ============================================================
+
+console.log('\n--- Zone Violation Event ---');
+
+(function testZoneViolationAddsAlert() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    const alertsBefore = vm.runInContext("TritiumStore.alerts.length", ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'zone_violation',
+        data: {
+            target_id: 'h-99',
+            zone_name: 'Property Restricted',
+            zone_type: 'restricted_area',
+            position: { x: 5, y: 5 },
+        },
+    });
+    const alertsAfter = vm.runInContext("TritiumStore.alerts.length", ctx);
+    assert(alertsAfter > alertsBefore, 'zone_violation adds alert to store');
+})();
+
+(function testZoneViolationEmitsEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    vm.runInContext(`
+        EventBus.on('zone:violation', (d) => { _testZoneData = d; });
+    `, ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'zone_violation',
+        data: {
+            target_id: 'h-99',
+            zone_name: 'No-Go',
+            zone_type: 'restricted_area',
+        },
+    });
+    const zoneData = vm.runInContext("_testZoneData", ctx);
+    assertEqual(zoneData.zone_name, 'No-Go', 'zone_violation emits zone:violation with zone_name');
+})();
+
+// ============================================================
+// Formation created event
+// ============================================================
+
+console.log('\n--- Formation & Mode Change Events ---');
+
+(function testFormationCreatedEmitsEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    vm.runInContext(`
+        EventBus.on('formation:created', (d) => { _testFormData = d; });
+    `, ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'formation_created',
+        data: { formation_type: 'wedge', unit_count: 4 },
+    });
+    const formData = vm.runInContext("_testFormData", ctx);
+    assertEqual(formData.formation_type, 'wedge', 'formation_created emits formation:created');
+})();
+
+(function testModeChangeEmitsEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    vm.runInContext(`
+        EventBus.on('amy:mode_change', (d) => { _testModeData = d; });
+    `, ctx);
+    createdSockets[0]._simulateMessage({
+        type: 'mode_change',
+        data: { mode: 'battle', previous: 'patrol' },
+    });
+    const modeData = vm.runInContext("_testModeData", ctx);
+    assertEqual(modeData.mode, 'battle', 'mode_change emits amy:mode_change');
+})();
+
+// ============================================================
+// Identified field in telemetry
+// ============================================================
+
+console.log('\n--- Identified Field ---');
+
+(function testIdentifiedFieldParsed() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_sim_telemetry_batch',
+        data: [{
+            target_id: 'instigator-01',
+            name: 'Instigator',
+            asset_type: 'person_hostile',
+            alliance: 'hostile',
+            position: { x: 100, y: 50 },
+            identified: true,
+            instigator_state: 'detected',
+        }],
+    });
+    const unit = vm.runInContext("TritiumStore.units.get('instigator-01')", ctx);
+    assertEqual(unit?.identified, true, 'identified field parsed from telemetry');
+    assertEqual(unit?.instigatorState, 'detected', 'instigator_state parsed from telemetry');
+})();
+
+// ============================================================
+// State Refresh on Connect
+// ============================================================
+
+console.log('\n--- State Refresh on Connect ---');
+
+(function testRefreshStateMethodExists() {
+    const ctx = createFreshContext();
+    const wsCode2 = fs.readFileSync(
+        __dirname + '/../../frontend/js/command/websocket.js', 'utf8'
+    );
+    assert(
+        wsCode2.includes('_refreshState()'),
+        '_refreshState method exists in websocket.js'
+    );
+    assert(
+        wsCode2.includes("fetch('/api/game/state')"),
+        '_refreshState fetches /api/game/state'
+    );
+    assert(
+        wsCode2.includes("fetch('/api/targets')"),
+        '_refreshState fetches /api/targets'
+    );
+})();
+
+(function testOnOpenCallsRefreshState() {
+    const wsCode2 = fs.readFileSync(
+        __dirname + '/../../frontend/js/command/websocket.js', 'utf8'
+    );
+    // onopen handler must call _refreshState
+    assert(
+        wsCode2.includes('this._refreshState()'),
+        'onopen handler calls this._refreshState()'
+    );
+    // Verify it's in the onopen block (after 'ws:connected' emit)
+    const lines = wsCode2.split('\n');
+    let inOnOpen = false;
+    let foundRefresh = false;
+    for (const line of lines) {
+        if (line.includes('this._ws.onopen')) inOnOpen = true;
+        if (inOnOpen && line.includes('this._refreshState()')) {
+            foundRefresh = true;
+            break;
+        }
+        if (inOnOpen && line.includes('this._ws.onclose')) break;
+    }
+    assert(foundRefresh, '_refreshState() is called inside onopen handler');
+})();
+
+(function testRefreshStateSetsGamePhase() {
+    const wsCode2 = fs.readFileSync(
+        __dirname + '/../../frontend/js/command/websocket.js', 'utf8'
+    );
+    assert(
+        wsCode2.includes("game.state") && wsCode2.includes("game.phase"),
+        '_refreshState sets game.phase from response'
+    );
+    assert(
+        wsCode2.includes("game.wave"),
+        '_refreshState sets game.wave from response'
+    );
+})();
+
+(function testRefreshStateUpdatesUnits() {
+    const wsCode2 = fs.readFileSync(
+        __dirname + '/../../frontend/js/command/websocket.js', 'utf8'
+    );
+    // Must call _updateUnit for each target in the response
+    assert(
+        wsCode2.includes('this._updateUnit(t)'),
+        '_refreshState calls _updateUnit for each target'
+    );
+})();
+
+(function testRefreshStateCatchesErrors() {
+    const wsCode2 = fs.readFileSync(
+        __dirname + '/../../frontend/js/command/websocket.js', 'utf8'
+    );
+    // Must have try/catch for network failures
+    assert(
+        wsCode2.includes("'[WS] State refresh failed:'"),
+        '_refreshState has error handling for fetch failures'
+    );
+})();
+
+// ============================================================
+// Game state: difficulty_multiplier + wave_name + countdown wiring
+// ============================================================
+
+(function testGameStateWiresDifficultyMultiplier() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/websocket.js', 'utf8');
+    assert(
+        src.includes("game.difficultyMultiplier") && src.includes("d.difficulty_multiplier"),
+        'game_state_change handler wires difficulty_multiplier to store'
+    );
+})();
+
+(function testGameStateWiresWaveName() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/websocket.js', 'utf8');
+    assert(
+        src.includes("game.waveName") && src.includes("d.wave_name"),
+        'game_state_change handler wires wave_name to store'
+    );
+})();
+
+(function testGameStateWiresCountdown() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/websocket.js', 'utf8');
+    assert(
+        src.includes("game.countdown") && src.includes("d.countdown"),
+        'game_state_change handler wires countdown to store'
+    );
+})();
+
+(function testGameStateWiresWaveHostilesRemaining() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/websocket.js', 'utf8');
+    assert(
+        src.includes("game.waveHostilesRemaining") && src.includes("d.wave_hostiles_remaining"),
+        'game_state_change handler wires wave_hostiles_remaining to store'
+    );
+})();
+
+(function testRefreshStateWiresDifficultyMultiplier() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/websocket.js', 'utf8');
+    // refreshState should also set difficulty_multiplier
+    const refreshIdx = src.indexOf('async _refreshState');
+    assert(refreshIdx >= 0, 'async _refreshState method exists');
+    const refreshBlock = src.slice(refreshIdx, refreshIdx + 1500);
+    assert(
+        refreshBlock.includes("game.difficultyMultiplier"),
+        '_refreshState also wires difficulty_multiplier from REST response'
+    );
+})();
+
+// ============================================================
+// Store: default game state fields
+// ============================================================
+
+(function testStoreHasDifficultyMultiplierDefault() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/store.js', 'utf8');
+    assert(
+        src.includes('difficultyMultiplier: 1.0'),
+        'Store game state has difficultyMultiplier default of 1.0'
+    );
+})();
+
+(function testStoreHasWaveNameDefault() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/store.js', 'utf8');
+    assert(
+        src.includes("waveName: ''"),
+        "Store game state has waveName default of empty string"
+    );
+})();
+
+// ============================================================
+// amy_transcript handler
+// ============================================================
+
+console.log('\n--- amy_transcript handler ---');
+
+(function testAmyTranscriptRoutesChatResponse() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    listenEvent(ctx, 'chat:amy_response');
+    createdSockets[0]._simulateMessage({
+        type: 'amy_transcript',
+        data: { speaker: 'amy', text: 'Moving turret to sector 4.' },
+    });
+    const d = _bridge['chat:amy_response'];
+    assertDefined(d, 'amy_transcript with speaker=amy emits chat:amy_response');
+    assertEqual(d.text, 'Moving turret to sector 4.', 'chat:amy_response text matches');
+})();
+
+(function testAmyTranscriptIgnoresOperator() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    listenEvent(ctx, 'chat:amy_response');
+    createdSockets[0]._simulateMessage({
+        type: 'amy_transcript',
+        data: { speaker: 'operator', text: 'Status report' },
+    });
+    const d = _bridge['chat:amy_response'];
+    assert(d === undefined, 'amy_transcript with speaker=operator does NOT emit chat:amy_response');
+})();
+
+(function testAmyTranscriptNoDataWrapper() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    listenEvent(ctx, 'chat:amy_response');
+    createdSockets[0]._simulateMessage({
+        type: 'amy_transcript',
+        speaker: 'amy',
+        text: 'All clear.',
+    });
+    const d = _bridge['chat:amy_response'];
+    assertDefined(d, 'amy_transcript without data wrapper still emits event');
+    assertEqual(d.text, 'All clear.', 'text from unwrapped message');
+})();
+
+// ============================================================
+// hostile_intel handler
+// ============================================================
+
+console.log('\n--- hostile_intel handler ---');
+
+(function testHostileIntelSetsStore() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'hostile_intel',
+        data: {
+            threat_level: 'high',
+            force_ratio: 0.8,
+            hostile_count: 6,
+            recommended_action: 'flank',
+        },
+    });
+    const intel = vm.runInContext('TritiumStore.get("game.hostileIntel")', ctx);
+    assertDefined(intel, 'hostile_intel sets game.hostileIntel in store');
+    assertEqual(intel.threat_level, 'high', 'threat_level stored correctly');
+    assertEqual(intel.recommended_action, 'flank', 'recommended_action stored correctly');
+})();
+
+(function testHostileIntelEmitsEvent() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    listenEvent(ctx, 'hostile:intel');
+    createdSockets[0]._simulateMessage({
+        type: 'hostile_intel',
+        data: { threat_level: 'moderate', hostile_count: 3 },
+    });
+    const d = _bridge['hostile:intel'];
+    assertDefined(d, 'hostile_intel emits hostile:intel event');
+    assertEqual(d.threat_level, 'moderate', 'hostile:intel event carries threat_level');
+})();
+
+(function testAmyHostileIntelAlias() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    listenEvent(ctx, 'hostile:intel');
+    createdSockets[0]._simulateMessage({
+        type: 'amy_hostile_intel',
+        data: { threat_level: 'low', hostile_count: 1 },
+    });
+    const d = _bridge['hostile:intel'];
+    assertDefined(d, 'amy_hostile_intel alias routes same as hostile_intel');
+    assertEqual(d.threat_level, 'low', 'aliased event carries correct data');
+})();
+
+(function testHostileIntelNoDataWrapper() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'hostile_intel',
+        threat_level: 'extreme',
+        hostile_count: 10,
+    });
+    const intel = vm.runInContext('TritiumStore.get("game.hostileIntel")', ctx);
+    assertDefined(intel, 'hostile_intel without data wrapper still sets store');
+    assertEqual(intel.threat_level, 'extreme', 'threat_level from unwrapped message');
+})();
+
+// ============================================================
 // Summary
 // ============================================================
 
