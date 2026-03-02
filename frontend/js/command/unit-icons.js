@@ -65,7 +65,7 @@ function getVisionRadius(type) {
  * @param {boolean} selected - draw pulsing selection ring
  * @param {number} health - 0.0 to 1.0 (0 = neutralized)
  */
-function drawUnit(ctx, type, alliance, heading, screenX, screenY, scale, selected, health) {
+function drawUnit(ctx, type, alliance, heading, screenX, screenY, scale, selected, health, hovered) {
     const color = ALLIANCE_COLORS[alliance] || ALLIANCE_COLORS.unknown;
     const rad = heading !== undefined && heading !== null
         ? (90 - heading) * Math.PI / 180
@@ -128,9 +128,11 @@ function drawUnit(ctx, type, alliance, heading, screenX, screenY, scale, selecte
 
     ctx.globalAlpha = 1.0;
 
-    // Selection ring (drawn outside rotation, in screen space)
+    // Selection ring or hover ring (drawn outside rotation, in screen space)
     if (selected) {
         _drawSelectionRing(ctx, scale);
+    } else if (hovered) {
+        _drawHoverRing(ctx, scale);
     }
 
     // Health bar (only if damaged, not neutralized)
@@ -437,6 +439,18 @@ function _drawSelectionRing(ctx, scale) {
     ctx.stroke();
 }
 
+/** Dashed white hover ring (dimmer than selection) */
+function _drawHoverRing(ctx, scale) {
+    const r = 16 * scale;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+}
+
 /** Health bar below unit (green -> yellow -> red gradient) */
 function _drawHealthBar(ctx, scale, health) {
     const barW = 24 * scale;
@@ -505,7 +519,111 @@ function _drawNeutralizedX(ctx, scale) {
 }
 
 // ============================================================
+// Crowd Role Visual Indicators
+// ============================================================
+
+const CROWD_ROLE_COLORS = {
+    instigator: '#ff2a6d',  // magenta — primary target
+    rioter:     '#ff8800',  // orange/amber — agitated
+    civilian:   '#00a0ff',  // blue — default neutral
+};
+
+/**
+ * Draw a crowd role indicator overlay around a unit.
+ * Called AFTER drawUnit() at the same screen position.
+ *
+ * - instigator: pulsing magenta diamond outline
+ * - rioter: orange triangle warning pips
+ * - civilian: no extra indicator (default appearance)
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} screenX
+ * @param {number} screenY
+ * @param {number} scale - zoom-derived scale
+ * @param {string} crowdRole - 'instigator', 'rioter', 'civilian', or undefined
+ * @param {string} instigatorState - 'hidden', 'active', 'activating', 'identified', or undefined
+ */
+function drawCrowdRoleIndicator(ctx, screenX, screenY, scale, crowdRole, instigatorState) {
+    if (!crowdRole || crowdRole === 'civilian') return;
+
+    ctx.save();
+    ctx.translate(screenX, screenY);
+
+    if (crowdRole === 'instigator') {
+        _drawInstigatorIndicator(ctx, scale, instigatorState);
+    } else if (crowdRole === 'rioter') {
+        _drawRioterIndicator(ctx, scale);
+    }
+
+    ctx.restore();
+}
+
+/** Instigator: pulsing magenta diamond outline with state-based styling */
+function _drawInstigatorIndicator(ctx, scale, instigatorState) {
+    const s = 14 * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const pulse = 0.5 + 0.5 * Math.sin(now * 0.004);
+
+    // Outer diamond outline
+    ctx.strokeStyle = CROWD_ROLE_COLORS.instigator;
+    ctx.lineWidth = (instigatorState === 'identified') ? 2.5 * scale : 1.5 * scale;
+    ctx.globalAlpha = (instigatorState === 'identified') ? 0.9 : (0.4 + 0.4 * pulse);
+
+    // Identified instigators get solid line, hidden/active get dashed
+    if (instigatorState !== 'identified') {
+        ctx.setLineDash([3 * scale, 3 * scale]);
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(0, -s);
+    ctx.lineTo(s, 0);
+    ctx.lineTo(0, s);
+    ctx.lineTo(-s, 0);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Identified: solid inner glow
+    if (instigatorState === 'identified') {
+        ctx.fillStyle = `rgba(255, 42, 109, ${0.15 + 0.1 * pulse})`;
+        ctx.beginPath();
+        ctx.moveTo(0, -s);
+        ctx.lineTo(s, 0);
+        ctx.lineTo(0, s);
+        ctx.lineTo(-s, 0);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    ctx.globalAlpha = 1.0;
+}
+
+/** Rioter: orange agitation lines radiating outward */
+function _drawRioterIndicator(ctx, scale) {
+    const r = 12 * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const jitter = Math.sin(now * 0.008) * 2 * scale;
+
+    ctx.strokeStyle = CROWD_ROLE_COLORS.rioter;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.globalAlpha = 0.6;
+
+    // Three agitation pips (short lines radiating outward)
+    for (let i = 0; i < 3; i++) {
+        const angle = (i * 120 + 30) * Math.PI / 180;
+        const innerR = r + jitter;
+        const outerR = innerR + 4 * scale;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angle) * innerR, Math.sin(angle) * innerR);
+        ctx.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+        ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1.0;
+}
+
+// ============================================================
 // Exports
 // ============================================================
 
-export { drawUnit, UNIT_TYPES, ALLIANCE_COLORS, getVisionRadius };
+export { drawUnit, drawCrowdRoleIndicator, UNIT_TYPES, ALLIANCE_COLORS, CROWD_ROLE_COLORS, getVisionRadius };

@@ -24,6 +24,7 @@ import { EventBus } from './events.js';
 import { drawMinimapContent } from './panels/minimap.js';
 import { DeviceModalManager } from './device-modal.js';
 import { FrontendVisionSystem } from './vision-system.js';
+import { ContextMenu } from './context-menu.js';
 
 // ============================================================
 // Constants
@@ -112,6 +113,7 @@ const _state = {
     showModels3d: true,        // Three.js 3D unit models
     showFog: false,            // fog of war
     showMesh: true,            // mesh radio overlay
+    showPatrolRoutes: true,    // patrol route lines for friendly units
 
     // Layer visibility — combat FX (debug toggles)
     showTracers: true,         // Three.js projectile flight
@@ -130,6 +132,23 @@ const _state = {
     showBanners: true,         // wave/game state announcements
     showLayerHud: true,        // top-center status bar
     showThoughts: true,        // NPC thought bubbles above markers
+    showWeaponRange: true,     // weapon range circle on selected unit
+    showHeatmap: false,        // combat zone heatmap (off by default)
+    showSwarmHull: true,       // drone swarm convex hull polygon
+    showSquadHulls: true,      // squad formation convex hulls
+    showHazardZones: true,     // environmental hazard zones (fire/flood/roadblock)
+    showHostileObjectives: true, // hostile objective lines (dashed lines to targets)
+    showCrowdDensity: true,    // crowd density heatmap (civil_unrest mode only)
+    showCoverPoints: true,     // tactical cover positions
+    showUnitSignals: true,     // unit communication signals (distress/contact/etc)
+    showHostileIntel: true,    // hostile commander intel HUD
+
+    // Cinematic auto-follow camera
+    autoFollow: false,         // auto-follow camera mode
+    autoFollowTimer: null,     // setInterval handle for periodic flyTo
+    autoFollowFlyingNow: false,// true while an auto-triggered flyTo is in progress
+    combatEventRing: [],       // last 20 combat event positions { lng, lat, time }
+    streakHolder: null,        // { unitId, lng, lat, time } current streak holder
 
     tiltMode: 'tilted',        // 'tilted' or 'top-down'
     currentMode: 'observe',    // 'observe', 'tactical', or 'setup'
@@ -144,8 +163,22 @@ const _state = {
     // Selection
     selectedUnitId: null,
 
+    // Thought bubble management — cap visible non-critical bubbles
+    _visibleThoughtIds: new Set(),  // unit IDs with visible thought bubbles
+    _maxThoughtBubbles: 5,          // max non-critical visible at once
+
     // Dispatch
     dispatchArrows: [],
+    dispatchMode: false,    // true when waiting for map click to set destination
+    dispatchUnitId: null,   // unit ID to dispatch on next click
+    patrolMode: false,      // true when placing patrol waypoints
+    patrolUnitId: null,     // unit ID for patrol mode
+    patrolWaypoints: [],    // accumulated patrol waypoints
+    aimMode: false,         // true when setting aim direction
+    aimUnitId: null,        // unit ID for aim mode
+
+    // Unit update loop (adaptive interval)
+    _unitUpdateTimer: null, // setInterval handle for _scheduleUnitUpdate()
 
     // Combat effects (Three.js)
     effects: [],            // active effect objects
@@ -154,7 +187,36 @@ const _state = {
 
     // Vision system (fog of war + cones)
     visionSystem: null,
+
+    // FPS tracking
+    _frameTimes: [],
+    _lastFpsUpdate: 0,
+    _currentFps: 0,
+    _fpsLoopRunning: false,
+
+    // --- Performance: GeoJSON change-detection caches ---
+    _lastPatrolHash: null,
+    _lastDispatchHash: null,
+    _lastWeaponRangeHash: null,
+    _lastSwarmHullHash: null,
+    _lastSquadHullHash: null,
+    _lastHazardHash: null,
+    _lastHostileObjHash: null,
+    _lastCrowdDensityHash: null,
+    _lastCoverPointsHash: null,
+    _lastSignalsHash: null,
+    // Hostile objective polling (5s interval during active game)
+    _hostileObjPollTimer: null,
+    // Hostile intel DOM element (bottom-left HUD)
+    _hostileIntelEl: null,
+    // Throttle counters for overlays that rarely change (updated at 1Hz)
+    _overlayTickCounter: 0,
 };
+
+// Pre-allocated Matrix4 reused every frame to avoid GC pressure.
+// The render() callback runs at 60Hz — allocating a new Matrix4 each
+// frame generates ~60 short-lived objects/sec that the GC must collect.
+const _tempMatrix = new THREE.Matrix4();
 
 // Expose for automated testing (layer isolation, coordinate checks)
 window._mapState = _state;
@@ -244,6 +306,10 @@ function _createMap(mapDiv) {
         'top-right'
     );
 
+    // Start standalone FPS loop — uses rAF so it runs every browser frame
+    // regardless of MapLibre repaint state (idle map = no 'render' events).
+    _startFpsLoop();
+
     _state.map.on('load', () => {
         console.log('[MAP-ML] Map loaded');
         _state.initialized = true;
@@ -267,7 +333,20 @@ function _createMap(mapDiv) {
         TritiumStore.on('map.selectedUnitId', _onSelectionChanged);
         EventBus.on('units:updated', _onUnitsUpdated);
         EventBus.on('unit:dispatched', _onDispatched);
+        EventBus.on('unit:dispatch', _onUnitDispatch);
+        EventBus.on('unit:dispatch-mode', _onDispatchModeEnter);
         EventBus.on('minimap:pan', _onMinimapPan);
+        EventBus.on('map:flyToMission', _onPanToMission);
+        EventBus.on('map:centerOnUnit', _onCenterOnUnit);
+        EventBus.on('map:marker', _onDropMarker);
+        EventBus.on('map:waypoint', _onDropWaypoint);
+        EventBus.on('unit:patrol-mode', _onPatrolModeEnter);
+        EventBus.on('unit:aim-mode', _onAimModeEnter);
+        EventBus.on('tak:center-on-client', (data) => {
+            if (data && (data.lat !== undefined || data.x !== undefined)) {
+                _onCenterOnUnit(data);
+            }
+        });
         EventBus.on('device:open-modal', (data) => {
             if (!data || !data.id) return;
             const u = TritiumStore.units.get(data.id);
@@ -290,8 +369,11 @@ function _createMap(mapDiv) {
 
     _state.map.on('click', _onMapClick);
     _state.map.on('contextmenu', _onMapRightClick);
+    _state.map.on('mousemove', _onMapMouseMove);
     _state.map.on('moveend', _updateLayerHud);
+    _state.map.on('moveend', _reportViewport);
     _state.map.on('zoomend', _updateLayerHud);
+    _state.map.on('zoomend', _reportViewport);
     _state.map.on('pitchend', _updateLayerHud);
 }
 
@@ -588,10 +670,10 @@ function _addThreeJsLayer() {
             // bare MapLibre matrix while objects reported meter-space
             // bounding volumes — at pitch=0 (top-down) the near/far planes
             // were so tight that every object was culled as out-of-frustum.
-            const m = new THREE.Matrix4().fromArray(matrixData);
-            m.multiply(_state._refMatrix);
-            _state.threeCamera.projectionMatrix.copy(m);
-            _state.threeCamera.projectionMatrixInverse.copy(m).invert();
+            _tempMatrix.fromArray(matrixData);
+            _tempMatrix.multiply(_state._refMatrix);
+            _state.threeCamera.projectionMatrix.copy(_tempMatrix);
+            _state.threeCamera.projectionMatrixInverse.copy(_tempMatrix).invert();
 
             _state.threeRenderer.resetState();
             // Clear depth buffer so tactical objects render above map tiles.
@@ -601,7 +683,11 @@ function _addThreeJsLayer() {
             gl.depthMask(true);
             gl.clear(gl.DEPTH_BUFFER_BIT);
             _state.threeRenderer.render(_state.threeScene, _state.threeCamera);
-            _state.map.triggerRepaint();
+            // NOTE: Do NOT call triggerRepaint() here unconditionally.
+            // _repaintLoop() already manages triggerRepaint() via rAF when
+            // there are active effects or 3D units.  An unconditional call
+            // here creates an infinite repaint loop (~60 FPS GPU burn even
+            // when nothing animates).
         },
     };
 
@@ -668,19 +754,2036 @@ function _onMinimapPan(data) {
     _state.map.panTo(lngLat, { duration: 300 });
 }
 
+/**
+ * Convert mission radius (meters) to MapLibre zoom level.
+ * Formula: at zoom 16, ~920m fits the viewport width.
+ * Doubling zoom halves the visible area, so log2(920/radius) adjusts.
+ */
+function _radiusToZoom(radiusM) {
+    const z = 16 + Math.log2(920 / Math.max(radiusM, 50));
+    return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+}
+
+/**
+ * Handle map:flyToMission event — fly camera to mission area.
+ * Accepts { center: {x, y}, radius, name } from mission-modal.js.
+ * Also supports direct lat/lng for flexibility.
+ */
+function _onPanToMission(data) {
+    if (!_state.map || !data) return;
+
+    let lngLat;
+    if (data.center && data.center.x !== undefined && data.center.y !== undefined) {
+        lngLat = _gameToLngLat(data.center.x, data.center.y);
+    } else if (data.lat !== undefined && data.lng !== undefined) {
+        lngLat = [data.lng, data.lat];
+    } else if (data.x !== undefined && data.y !== undefined) {
+        lngLat = _gameToLngLat(data.x, data.y);
+    } else {
+        return;
+    }
+
+    const radius = data.radius || data.radius_m || 200;
+    const zoom = _radiusToZoom(radius);
+    const clampedZoom = Math.max(ZOOM_MIN, Math.min(19, zoom));
+
+    _state.map.flyTo({
+        center: lngLat,
+        zoom: clampedZoom,
+        pitch: PITCH_DEFAULT,
+        bearing: 0,
+        duration: 1500,
+        essential: true,
+    });
+
+    // Draw combat radius circle overlay
+    _drawCombatRadius(lngLat, radius);
+
+    if (data.name) {
+        console.log(`[MAP-ML] Flying to mission: ${data.name} radius=${radius}m zoom=${clampedZoom.toFixed(1)}`);
+    }
+}
+
+/**
+ * Handle map:centerOnUnit event — fly camera to a unit or coordinate.
+ * Accepts { id } (unit ID lookup) or { x, y } (game coordinates).
+ * Emitted by patrol.js and zones.js panels.
+ */
+function _onCenterOnUnit(data) {
+    if (!_state.map || !data) return;
+
+    let gx, gy;
+    if (data.id) {
+        const u = TritiumStore.units.get(data.id);
+        if (!u || !u.position) return;
+        gx = u.position.x || 0;
+        gy = u.position.y || 0;
+    } else if (data.x !== undefined && data.y !== undefined) {
+        gx = data.x;
+        gy = data.y;
+    } else {
+        return;
+    }
+
+    const lngLat = _gameToLngLat(gx, gy);
+    _state.map.flyTo({
+        center: lngLat,
+        zoom: 17,
+        pitch: PITCH_DEFAULT,
+        bearing: 0,
+        duration: 1000,
+        essential: true,
+    });
+}
+
+/**
+ * Handle map:marker event — place a temporary marker on the map.
+ * Emitted from context-menu.js when operator selects "DROP MARKER".
+ * @param {Object} data - { x, y } game coordinates
+ */
+const _operatorMarkers = [];
+function _onDropMarker(data) {
+    if (!_state.map || !data || data.x === undefined || data.y === undefined) return;
+    const lngLat = _gameToLngLat(data.x, data.y);
+
+    const el = document.createElement('div');
+    el.className = 'operator-marker';
+    el.style.cssText = 'width:12px;height:12px;border:2px solid #fcee0a;border-radius:50%;background:rgba(252,238,10,0.3);pointer-events:none;';
+
+    const marker = new maplibregl.Marker({ element: el })
+        .setLngLat(lngLat)
+        .addTo(_state.map);
+    _operatorMarkers.push(marker);
+
+    // Auto-remove after 30 seconds
+    setTimeout(() => {
+        marker.remove();
+        const idx = _operatorMarkers.indexOf(marker);
+        if (idx >= 0) _operatorMarkers.splice(idx, 1);
+    }, 30000);
+}
+
+/**
+ * Handle map:waypoint event — show a transient waypoint indicator.
+ * Emitted from context-menu.js when operator selects "SET WAYPOINT".
+ * @param {Object} data - { x, y, unitId } game coordinates
+ */
+function _onDropWaypoint(data) {
+    if (!_state.map || !data || data.x === undefined || data.y === undefined) return;
+    const lngLat = _gameToLngLat(data.x, data.y);
+
+    const el = document.createElement('div');
+    el.className = 'operator-waypoint';
+    el.style.cssText = 'width:10px;height:10px;border:2px solid #05ffa1;background:rgba(5,255,161,0.3);transform:rotate(45deg);pointer-events:none;';
+
+    const marker = new maplibregl.Marker({ element: el })
+        .setLngLat(lngLat)
+        .addTo(_state.map);
+
+    // Auto-remove after 10 seconds (real waypoints come from telemetry)
+    setTimeout(() => { marker.remove(); }, 10000);
+}
+
+// ============================================================
+// Combat Radius Circle Overlay (GeoJSON)
+// ============================================================
+
+const COMBAT_RADIUS_SOURCE  = 'combat-radius-source';
+const COMBAT_RADIUS_FILL    = 'combat-radius-fill';
+const COMBAT_RADIUS_OUTLINE = 'combat-radius-outline';
+
+// Weapon range circle overlay
+const WEAPON_RANGE_SOURCE = 'weapon-range-source';
+const WEAPON_RANGE_FILL   = 'weapon-range-fill';
+const WEAPON_RANGE_STROKE = 'weapon-range-stroke';
+
+// Combat zone heatmap overlay
+const COMBAT_HEATMAP_SOURCE = 'combat-heatmap-source';
+const COMBAT_HEATMAP_LAYER  = 'combat-heatmap';
+
+// Drone swarm convex hull overlay
+const SWARM_HULL_SOURCE = 'swarm-hull-source';
+const SWARM_HULL_FILL   = 'swarm-hull-fill';
+const SWARM_HULL_STROKE = 'swarm-hull-stroke';
+
+// Squad formation convex hull overlay
+const SQUAD_HULL_SOURCE = 'squad-hulls-source';
+const SQUAD_HULL_FILL   = 'squad-hulls-fill';
+const SQUAD_HULL_STROKE = 'squad-hulls-stroke';
+
+// Squad tactical order colors
+const SQUAD_ORDER_COLORS = {
+    advance: '#ff2a6d',  // magenta
+    hold:    '#fcee0a',  // amber/yellow
+    flank:   '#00f0ff',  // cyan
+    retreat: '#a08820',  // dim yellow
+};
+const SQUAD_DEFAULT_COLOR = '#ff2a6d';  // magenta
+
+// Hazard zone overlay (environmental hazards: fire/flood/roadblock)
+const HAZARD_ZONES_SOURCE = 'hazard-zones-source';
+const HAZARD_ZONES_FILL   = 'hazard-zones-fill';
+const HAZARD_ZONES_STROKE = 'hazard-zones-stroke';
+
+// Hostile objective lines overlay
+const HOSTILE_OBJ_SOURCE = 'hostile-obj-source';
+const HOSTILE_OBJ_LINE   = 'hostile-obj-line';
+
+// Crowd density heatmap overlay (civil_unrest mode)
+const CROWD_DENSITY_SOURCE = 'crowd-density-source';
+const CROWD_DENSITY_FILL   = 'crowd-density-fill';
+
+// Cover points overlay
+const COVER_POINTS_SOURCE = 'cover-points-source';
+const COVER_POINTS_CIRCLE = 'cover-points-circle';
+const COVER_POINTS_ICON   = 'cover-points-icon';
+
+// Unit signals overlay (distress/contact/regroup/retreat)
+const UNIT_SIGNALS_SOURCE = 'unit-signals-source';
+const UNIT_SIGNALS_CIRCLE = 'unit-signals-circle';
+
+// Hazard type colors
+const HAZARD_COLORS = {
+    fire:      '#ff4400',
+    flood:     '#0088ff',
+    roadblock: '#ffcc00',
+};
+
+// Signal type colors
+const SIGNAL_COLORS = {
+    distress:          '#ff2a6d',
+    contact:           '#ff8800',
+    regroup:           '#00f0ff',
+    retreat:           '#888888',
+    instigator_marked: '#ff2a6d',
+    emp_jamming:       '#fcee0a',
+};
+
+// Auto-follow timing
+const AUTO_FOLLOW_INTERVAL = 7000;  // ms between evaluations (6-8s)
+const AUTO_FOLLOW_FLY_DURATION = 2000;  // ms flyTo animation
+const COMBAT_EVENT_RING_SIZE = 20;
+const COMBAT_EVENT_MAX_AGE = 10000;  // 10 seconds
+
+/**
+ * Draw a translucent circle + dashed outline marking the combat zone.
+ * @param {number[]} centerLngLat - [lng, lat]
+ * @param {number} radiusMeters - combat radius
+ */
+function _drawCombatRadius(centerLngLat, radiusMeters) {
+    const circle = _makeCircleGeoJSON(centerLngLat, radiusMeters, 64);
+
+    if (_state.map.getSource(COMBAT_RADIUS_SOURCE)) {
+        _state.map.getSource(COMBAT_RADIUS_SOURCE).setData(circle);
+    } else {
+        _state.map.addSource(COMBAT_RADIUS_SOURCE, {
+            type: 'geojson',
+            data: circle,
+        });
+        _state.map.addLayer({
+            id: COMBAT_RADIUS_FILL,
+            type: 'fill',
+            source: COMBAT_RADIUS_SOURCE,
+            paint: {
+                'fill-color': '#ff2a6d',
+                'fill-opacity': 0.08,
+            },
+        });
+        _state.map.addLayer({
+            id: COMBAT_RADIUS_OUTLINE,
+            type: 'line',
+            source: COMBAT_RADIUS_SOURCE,
+            paint: {
+                'line-color': '#ff2a6d',
+                'line-width': 2,
+                'line-opacity': 0.6,
+                'line-dasharray': [4, 4],
+            },
+        });
+    }
+}
+
+/**
+ * Remove the combat radius circle overlay.
+ */
+function _clearCombatRadius() {
+    try {
+        if (_state.map && _state.map.getLayer(COMBAT_RADIUS_FILL))
+            _state.map.removeLayer(COMBAT_RADIUS_FILL);
+        if (_state.map && _state.map.getLayer(COMBAT_RADIUS_OUTLINE))
+            _state.map.removeLayer(COMBAT_RADIUS_OUTLINE);
+        if (_state.map && _state.map.getSource(COMBAT_RADIUS_SOURCE))
+            _state.map.removeSource(COMBAT_RADIUS_SOURCE);
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+/**
+ * Generate a GeoJSON Polygon approximating a circle.
+ * @param {number[]} centerLngLat - [lng, lat]
+ * @param {number} radiusMeters
+ * @param {number} points - number of polygon vertices
+ * @returns {Object} GeoJSON Feature
+ */
+function _makeCircleGeoJSON(centerLngLat, radiusMeters, points) {
+    const coords = [];
+    const R = 6378137; // Earth radius in meters
+    const lat = centerLngLat[1] * Math.PI / 180;
+    const lng = centerLngLat[0] * Math.PI / 180;
+
+    for (let i = 0; i <= points; i++) {
+        const angle = (i / points) * 2 * Math.PI;
+        const dLat = (radiusMeters * Math.cos(angle)) / R;
+        const dLng = (radiusMeters * Math.sin(angle)) / (R * Math.cos(lat));
+        coords.push([
+            (lng + dLng) * 180 / Math.PI,
+            (lat + dLat) * 180 / Math.PI,
+        ]);
+    }
+
+    return {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [coords] },
+    };
+}
+
+// ============================================================
+// Setup Mode — Ghost Placement Preview
+// ============================================================
+
+const SETUP_GHOST_SOURCE = 'setup-ghost-source';
+const SETUP_GHOST_FILL   = 'setup-ghost-fill';
+const SETUP_GHOST_LINE   = 'setup-ghost-line';
+const SETUP_GHOST_ICON   = 'setup-ghost-icon';
+
+/** Weapon range per unit type (meters). */
+const SETUP_UNIT_RANGES = {
+    turret: 80,
+    heavy_turret: 120,
+    missile_turret: 150,
+    rover: 60,
+    drone: 50,
+    scout_drone: 40,
+    tank: 100,
+    apc: 60,
+};
+
+/**
+ * Update the ghost placement preview at the given lngLat.
+ * Creates the GeoJSON source and layers on first call,
+ * updates the data on subsequent calls.
+ * @param {number[]} lngLat - [lng, lat]
+ */
+function _updateSetupGhost(lngLat) {
+    if (!_state.map || !_state.initialized) return;
+
+    const unitType = (typeof window !== 'undefined' && window._setupPlacementType) || 'turret';
+    const radius = SETUP_UNIT_RANGES[unitType] || 20;
+    const circle = _makeCircleGeoJSON(lngLat, radius, 48);
+
+    if (_state.map.getSource(SETUP_GHOST_SOURCE)) {
+        _state.map.getSource(SETUP_GHOST_SOURCE).setData(circle);
+    } else {
+        _state.map.addSource(SETUP_GHOST_SOURCE, {
+            type: 'geojson',
+            data: circle,
+        });
+        _state.map.addLayer({
+            id: SETUP_GHOST_FILL,
+            type: 'fill',
+            source: SETUP_GHOST_SOURCE,
+            paint: {
+                'fill-color': '#00f0ff',
+                'fill-opacity': 0.1,
+            },
+        });
+        _state.map.addLayer({
+            id: SETUP_GHOST_LINE,
+            type: 'line',
+            source: SETUP_GHOST_SOURCE,
+            paint: {
+                'line-color': '#00f0ff',
+                'line-width': 1.5,
+                'line-opacity': 0.4,
+            },
+        });
+    }
+}
+
+/**
+ * Remove ghost placement preview layers and source.
+ */
+function _clearSetupGhost() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(SETUP_GHOST_LINE))
+                _state.map.removeLayer(SETUP_GHOST_LINE);
+            if (_state.map.getLayer(SETUP_GHOST_FILL))
+                _state.map.removeLayer(SETUP_GHOST_FILL);
+            if (_state.map.getSource(SETUP_GHOST_SOURCE))
+                _state.map.removeSource(SETUP_GHOST_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+/**
+ * Handle mousemove on the map — update ghost preview in setup mode.
+ */
+function _onMapMouseMove(e) {
+    if (_state.currentMode !== 'setup') return;
+    const lngLat = [e.lngLat.lng, e.lngLat.lat];
+    _updateSetupGhost(lngLat);
+}
+
+// ============================================================
+// Patrol Route Overlay (GeoJSON lines for friendly patrol paths)
+// ============================================================
+
+const PATROL_ROUTES_SOURCE = 'patrol-routes-source';
+const PATROL_ROUTES_LINE   = 'patrol-routes-line';
+const PATROL_ROUTES_ARROWS = 'patrol-routes-arrows';
+const PATROL_ROUTES_DOTS   = 'patrol-routes-dots';
+
+const DISPATCH_ARROWS_SOURCE = 'dispatch-arrows-source';
+const DISPATCH_ARROWS_LINE   = 'dispatch-arrows-line';
+
+/**
+ * Determine if a unit should show a patrol route.
+ * Only friendly units with 2+ waypoints that are looping patrol or in a
+ * patrolling FSM state qualify.
+ */
+function _isPatrolling(unit) {
+    if (!unit) return false;
+    if (unit.alliance !== 'friendly') return false;
+    const wps = unit.waypoints;
+    if (!Array.isArray(wps) || wps.length < 2) return false;
+    // Show route if unit has looping waypoints or is in a patrol FSM state
+    if (unit.loopWaypoints) return true;
+    const state = (unit.fsmState || unit.fsm_state || '').toLowerCase();
+    return state === 'patrolling' || state === 'scanning' || state === 'idle';
+}
+
+/**
+ * Lightweight fingerprint of a GeoJSON FeatureCollection.
+ * Concatenates feature count + all coordinates + property values into a
+ * single string.  Used by overlay update functions to skip redundant
+ * setData() calls when nothing changed.
+ */
+function _hashGeoJSONFeatures(geojson) {
+    const feats = geojson.features || [];
+    if (feats.length === 0) return '0';
+    const parts = [feats.length];
+    for (let i = 0; i < feats.length; i++) {
+        const g = feats[i].geometry;
+        if (!g) continue;
+        const coords = g.coordinates;
+        if (Array.isArray(coords)) {
+            parts.push(JSON.stringify(coords));
+        }
+        // Include key properties that affect rendering
+        const p = feats[i].properties;
+        if (p) {
+            if (p.opacity !== undefined) parts.push('o' + p.opacity.toFixed(2));
+            if (p.color) parts.push(p.color);
+            if (p.order) parts.push(p.order);
+        }
+    }
+    return parts.join('|');
+}
+
+/**
+ * Build a GeoJSON FeatureCollection of patrol route lines from all
+ * qualifying friendly units.  Each unit's route is a separate Feature
+ * so lines don't connect across units.
+ */
+function _buildPatrolRoutesGeoJSON() {
+    const features = [];
+    const units = TritiumStore.units;
+    units.forEach((unit, _id) => {
+        if (!_isPatrolling(unit)) return;
+        const coords = unit.waypoints.map(wp => _gameToLngLat(wp.x, wp.y));
+        // Close the loop for looping patrol routes
+        if (unit.loopWaypoints && coords.length >= 2) {
+            coords.push(coords[0]);
+        }
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: { unitId: _id, unitName: unit.name || _id },
+        });
+        // Add waypoint dot markers at each node
+        for (const wp of unit.waypoints) {
+            features.push({
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: _gameToLngLat(wp.x, wp.y) },
+                properties: { unitId: _id },
+            });
+        }
+    });
+    return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Create or update the patrol route MapLibre source and layers.
+ * Called from the 10Hz _updateUnits() loop.
+ */
+function _updatePatrolRoutes() {
+    if (!_state.map || !_state.initialized) return;
+
+    const geojson = _buildPatrolRoutesGeoJSON();
+
+    if (_state.map.getSource(PATROL_ROUTES_SOURCE)) {
+        // Skip setData() if features unchanged
+        const hash = _hashGeoJSONFeatures(geojson);
+        if (hash === _state._lastPatrolHash) return;
+        _state._lastPatrolHash = hash;
+        _state.map.getSource(PATROL_ROUTES_SOURCE).setData(geojson);
+    } else {
+        // First call: create source and layers
+        _state.map.addSource(PATROL_ROUTES_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+
+        // Dashed route line
+        _state.map.addLayer({
+            id: PATROL_ROUTES_LINE,
+            type: 'line',
+            source: PATROL_ROUTES_SOURCE,
+            filter: ['==', '$type', 'LineString'],
+            layout: {
+                'line-cap': 'round',
+                'line-join': 'round',
+                'visibility': _state.showPatrolRoutes ? 'visible' : 'none',
+            },
+            paint: {
+                'line-color': '#05ffa1',
+                'line-width': 2.5,
+                'line-opacity': 0.5,
+                'line-dasharray': [2, 3],
+            },
+        });
+
+        // Direction arrows along the route (symbol layer with triangle glyphs)
+        // MapLibre requires SDF icons or glyphs for symbol layers.
+        // Use a simple circle layer at waypoint nodes instead for reliability.
+        _state.map.addLayer({
+            id: PATROL_ROUTES_DOTS,
+            type: 'circle',
+            source: PATROL_ROUTES_SOURCE,
+            filter: ['==', '$type', 'Point'],
+            layout: {
+                'visibility': _state.showPatrolRoutes ? 'visible' : 'none',
+            },
+            paint: {
+                'circle-radius': 4,
+                'circle-color': '#05ffa1',
+                'circle-opacity': 0.7,
+                'circle-stroke-width': 1,
+                'circle-stroke-color': '#003322',
+                'circle-stroke-opacity': 0.9,
+            },
+        });
+    }
+}
+
+// ============================================================
+// Dispatch arrow layer (dashed cyan lines, fade after 3s)
+// ============================================================
+
+function _buildDispatchArrowsGeoJSON() {
+    const now = Date.now();
+    const cutoff = now - DISPATCH_ARROW_LIFETIME;
+    // Prune expired arrows
+    _state.dispatchArrows = _state.dispatchArrows.filter(a => a.time > cutoff);
+
+    const features = [];
+    for (const arrow of _state.dispatchArrows) {
+        const fromLL = _gameToLngLat(arrow.fromX, arrow.fromY);
+        const toLL = _gameToLngLat(arrow.toX, arrow.toY);
+        const age = now - arrow.time;
+        const opacity = Math.max(0, 1 - age / DISPATCH_ARROW_LIFETIME);
+        features.push({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [fromLL, toLL],
+            },
+            properties: { opacity },
+        });
+    }
+    return { type: 'FeatureCollection', features };
+}
+
+function _updateDispatchArrows() {
+    if (!_state.map || !_state.initialized) return;
+
+    const geojson = _buildDispatchArrowsGeoJSON();
+
+    if (_state.map.getSource(DISPATCH_ARROWS_SOURCE)) {
+        // Skip setData() if features unchanged (dispatch arrows fade, so
+        // check count + coordinate hash; opacity changes need updates)
+        const hash = _hashGeoJSONFeatures(geojson);
+        if (hash === _state._lastDispatchHash) return;
+        _state._lastDispatchHash = hash;
+        _state.map.getSource(DISPATCH_ARROWS_SOURCE).setData(geojson);
+    } else {
+        _state.map.addSource(DISPATCH_ARROWS_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+
+        _state.map.addLayer({
+            id: DISPATCH_ARROWS_LINE,
+            type: 'line',
+            source: DISPATCH_ARROWS_SOURCE,
+            layout: {
+                'line-cap': 'round',
+                'line-join': 'round',
+            },
+            paint: {
+                'line-color': '#00f0ff',
+                'line-width': 2,
+                'line-opacity': ['get', 'opacity'],
+                'line-dasharray': [4, 4],
+            },
+        });
+    }
+}
+
+/**
+ * Remove patrol route layers and source from the map.
+ */
+function _clearPatrolRoutes() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(PATROL_ROUTES_DOTS))
+                _state.map.removeLayer(PATROL_ROUTES_DOTS);
+            if (_state.map.getLayer(PATROL_ROUTES_LINE))
+                _state.map.removeLayer(PATROL_ROUTES_LINE);
+            if (_state.map.getSource(PATROL_ROUTES_SOURCE))
+                _state.map.removeSource(PATROL_ROUTES_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+// ============================================================
+// Weapon Range Circle Overlay (selected unit)
+// ============================================================
+
+/**
+ * Draw a weapon range circle centered on the selected unit's position.
+ * Fill color is alliance-based: cyan for friendly, magenta for hostile.
+ * Only shown in tactical/setup modes when showWeaponRange is enabled.
+ */
+function _updateWeaponRange() {
+    if (!_state.map || !_state.initialized) return;
+
+    const selectedId = _state.selectedUnitId;
+    const mode = _state.currentMode;
+
+    // Only show in tactical or setup mode
+    if (!_state.showWeaponRange || !selectedId || mode === 'observe') {
+        _clearWeaponRange();
+        return;
+    }
+
+    const unit = TritiumStore.units.get(selectedId);
+    if (!unit || !unit.weaponRange || unit.weaponRange <= 0) {
+        _clearWeaponRange();
+        return;
+    }
+
+    const pos = unit.position || {};
+    const lngLat = _gameToLngLat(pos.x || 0, pos.y || 0);
+    const circle = _makeCircleGeoJSON(lngLat, unit.weaponRange, 64);
+
+    // Alliance-based colors
+    const alliance = unit.alliance || 'unknown';
+    const fillColor = alliance === 'hostile' ? '#ff2a6d' : '#00f0ff';
+    const fillOpacity = 0.08;
+    const strokeOpacity = 0.3;
+
+    if (_state.map.getSource(WEAPON_RANGE_SOURCE)) {
+        // Skip setData() if circle unchanged (same unit, position, range)
+        const hash = `${selectedId}:${(pos.x||0).toFixed(1)},${(pos.y||0).toFixed(1)}:${unit.weaponRange}:${alliance}`;
+        if (hash === _state._lastWeaponRangeHash) return;
+        _state._lastWeaponRangeHash = hash;
+        _state.map.getSource(WEAPON_RANGE_SOURCE).setData(circle);
+    } else {
+        _state.map.addSource(WEAPON_RANGE_SOURCE, {
+            type: 'geojson',
+            data: circle,
+        });
+        _state.map.addLayer({
+            id: WEAPON_RANGE_FILL,
+            type: 'fill',
+            source: WEAPON_RANGE_SOURCE,
+            paint: {
+                'fill-color': fillColor,
+                'fill-opacity': fillOpacity,
+            },
+        });
+        _state.map.addLayer({
+            id: WEAPON_RANGE_STROKE,
+            type: 'line',
+            source: WEAPON_RANGE_SOURCE,
+            paint: {
+                'line-color': fillColor,
+                'line-width': 2,
+                'line-opacity': strokeOpacity,
+            },
+        });
+    }
+
+    // Update paint properties if alliance changed (unit selection can switch between alliances)
+    try {
+        _state.map.setPaintProperty(WEAPON_RANGE_FILL, 'fill-color', fillColor);
+        _state.map.setPaintProperty(WEAPON_RANGE_STROKE, 'line-color', fillColor);
+    } catch (_e) { /* layer may not exist yet */ }
+}
+
+/**
+ * Remove the weapon range circle overlay.
+ */
+function _clearWeaponRange() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(WEAPON_RANGE_FILL))
+                _state.map.removeLayer(WEAPON_RANGE_FILL);
+            if (_state.map.getLayer(WEAPON_RANGE_STROKE))
+                _state.map.removeLayer(WEAPON_RANGE_STROKE);
+            if (_state.map.getSource(WEAPON_RANGE_SOURCE))
+                _state.map.removeSource(WEAPON_RANGE_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+// ============================================================
+// Combat Zone Heatmap Overlay
+// ============================================================
+
+/**
+ * Fetch heatmap data from the replay API and render as a MapLibre heatmap layer.
+ * Called after each wave completes.
+ */
+async function _fetchAndRenderHeatmap() {
+    if (!_state.map || !_state.initialized) return;
+
+    try {
+        const resp = await fetch('/api/game/replay/heatmap');
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        // Build GeoJSON FeatureCollection from heatmap grid cells
+        // data is { target_id: [ {x, y, count}, ... ] }
+        const features = [];
+        for (const [_tid, cells] of Object.entries(data)) {
+            if (!Array.isArray(cells)) continue;
+            for (const cell of cells) {
+                const lngLat = _gameToLngLat(cell.x, cell.y);
+                features.push({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: lngLat },
+                    properties: { weight: cell.count || 1 },
+                });
+            }
+        }
+
+        const geojson = { type: 'FeatureCollection', features };
+        _renderHeatmap(geojson);
+    } catch (e) {
+        console.warn('[MAP-ML] Failed to fetch heatmap data:', e);
+    }
+}
+
+/**
+ * Render a GeoJSON FeatureCollection as a MapLibre heatmap layer.
+ * @param {Object} geojson - GeoJSON FeatureCollection of Point features
+ */
+function _renderHeatmap(geojson) {
+    if (!_state.map) return;
+
+    if (_state.map.getSource(COMBAT_HEATMAP_SOURCE)) {
+        _state.map.getSource(COMBAT_HEATMAP_SOURCE).setData(geojson);
+    } else {
+        _state.map.addSource(COMBAT_HEATMAP_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: COMBAT_HEATMAP_LAYER,
+            type: 'heatmap',
+            source: COMBAT_HEATMAP_SOURCE,
+            layout: {
+                'visibility': _state.showHeatmap ? 'visible' : 'none',
+            },
+            paint: {
+                // Weight based on the count property
+                'heatmap-weight': [
+                    'interpolate', ['linear'], ['get', 'weight'],
+                    0, 0,
+                    10, 1,
+                ],
+                // Intensity scales with zoom
+                'heatmap-intensity': [
+                    'interpolate', ['linear'], ['zoom'],
+                    10, 0.5,
+                    18, 2,
+                ],
+                // Radius in pixels
+                'heatmap-radius': [
+                    'interpolate', ['linear'], ['zoom'],
+                    10, 20,
+                    18, 40,
+                ],
+                // Color gradient: transparent -> cyan -> magenta -> yellow
+                'heatmap-color': [
+                    'interpolate', ['linear'], ['heatmap-density'],
+                    0, 'rgba(0,0,0,0)',
+                    0.2, 'rgba(0,240,255,0.4)',
+                    0.5, 'rgba(255,42,109,0.6)',
+                    0.8, 'rgba(252,238,10,0.8)',
+                    1.0, 'rgba(252,238,10,1.0)',
+                ],
+                'heatmap-opacity': 0.6,
+            },
+        });
+    }
+}
+
+/**
+ * Clear the combat zone heatmap overlay.
+ */
+function _clearHeatmap() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(COMBAT_HEATMAP_LAYER))
+                _state.map.removeLayer(COMBAT_HEATMAP_LAYER);
+            if (_state.map.getSource(COMBAT_HEATMAP_SOURCE))
+                _state.map.removeSource(COMBAT_HEATMAP_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+// ============================================================
+// Drone Swarm Convex Hull Overlay
+// ============================================================
+
+/**
+ * Compute the convex hull of a set of 2D points using Graham scan.
+ * @param {Array<number[]>} points - Array of [x, y] coordinate pairs
+ * @returns {Array<number[]>} Convex hull vertices in counter-clockwise order
+ */
+function _convexHull(points) {
+    if (points.length < 3) return points.slice();
+
+    // Sort by x, then y
+    const sorted = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+    // Cross product of vectors OA and OB where O is origin
+    function cross(O, A, B) {
+        return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+    }
+
+    // Build lower hull
+    const lower = [];
+    for (const p of sorted) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+
+    // Build upper hull
+    const upper = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+        const p = sorted[i];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+
+    // Remove last point of each half because it's repeated
+    lower.pop();
+    upper.pop();
+
+    return lower.concat(upper);
+}
+
+/**
+ * Update the drone swarm convex hull overlay.
+ * Only active when game_mode_type is 'drone_swarm' and game is active.
+ */
+function _updateSwarmHull() {
+    if (!_state.map || !_state.initialized) return;
+
+    const modeType = TritiumStore.get('game.modeType');
+    const phase = TritiumStore.get('game.phase');
+
+    // Only show during active drone_swarm games
+    if (!_state.showSwarmHull || modeType !== 'drone_swarm' || phase !== 'active') {
+        _clearSwarmHull();
+        return;
+    }
+
+    // Gather all hostile unit positions
+    const hostilePoints = [];
+    TritiumStore.units.forEach((unit) => {
+        if (unit.alliance === 'hostile') {
+            const pos = unit.position || {};
+            const lngLat = _gameToLngLat(pos.x || 0, pos.y || 0);
+            hostilePoints.push(lngLat);
+        }
+    });
+
+    if (hostilePoints.length < 3) {
+        _clearSwarmHull();
+        return;
+    }
+
+    // Compute convex hull
+    const hull = _convexHull(hostilePoints);
+    if (hull.length < 3) {
+        _clearSwarmHull();
+        return;
+    }
+
+    // Close the polygon ring
+    const ring = hull.slice();
+    ring.push(ring[0]);
+
+    // Pulsing opacity: oscillate between 0.08 and 0.15
+    const pulse = 0.08 + 0.07 * (0.5 + 0.5 * Math.sin(Date.now() / 500));
+
+    const geojson = {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+    };
+
+    if (_state.map.getSource(SWARM_HULL_SOURCE)) {
+        // Skip setData() if hull geometry unchanged
+        const hash = ring.map(p => p[0].toFixed(6) + ',' + p[1].toFixed(6)).join(';');
+        if (hash !== _state._lastSwarmHullHash) {
+            _state._lastSwarmHullHash = hash;
+            _state.map.getSource(SWARM_HULL_SOURCE).setData(geojson);
+        }
+        // Pulsing opacity always updates (cheap paint property, no re-parse)
+        try {
+            _state.map.setPaintProperty(SWARM_HULL_FILL, 'fill-opacity', pulse);
+        } catch (_e) { /* layer may not exist yet */ }
+    } else {
+        _state.map.addSource(SWARM_HULL_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: SWARM_HULL_FILL,
+            type: 'fill',
+            source: SWARM_HULL_SOURCE,
+            paint: {
+                'fill-color': '#ff2a6d',
+                'fill-opacity': pulse,
+            },
+        });
+        _state.map.addLayer({
+            id: SWARM_HULL_STROKE,
+            type: 'line',
+            source: SWARM_HULL_SOURCE,
+            paint: {
+                'line-color': '#ff2a6d',
+                'line-width': 2,
+                'line-opacity': 0.4,
+            },
+        });
+    }
+}
+
+/**
+ * Remove the swarm hull overlay.
+ */
+function _clearSwarmHull() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(SWARM_HULL_FILL))
+                _state.map.removeLayer(SWARM_HULL_FILL);
+            if (_state.map.getLayer(SWARM_HULL_STROKE))
+                _state.map.removeLayer(SWARM_HULL_STROKE);
+            if (_state.map.getSource(SWARM_HULL_SOURCE))
+                _state.map.removeSource(SWARM_HULL_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+// ============================================================
+// Squad Formation Hulls
+// ============================================================
+
+/**
+ * Determine the squad hull color based on tactical order.
+ * @param {string|undefined} order - tactical order (advance/hold/flank/retreat)
+ * @returns {string} hex color
+ */
+function _squadColor(order) {
+    return SQUAD_ORDER_COLORS[order] || SQUAD_DEFAULT_COLOR;
+}
+
+/**
+ * Update squad formation convex hull overlays.
+ * Groups hostile units by squadId, computes convex hulls for squads
+ * with 3+ members, and renders them as GeoJSON polygons.
+ * Called from the 10Hz _updateUnits() loop.
+ */
+function _updateSquadHulls() {
+    if (!_state.map || !_state.initialized) return;
+
+    const phase = TritiumStore.get('game.phase');
+    if (!_state.showSquadHulls || (phase !== 'active' && phase !== 'countdown')) {
+        _clearSquadHulls();
+        return;
+    }
+
+    // Group units by squadId
+    const squads = new Map(); // squadId -> [{ unit, lngLat }]
+    TritiumStore.units.forEach((unit) => {
+        if (!unit.squadId) return;
+        const pos = unit.position || {};
+        const lngLat = _gameToLngLat(pos.x || 0, pos.y || 0);
+        if (!squads.has(unit.squadId)) squads.set(unit.squadId, []);
+        squads.get(unit.squadId).push({ unit, lngLat });
+    });
+
+    // Build GeoJSON features for squads with 3+ members
+    const features = [];
+    squads.forEach((members, squadId) => {
+        if (members.length < 3) return;
+
+        const points = members.map(m => m.lngLat);
+        const hull = _convexHull(points);
+        if (hull.length < 3) return;
+
+        // Close the polygon ring
+        const ring = hull.slice();
+        ring.push(ring[0]);
+
+        // Determine color from tactical order (use first member with a known order)
+        let order = null;
+        for (const m of members) {
+            if (m.unit.tacticalOrder) { order = m.unit.tacticalOrder; break; }
+        }
+        const color = _squadColor(order);
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [ring] },
+            properties: { squadId, color, order: order || 'advance' },
+        });
+    });
+
+    const geojson = { type: 'FeatureCollection', features };
+
+    if (_state.map.getSource(SQUAD_HULL_SOURCE)) {
+        // Skip setData() if squad hull features unchanged
+        const hash = _hashGeoJSONFeatures(geojson);
+        if (hash === _state._lastSquadHullHash) return;
+        _state._lastSquadHullHash = hash;
+        _state.map.getSource(SQUAD_HULL_SOURCE).setData(geojson);
+    } else {
+        _state.map.addSource(SQUAD_HULL_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: SQUAD_HULL_FILL,
+            type: 'fill',
+            source: SQUAD_HULL_SOURCE,
+            paint: {
+                'fill-color': ['get', 'color'],
+                'fill-opacity': 0.12,
+            },
+        });
+        _state.map.addLayer({
+            id: SQUAD_HULL_STROKE,
+            type: 'line',
+            source: SQUAD_HULL_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 1.5,
+                'line-opacity': 0.35,
+            },
+        });
+    }
+}
+
+/**
+ * Remove squad hull overlay layers and source.
+ */
+function _clearSquadHulls() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(SQUAD_HULL_FILL))
+                _state.map.removeLayer(SQUAD_HULL_FILL);
+            if (_state.map.getLayer(SQUAD_HULL_STROKE))
+                _state.map.removeLayer(SQUAD_HULL_STROKE);
+            if (_state.map.getSource(SQUAD_HULL_SOURCE))
+                _state.map.removeSource(SQUAD_HULL_SOURCE);
+        }
+    } catch (_e) {
+        // Layers may not exist yet
+    }
+}
+
+// ============================================================
+// Hazard Zones Overlay (fire/flood/roadblock)
+// ============================================================
+
+/**
+ * Update environmental hazard zone overlay.
+ * Reads hazard data from TritiumStore 'hazards' (Map).
+ * Each hazard: { hazard_id, hazard_type, position, radius, duration, spawned_at }
+ * Renders as GeoJSON circle polygons with type-based coloring.
+ */
+function _updateHazardZones() {
+    if (!_state.map || !_state.initialized) return;
+
+    if (!_state.showHazardZones) {
+        _clearHazardZones();
+        return;
+    }
+
+    const hazards = TritiumStore.get('hazards');
+    if (!hazards || !(hazards instanceof Map) || hazards.size === 0) {
+        _clearHazardZones();
+        return;
+    }
+
+    const now = Date.now();
+    const features = [];
+
+    for (const [id, h] of hazards) {
+        const pos = h.position;
+        if (!pos) continue;
+        const px = Array.isArray(pos) ? pos[0] : (pos.x !== undefined ? pos.x : undefined);
+        const py = Array.isArray(pos) ? pos[1] : (pos.y !== undefined ? pos.y : undefined);
+        if (px === undefined || py === undefined) continue;
+
+        // Calculate remaining time fraction (1.0 = just spawned, 0.0 = expired)
+        const totalMs = (h.duration || 60) * 1000;
+        const elapsed = now - (h.spawned_at || now);
+        const remaining = Math.max(0, Math.min(1, 1 - elapsed / totalMs));
+        if (remaining <= 0) continue;
+
+        const lngLat = _gameToLngLat(px, py);
+        const radius = h.radius || 10;
+        const color = HAZARD_COLORS[h.hazard_type] || '#ffffff';
+
+        // Build circle polygon
+        const circle = _makeCircleGeoJSON(lngLat, radius, 32);
+        features.push({
+            type: 'Feature',
+            geometry: circle.geometry,
+            properties: {
+                hazard_id: id,
+                hazard_type: h.hazard_type || 'unknown',
+                color: color,
+                opacity: 0.25 * remaining,
+                stroke_opacity: 0.5 * remaining,
+                label: (h.hazard_type || 'HAZARD').toUpperCase(),
+            },
+        });
+    }
+
+    if (features.length === 0) {
+        _clearHazardZones();
+        return;
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.map(f => f.properties.hazard_id + ':' + f.properties.opacity.toFixed(2)).join(';');
+
+    if (_state.map.getSource(HAZARD_ZONES_SOURCE)) {
+        if (hash !== _state._lastHazardHash) {
+            _state._lastHazardHash = hash;
+            _state.map.getSource(HAZARD_ZONES_SOURCE).setData(geojson);
+        }
+    } else {
+        _state.map.addSource(HAZARD_ZONES_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: HAZARD_ZONES_FILL,
+            type: 'fill',
+            source: HAZARD_ZONES_SOURCE,
+            paint: {
+                'fill-color': ['get', 'color'],
+                'fill-opacity': ['get', 'opacity'],
+            },
+        });
+        _state.map.addLayer({
+            id: HAZARD_ZONES_STROKE,
+            type: 'line',
+            source: HAZARD_ZONES_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 2,
+                'line-opacity': ['get', 'stroke_opacity'],
+                'line-dasharray': [4, 3],
+            },
+        });
+    }
+}
+
+function _clearHazardZones() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(HAZARD_ZONES_FILL))
+                _state.map.removeLayer(HAZARD_ZONES_FILL);
+            if (_state.map.getLayer(HAZARD_ZONES_STROKE))
+                _state.map.removeLayer(HAZARD_ZONES_STROKE);
+            if (_state.map.getSource(HAZARD_ZONES_SOURCE))
+                _state.map.removeSource(HAZARD_ZONES_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+    _state._lastHazardHash = null;
+}
+
+// ============================================================
+// Hostile Objective Lines Overlay
+// ============================================================
+
+/**
+ * Draw dashed lines from hostile units to their assigned objective targets.
+ * Only renders when the game is active.
+ * Reads objective data from TritiumStore 'game.hostileObjectives'.
+ *
+ * Color per objective type:
+ *   assault -> #ff2a6d (magenta)
+ *   flank   -> #ff8800 (orange)
+ *   advance -> #fcee0a (yellow)
+ *   retreat -> #888888 (grey)
+ */
+function _updateHostileObjectives() {
+    if (!_state.map || !_state.initialized) return;
+
+    const phase = TritiumStore.get('game.phase');
+    if (!_state.showHostileObjectives || phase !== 'active') {
+        _clearHostileObjectives();
+        return;
+    }
+
+    const objectives = TritiumStore.get('game.hostileObjectives');
+    if (!objectives || typeof objectives !== 'object') {
+        _clearHostileObjectives();
+        return;
+    }
+
+    const units = TritiumStore.units;
+    const features = [];
+    const OBJ_COLORS = {
+        assault: '#ff2a6d',
+        flank:   '#ff8800',
+        advance: '#fcee0a',
+        retreat: '#888888',
+    };
+
+    for (const [uid, obj] of Object.entries(objectives)) {
+        const unit = units.get(uid);
+        if (!unit || !unit.position) continue;
+
+        const tp = obj.target_position;
+        if (!tp || !Array.isArray(tp) || tp.length < 2) continue;
+
+        const fromLngLat = _gameToLngLat(unit.position.x, unit.position.y);
+        const toLngLat = _gameToLngLat(tp[0], tp[1]);
+        const color = OBJ_COLORS[obj.type] || '#ff2a6d';
+
+        features.push({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [fromLngLat, toLngLat],
+            },
+            properties: { color, type: obj.type || 'assault' },
+        });
+    }
+
+    if (features.length === 0) {
+        _clearHostileObjectives();
+        return;
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.map(f => f.geometry.coordinates.flat().map(c => c.toFixed(5)).join(',')).join(';');
+
+    if (_state.map.getSource(HOSTILE_OBJ_SOURCE)) {
+        if (hash !== _state._lastHostileObjHash) {
+            _state._lastHostileObjHash = hash;
+            _state.map.getSource(HOSTILE_OBJ_SOURCE).setData(geojson);
+        }
+    } else {
+        _state.map.addSource(HOSTILE_OBJ_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: HOSTILE_OBJ_LINE,
+            type: 'line',
+            source: HOSTILE_OBJ_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 1.5,
+                'line-opacity': 0.4,
+                'line-dasharray': [6, 4],
+            },
+        });
+    }
+}
+
+function _clearHostileObjectives() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(HOSTILE_OBJ_LINE))
+                _state.map.removeLayer(HOSTILE_OBJ_LINE);
+            if (_state.map.getSource(HOSTILE_OBJ_SOURCE))
+                _state.map.removeSource(HOSTILE_OBJ_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+    _state._lastHostileObjHash = null;
+}
+
+/**
+ * Start polling /api/game/hostile-intel every 5 seconds.
+ * Stores the objectives in TritiumStore 'game.hostileObjectives'.
+ */
+function _startHostileObjectivePoll() {
+    if (_state._hostileObjPollTimer) return;
+    _state._hostileObjPollTimer = setInterval(async () => {
+        const phase = TritiumStore.get('game.phase');
+        if (phase !== 'active') {
+            _stopHostileObjectivePoll();
+            return;
+        }
+        try {
+            const resp = await fetch('/api/game/hostile-intel');
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.objectives) {
+                    TritiumStore.set('game.hostileObjectives', data.objectives);
+                }
+            }
+        } catch (_e) { /* silently ignore fetch errors */ }
+    }, 5000);
+}
+
+function _stopHostileObjectivePoll() {
+    if (_state._hostileObjPollTimer) {
+        clearInterval(_state._hostileObjPollTimer);
+        _state._hostileObjPollTimer = null;
+    }
+    TritiumStore.set('game.hostileObjectives', null);
+}
+
+// ============================================================
+// Crowd Density Heatmap Overlay (civil_unrest mode)
+// ============================================================
+
+/**
+ * Update crowd density heatmap overlay.
+ * Only active when game_mode_type is 'civil_unrest'.
+ *
+ * Reads grid data from TritiumStore 'game.crowdDensity':
+ *   { grid: [[str,...]], cell_size, bounds: [xMin,yMin,xMax,yMax],
+ *     max_density, critical_count }
+ *
+ * Density levels map to GeoJSON polygons:
+ *   sparse   -> invisible (skip)
+ *   moderate -> pale yellow (#fcee0a) at 0.20 opacity
+ *   dense    -> orange (#ff8c00) at 0.40 opacity
+ *   critical -> red (#ff2a32) at 0.55 opacity
+ */
+function _updateCrowdDensity() {
+    if (!_state.map || !_state.initialized) return;
+
+    const modeType = TritiumStore.get('game.modeType');
+    if (!_state.showCrowdDensity || modeType !== 'civil_unrest') {
+        _clearCrowdDensity();
+        return;
+    }
+
+    const data = TritiumStore.get('game.crowdDensity');
+    if (!data || !data.grid) {
+        _clearCrowdDensity();
+        return;
+    }
+
+    const grid = data.grid;
+    if (!Array.isArray(grid) || grid.length === 0) {
+        _clearCrowdDensity();
+        return;
+    }
+
+    const cellSize = data.cell_size || 10;
+    const bounds = data.bounds || [0, 0, 0, 0];
+    const xMin = bounds[0];
+    const yMin = bounds[1];
+    const features = [];
+
+    const DENSITY_COLORS = {
+        moderate: '#fcee0a',
+        dense:    '#ff8c00',
+        critical: '#ff2a32',
+    };
+    const DENSITY_OPACITY = {
+        moderate: 0.20,
+        dense:    0.40,
+        critical: 0.55,
+    };
+
+    for (let row = 0; row < grid.length; row++) {
+        const cols = grid[row];
+        if (!Array.isArray(cols)) continue;
+        for (let col = 0; col < cols.length; col++) {
+            const level = cols[col];
+            if (level === 'sparse' || !level) continue;
+            if (!DENSITY_COLORS[level]) continue;
+
+            const wx = xMin + col * cellSize;
+            const wy = yMin + row * cellSize;
+
+            // Cell corners in lng/lat
+            const sw = _gameToLngLat(wx, wy);
+            const ne = _gameToLngLat(wx + cellSize, wy + cellSize);
+
+            features.push({
+                type: 'Feature',
+                geometry: {
+                    type: 'Polygon',
+                    coordinates: [[
+                        [sw[0], sw[1]],
+                        [ne[0], sw[1]],
+                        [ne[0], ne[1]],
+                        [sw[0], ne[1]],
+                        [sw[0], sw[1]],
+                    ]],
+                },
+                properties: {
+                    level,
+                    color: DENSITY_COLORS[level],
+                    opacity: DENSITY_OPACITY[level],
+                },
+            });
+        }
+    }
+
+    if (features.length === 0) {
+        _clearCrowdDensity();
+        return;
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.length + ':' + (data.max_density || '') + ':' + (data.critical_count || 0);
+
+    if (_state.map.getSource(CROWD_DENSITY_SOURCE)) {
+        if (hash !== _state._lastCrowdDensityHash) {
+            _state._lastCrowdDensityHash = hash;
+            _state.map.getSource(CROWD_DENSITY_SOURCE).setData(geojson);
+        }
+    } else {
+        _state.map.addSource(CROWD_DENSITY_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: CROWD_DENSITY_FILL,
+            type: 'fill',
+            source: CROWD_DENSITY_SOURCE,
+            paint: {
+                'fill-color': ['get', 'color'],
+                'fill-opacity': ['get', 'opacity'],
+            },
+        });
+    }
+}
+
+function _clearCrowdDensity() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(CROWD_DENSITY_FILL))
+                _state.map.removeLayer(CROWD_DENSITY_FILL);
+            if (_state.map.getSource(CROWD_DENSITY_SOURCE))
+                _state.map.removeSource(CROWD_DENSITY_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+    _state._lastCrowdDensityHash = null;
+}
+
+// ============================================================
+// Cover Points Overlay
+// ============================================================
+
+/**
+ * Update cover point markers on the map.
+ * Reads from TritiumStore 'game.coverPoints' (array of cover point objects).
+ * Each: { position: [x, y], radius, direction, reduction }
+ * Renders as small cyan circles with shield-chevron icons.
+ */
+function _updateCoverPoints() {
+    if (!_state.map || !_state.initialized) return;
+
+    if (!_state.showCoverPoints) {
+        _clearCoverPoints();
+        return;
+    }
+
+    const points = TritiumStore.get('game.coverPoints');
+    if (!Array.isArray(points) || points.length === 0) {
+        _clearCoverPoints();
+        return;
+    }
+
+    const features = [];
+    for (const cp of points) {
+        if (!cp.position || !Array.isArray(cp.position)) continue;
+        const lngLat = _gameToLngLat(cp.position[0], cp.position[1]);
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: lngLat },
+            properties: {
+                radius: cp.radius || 2,
+                reduction: cp.reduction || 0,
+            },
+        });
+    }
+
+    if (features.length === 0) {
+        _clearCoverPoints();
+        return;
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.length + ':' + features[0].geometry.coordinates.join(',');
+
+    if (_state.map.getSource(COVER_POINTS_SOURCE)) {
+        if (hash !== _state._lastCoverPointsHash) {
+            _state._lastCoverPointsHash = hash;
+            _state.map.getSource(COVER_POINTS_SOURCE).setData(geojson);
+        }
+    } else {
+        _state.map.addSource(COVER_POINTS_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: COVER_POINTS_CIRCLE,
+            type: 'circle',
+            source: COVER_POINTS_SOURCE,
+            paint: {
+                'circle-radius': [
+                    'interpolate', ['linear'], ['zoom'],
+                    14, 3,
+                    18, 8,
+                    20, 14,
+                ],
+                'circle-color': '#00f0ff',
+                'circle-opacity': 0.15,
+                'circle-stroke-color': '#00f0ff',
+                'circle-stroke-width': 1,
+                'circle-stroke-opacity': 0.35,
+            },
+        });
+    }
+}
+
+function _clearCoverPoints() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(COVER_POINTS_CIRCLE))
+                _state.map.removeLayer(COVER_POINTS_CIRCLE);
+            if (_state.map.getSource(COVER_POINTS_SOURCE))
+                _state.map.removeSource(COVER_POINTS_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+    _state._lastCoverPointsHash = null;
+}
+
+// ============================================================
+// Unit Signals Overlay (distress/contact/regroup/retreat)
+// ============================================================
+
+/**
+ * Update unit communication signal indicators.
+ * Reads from TritiumStore 'game.signals' (array).
+ * Each signal: { signal_type, sender_id, position, signal_range, ttl, received_at }
+ * Renders as expanding circle rings that fade as they age.
+ */
+function _updateUnitSignals() {
+    if (!_state.map || !_state.initialized) return;
+
+    if (!_state.showUnitSignals) {
+        _clearUnitSignals();
+        return;
+    }
+
+    let signals = TritiumStore.get('game.signals');
+    if (!Array.isArray(signals) || signals.length === 0) {
+        _clearUnitSignals();
+        return;
+    }
+
+    const now = Date.now();
+    // Remove expired signals
+    signals = signals.filter(s => now - s.received_at < (s.ttl || 10) * 1000);
+    TritiumStore.set('game.signals', signals);
+
+    if (signals.length === 0) {
+        _clearUnitSignals();
+        return;
+    }
+
+    const features = [];
+    for (const sig of signals) {
+        const pos = sig.position;
+        if (!pos) continue;
+        const px = Array.isArray(pos) ? pos[0] : pos.x;
+        const py = Array.isArray(pos) ? pos[1] : pos.y;
+        if (px === undefined || py === undefined) continue;
+
+        const lngLat = _gameToLngLat(px, py);
+        const color = SIGNAL_COLORS[sig.signal_type] || '#ffffff';
+        const elapsed = (now - sig.received_at) / 1000;
+        const ttl = sig.ttl || 10;
+        const frac = Math.max(0, 1 - elapsed / ttl);
+        const expansion = 1 - frac;
+        const radiusMeters = (sig.signal_range || 50) * expansion;
+
+        if (radiusMeters < 2) continue;
+
+        const circle = _makeCircleGeoJSON(lngLat, radiusMeters, 24);
+        features.push({
+            type: 'Feature',
+            geometry: circle.geometry,
+            properties: {
+                signal_type: sig.signal_type,
+                color: color,
+                opacity: frac * 0.35,
+                stroke_opacity: frac * 0.6,
+                label: sig.signal_type.toUpperCase(),
+            },
+        });
+    }
+
+    if (features.length === 0) {
+        _clearUnitSignals();
+        return;
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.map(f => f.properties.signal_type + ':' + f.properties.opacity.toFixed(2)).join(';');
+
+    if (_state.map.getSource(UNIT_SIGNALS_SOURCE)) {
+        if (hash !== _state._lastSignalsHash) {
+            _state._lastSignalsHash = hash;
+            _state.map.getSource(UNIT_SIGNALS_SOURCE).setData(geojson);
+        }
+    } else {
+        _state.map.addSource(UNIT_SIGNALS_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: UNIT_SIGNALS_CIRCLE,
+            type: 'line',
+            source: UNIT_SIGNALS_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 2,
+                'line-opacity': ['get', 'stroke_opacity'],
+                'line-dasharray': [4, 4],
+            },
+        });
+    }
+}
+
+function _clearUnitSignals() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(UNIT_SIGNALS_CIRCLE))
+                _state.map.removeLayer(UNIT_SIGNALS_CIRCLE);
+            if (_state.map.getSource(UNIT_SIGNALS_SOURCE))
+                _state.map.removeSource(UNIT_SIGNALS_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+    _state._lastSignalsHash = null;
+}
+
+// ============================================================
+// Hostile Intel HUD (DOM overlay in bottom-left corner)
+// ============================================================
+
+/**
+ * Update the hostile intel HUD element.
+ * Reads from TritiumStore 'game.hostileIntel'.
+ * Shows enemy confidence, force ratio, and recommended action.
+ */
+function _updateHostileIntel() {
+    if (!_state.map || !_state.initialized || !_state.container) return;
+
+    const phase = TritiumStore.get('game.phase');
+    const intel = TritiumStore.get('game.hostileIntel');
+
+    if (!_state.showHostileIntel || !intel || (phase !== 'active' && phase !== 'wave_complete')) {
+        if (_state._hostileIntelEl) {
+            _state._hostileIntelEl.style.display = 'none';
+        }
+        return;
+    }
+
+    if (!_state._hostileIntelEl) {
+        const el = document.createElement('div');
+        el.className = 'hostile-intel-hud';
+        el.style.cssText = [
+            'position: absolute',
+            'bottom: 16px',
+            'left: 16px',
+            'padding: 8px 12px',
+            'background: rgba(0,0,0,0.75)',
+            'border-left: 3px solid #ff2a6d',
+            'font-family: "JetBrains Mono", monospace',
+            'font-size: 11px',
+            'color: #cccccc',
+            'pointer-events: none',
+            'z-index: 10',
+            'line-height: 1.6',
+        ].join(';');
+        _state.container.appendChild(el);
+        _state._hostileIntelEl = el;
+    }
+
+    const THREAT_COLORS = {
+        low: '#05ffa1',
+        moderate: '#fcee0a',
+        high: '#ff8800',
+        critical: '#ff2a6d',
+    };
+
+    const threat = (intel.threat_level || 'unknown').toUpperCase();
+    const threatColor = THREAT_COLORS[intel.threat_level] || '#888888';
+    const ratio = typeof intel.force_ratio === 'number' ? intel.force_ratio : 0;
+    const ratioStr = ratio.toFixed(1) + ':1';
+    const advantage = ratio >= 1.0 ? 'HOSTILE ADV' : 'FRIENDLY ADV';
+    const advColor = ratio >= 1.0 ? '#ff2a6d' : '#05ffa1';
+    const action = (intel.recommended_action || '').toUpperCase();
+
+    let html = `<div style="color:#888">HOSTILE INTEL</div>`;
+    html += `<div style="color:${threatColor};font-weight:bold">ENEMY CONF: ${threat}</div>`;
+    html += `<div style="color:${advColor}">${ratioStr} ${advantage}</div>`;
+    if (action) {
+        html += `<div style="color:#00f0ff">ACTION: ${action}</div>`;
+    }
+
+    _state._hostileIntelEl.innerHTML = html;
+    _state._hostileIntelEl.style.display = '';
+}
+
+// ============================================================
+// Cinematic Auto-Follow Camera
+// ============================================================
+
+/**
+ * Record a combat event position into the ring buffer.
+ * @param {number} lng
+ * @param {number} lat
+ */
+function _recordCombatEvent(lng, lat) {
+    _state.combatEventRing.push({ lng, lat, time: Date.now() });
+    if (_state.combatEventRing.length > COMBAT_EVENT_RING_SIZE) {
+        _state.combatEventRing.shift();
+    }
+}
+
+/**
+ * Get recent combat events (within the last COMBAT_EVENT_MAX_AGE ms).
+ * @returns {Array<{lng, lat, time}>}
+ */
+function _recentCombatEvents() {
+    const cutoff = Date.now() - COMBAT_EVENT_MAX_AGE;
+    return _state.combatEventRing.filter(e => e.time >= cutoff);
+}
+
+/**
+ * Find the densest area of recent combat events.
+ * Returns the centroid of recent events.
+ * @returns {{lng: number, lat: number}|null}
+ */
+function _findActionHotspot() {
+    const events = _recentCombatEvents();
+    if (events.length === 0) return null;
+
+    let sumLng = 0, sumLat = 0;
+    for (const e of events) {
+        sumLng += e.lng;
+        sumLat += e.lat;
+    }
+    return { lng: sumLng / events.length, lat: sumLat / events.length };
+}
+
+/**
+ * Evaluate where the camera should fly to next.
+ * Priority:
+ *   1. Active streak holder position
+ *   2. Recent combat hotspot (elimination positions)
+ *   3. Hostile unit centroid
+ * @returns {{lng: number, lat: number, zoom: number}|null}
+ */
+function _evaluateAutoFollowTarget() {
+    // Priority 1: active streak holder (within last 8 seconds)
+    if (_state.streakHolder && (Date.now() - _state.streakHolder.time) < 8000) {
+        const unit = TritiumStore.units.get(_state.streakHolder.unitId);
+        if (unit && unit.position) {
+            const lngLat = _gameToLngLat(unit.position.x || 0, unit.position.y || 0);
+            return { lng: lngLat[0], lat: lngLat[1], zoom: 17.5 };
+        }
+        return { lng: _state.streakHolder.lng, lat: _state.streakHolder.lat, zoom: 17.5 };
+    }
+
+    // Priority 2: recent combat hotspot
+    const hotspot = _findActionHotspot();
+    if (hotspot) {
+        return { lng: hotspot.lng, lat: hotspot.lat, zoom: 17 };
+    }
+
+    // Priority 3: hostile unit centroid
+    let sumLng = 0, sumLat = 0, count = 0;
+    TritiumStore.units.forEach(u => {
+        if (u.alliance === 'hostile') {
+            const pos = u.position || {};
+            const lngLat = _gameToLngLat(pos.x || 0, pos.y || 0);
+            sumLng += lngLat[0];
+            sumLat += lngLat[1];
+            count++;
+        }
+    });
+    if (count > 0) {
+        return { lng: sumLng / count, lat: sumLat / count, zoom: 16.5 };
+    }
+
+    return null;
+}
+
+/**
+ * Perform one auto-follow camera evaluation and fly.
+ */
+function _autoFollowTick() {
+    if (!_state.autoFollow || !_state.map || _state.autoFollowFlyingNow) return;
+
+    const target = _evaluateAutoFollowTarget();
+    if (!target) return;
+
+    _state.autoFollowFlyingNow = true;
+    _state.map.flyTo({
+        center: [target.lng, target.lat],
+        zoom: target.zoom,
+        duration: AUTO_FOLLOW_FLY_DURATION,
+    });
+
+    // Clear the flying flag after animation completes
+    setTimeout(() => {
+        _state.autoFollowFlyingNow = false;
+    }, AUTO_FOLLOW_FLY_DURATION + 100);
+}
+
+/**
+ * Handle an immediate flyTo for an elimination event.
+ */
+function _autoFollowOnElimination(data) {
+    if (!_state.autoFollow || !_state.map) return;
+
+    const pos = data.position || data;
+    const gx = pos.x || 0;
+    const gy = pos.y || 0;
+    const lngLat = _gameToLngLat(gx, gy);
+
+    _recordCombatEvent(lngLat[0], lngLat[1]);
+
+    _state.autoFollowFlyingNow = true;
+    _state.map.flyTo({
+        center: lngLat,
+        zoom: 17.5,
+        duration: 1500,
+    });
+    setTimeout(() => { _state.autoFollowFlyingNow = false; }, 1600);
+}
+
+/**
+ * Handle streak events for auto-follow focus.
+ */
+function _autoFollowOnStreak(data) {
+    if (!_state.autoFollow) return;
+    const unitId = data.unit_id || data.interceptor_id;
+    if (!unitId) return;
+    const unit = TritiumStore.units.get(unitId);
+    if (unit && unit.position) {
+        const lngLat = _gameToLngLat(unit.position.x || 0, unit.position.y || 0);
+        _state.streakHolder = { unitId, lng: lngLat[0], lat: lngLat[1], time: Date.now() };
+    }
+}
+
+/**
+ * Record projectile hit events into the combat ring buffer.
+ */
+function _autoFollowOnHit(data) {
+    if (!_state.autoFollow) return;
+    const pos = data.position || data.target_position || data;
+    const gx = pos.x || 0;
+    const gy = pos.y || 0;
+    if (gx === 0 && gy === 0) return;
+    const lngLat = _gameToLngLat(gx, gy);
+    _recordCombatEvent(lngLat[0], lngLat[1]);
+}
+
+/**
+ * Create/remove the AUTO badge in the map container.
+ */
+function _updateAutoBadge() {
+    const existing = document.getElementById('auto-follow-badge');
+    if (_state.autoFollow) {
+        if (!existing && _state.container) {
+            const badge = document.createElement('div');
+            badge.id = 'auto-follow-badge';
+            badge.textContent = 'AUTO';
+            badge.style.cssText = [
+                'position:absolute; top:8px; right:60px; z-index:10;',
+                'font-family:"JetBrains Mono",monospace; font-size:11px;',
+                'color:#05ffa1; background:rgba(5,255,161,0.15);',
+                'padding:3px 8px; border-radius:3px;',
+                'border:1px solid rgba(5,255,161,0.4);',
+                'text-transform:uppercase; letter-spacing:1px;',
+                'pointer-events:none; animation:pulse-glow 2s ease-in-out infinite;',
+            ].join('');
+            _state.container.appendChild(badge);
+        }
+    } else {
+        if (existing) existing.remove();
+    }
+}
+
+/**
+ * Start the auto-follow timer and subscribe to combat events.
+ */
+function _startAutoFollow() {
+    _state.autoFollow = true;
+
+    EventBus.on('combat:elimination', _autoFollowOnElimination);
+    EventBus.on('combat:streak', _autoFollowOnStreak);
+    EventBus.on('combat:hit', _autoFollowOnHit);
+
+    // Disable auto-follow when user manually pans/zooms
+    if (_state.map) {
+        _state.map.on('movestart', _onUserMoveStart);
+    }
+
+    // Start periodic evaluation
+    _state.autoFollowTimer = setInterval(_autoFollowTick, AUTO_FOLLOW_INTERVAL);
+
+    // Immediate first evaluation
+    _autoFollowTick();
+
+    _updateAutoBadge();
+    _updateLayerHud();
+    console.log('[MAP-ML] Auto-follow ON');
+}
+
+/**
+ * Stop the auto-follow timer and unsubscribe from combat events.
+ */
+function _stopAutoFollow() {
+    _state.autoFollow = false;
+
+    if (_state.autoFollowTimer) {
+        clearInterval(_state.autoFollowTimer);
+        _state.autoFollowTimer = null;
+    }
+
+    EventBus.off('combat:elimination', _autoFollowOnElimination);
+    EventBus.off('combat:streak', _autoFollowOnStreak);
+    EventBus.off('combat:hit', _autoFollowOnHit);
+
+    if (_state.map) {
+        _state.map.off('movestart', _onUserMoveStart);
+    }
+
+    _state.autoFollowFlyingNow = false;
+    _state.streakHolder = null;
+
+    _updateAutoBadge();
+    _updateLayerHud();
+    console.log('[MAP-ML] Auto-follow OFF');
+}
+
+/**
+ * Handler for map movestart -- if the move was NOT triggered by auto-follow,
+ * the user manually panned, so disable auto-follow.
+ */
+function _onUserMoveStart() {
+    if (_state.autoFollowFlyingNow) return;
+    if (_state.autoFollow) {
+        _stopAutoFollow();
+        console.log('[MAP-ML] Auto-follow disabled by user interaction');
+    }
+}
+
 // ============================================================
 // Unit Rendering (MapLibre markers with DOM elements)
 // ============================================================
 
 function _startUnitLoop() {
-    setInterval(() => {
+    _scheduleUnitUpdate();
+}
+
+/**
+ * Adaptively schedule the unit update loop based on current unit count.
+ * Fewer units = higher update rate (smoother); many units = throttled
+ * to avoid burning CPU on DOM marker updates that humans can't perceive.
+ *
+ *   < 30 units  ->  10 Hz (100ms)  -- smooth, low cost
+ *  30-50 units  ->   6 Hz (166ms)  -- still responsive
+ *  50-80 units  ->   4 Hz (250ms)  -- saves CPU on mid-size battles
+ *    80+ units  ->   2 Hz (500ms)  -- large battles, DOM is expensive
+ */
+function _scheduleUnitUpdate() {
+    const unitCount = TritiumStore.units ? TritiumStore.units.size : 0;
+    let interval = 100;  // 10 Hz default
+    if (unitCount > 80)       interval = 500;   // 2 Hz
+    else if (unitCount > 50)  interval = 250;   // 4 Hz
+    else if (unitCount > 30)  interval = 166;   // 6 Hz
+
+    clearInterval(_state._unitUpdateTimer);
+    _state._unitUpdateTimer = setInterval(() => {
         _updateUnits();
         _drawMinimap();
-    }, 100); // 10 Hz update
+        _scheduleUnitUpdate();  // re-evaluate interval as unit count changes
+    }, interval);
 }
 
 function _updateUnits() {
     if (!_state.map || !_state.initialized) return;
+
+    // Tick counter for throttling slow-changing overlays to ~1Hz
+    _state._overlayTickCounter = (_state._overlayTickCounter + 1) % 10;
+    const slowTick = _state._overlayTickCounter === 0; // true once per second
 
     const units = TritiumStore.units;
     const seenIds = new Set();
@@ -707,11 +2810,21 @@ function _updateUnits() {
             _state.allianceFilter.includes(unit.alliance || 'unknown');
         el.style.display = (_state.showUnits && allianceOk) ? '' : 'none';
 
-        // Fog of war: dim invisible hostiles
+        // Fog of war: dim invisible hostiles, show radio ghosts
         if (unit.alliance === 'hostile' && unit.visible === false && _state.showFog) {
-            el.classList.add('fog-hidden');
+            if (unit.radio_detected) {
+                // Radio-detected: show as uncertain position with signal indicator
+                el.classList.remove('fog-hidden');
+                el.classList.add('radio-ghost');
+                // Update signal strength data attribute for CSS animation intensity
+                el.dataset.signalStrength = (unit.radio_signal_strength || 0).toFixed(2);
+            } else {
+                el.classList.add('fog-hidden');
+                el.classList.remove('radio-ghost');
+            }
         } else {
             el.classList.remove('fog-hidden');
+            el.classList.remove('radio-ghost');
         }
     });
 
@@ -725,6 +2838,37 @@ function _updateUnits() {
 
     // Sync Three.js 3D unit meshes
     _sync3DUnits();
+
+    // Patrol routes and weapon range rarely change — update at 1Hz
+    if (slowTick) {
+        _updatePatrolRoutes();
+        _updateWeaponRange();
+    }
+
+    // Dispatch arrows fade over 3s — need 10Hz for smooth opacity
+    _updateDispatchArrows();
+
+    // Weapon range removed from 10Hz — handled by slowTick above
+
+    // Update drone swarm convex hull
+    _updateSwarmHull();
+
+    // Update squad formation hulls
+    _updateSquadHulls();
+
+    // Hazard zones need per-tick update (opacity fades with remaining time)
+    _updateHazardZones();
+
+    // Unit signals need per-tick update (expanding rings that fade)
+    _updateUnitSignals();
+
+    // Slow-tick overlays: hostile objectives, crowd density, cover points, hostile intel
+    if (slowTick) {
+        _updateHostileObjectives();
+        _updateCrowdDensity();
+        _updateCoverPoints();
+        _updateHostileIntel();
+    }
 }
 
 function _resolveModalType(unit) {
@@ -766,19 +2910,27 @@ function _createUnitMarker(id, unit, lngLat) {
         .setLngLat(lngLat)
         .addTo(_state.map);
 
-    // Click handler for selection
+    // Hover effect
+    outer.addEventListener('mouseenter', () => outer.classList.add('unit-marker-hovered'));
+    outer.addEventListener('mouseleave', () => outer.classList.remove('unit-marker-hovered'));
+
+    // Click handler for selection + open inspector
     outer.addEventListener('click', (e) => {
         e.stopPropagation();
         TritiumStore.set('map.selectedUnitId', id);
+        EventBus.emit('unit:selected', { id });
+        EventBus.emit('panel:request-open', { id: 'unit-inspector' });
+        // Immediate visual feedback — don't wait for next telemetry cycle
+        _onSelectionChanged(id);
     });
 
-    // Double-click handler for device modal
+    // Double-click handler: fly-to unit
     outer.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         const u = TritiumStore.units.get(id);
-        if (u) {
-            const modalType = _resolveModalType(u);
-            DeviceModalManager.open(id, modalType, u);
+        if (u && u.position) {
+            const flyLngLat = _gameToLngLat(u.position.x, u.position.y);
+            if (_state.map) _state.map.flyTo({ center: flyLngLat, zoom: Math.max(_state.map.getZoom(), 18) });
         }
     });
 
@@ -797,13 +2949,53 @@ function _abbreviateName(name, iconLetter) {
     return name.slice(0, 5).toUpperCase();
 }
 
+/**
+ * Determine morale state from a numeric morale value.
+ * Matches backend thresholds in morale.py:
+ *   broken < 0.1, suppressed < 0.3, emboldened > 0.9
+ * @param {number|undefined|null} morale - morale value [0..1]
+ * @returns {string|null} 'broken', 'suppressed', 'emboldened', or null (normal)
+ */
+function _getMoraleState(morale) {
+    if (morale === undefined || morale === null || typeof morale !== 'number') return null;
+    if (morale < 0.1) return 'broken';
+    if (morale < 0.3) return 'suppressed';
+    if (morale > 0.9) return 'emboldened';
+    return null;
+}
+
+// Expose for testing
+window._getMoraleState = _getMoraleState;
+
+const _MORALE_BADGE_TEXT = {
+    broken: '\u00AB\u00AB',       // "<<" (flee arrows)
+    suppressed: '\u2304',          // downward chevron
+    emboldened: '\u2303',          // upward chevron
+};
+
+const _MORALE_BADGE_COLORS = {
+    broken: '#ff2a6d',
+    suppressed: '#fcee0a',
+    emboldened: '#00f0ff',
+};
+
+const _MORALE_TOOLTIP_TEXT = {
+    broken: 'BROKEN',
+    suppressed: 'SUPPRESSED',
+    emboldened: 'EMBOLDENED',
+};
+
 function _applyMarkerStyle(el, unit) {
     const alliance = unit.alliance || 'unknown';
     const color = ALLIANCE_COLORS[alliance] || ALLIANCE_COLORS.unknown;
     const type = (unit.type || 'unknown').toLowerCase();
     const selected = _state.selectedUnitId === unit.id;
+    const controlled = TritiumStore.get('controlledUnitId') === unit.id;
     const has3D = !!_state.threeRoot;
     const modelsVisible = _state.showModels3d;
+    // Use 3D render path only when 3D models are both available AND enabled.
+    // When models are toggled off, fall through to 2D large-icon path.
+    const use3DPath = has3D && modelsVisible;
 
     // Icon letter — order matters: specific types before broad includes()
     let icon = '?';
@@ -828,6 +3020,15 @@ function _applyMarkerStyle(el, unit) {
     const dead = unit.status === 'eliminated' || unit.status === 'neutralized';
     const opacity = dead ? 0.3 : 1.0;
 
+    // --- Performance: skip full restyle if nothing visually changed ---
+    // Build a compact fingerprint of all values that affect marker appearance.
+    // Position is handled by setLngLat() so it's not included here.
+    const moraleState = _getMoraleState(unit.morale);
+    const unitSource = unit.source || 'sim';
+    const styleHash = `${alliance}|${type}|${hpRatio.toFixed(2)}|${dead}|${selected}|${has3D}|${modelsVisible}|${_state.showLabels}|${_state.showHealthBars}|${_state.showSelectionFx}|${moraleState}|${unitSource}|${unit.name || ''}`;
+    if (el._lastStyleHash === styleHash) return;
+    el._lastStyleHash = styleHash;
+
     // Inject shared CSS (once)
     if (!document.getElementById('tritium-marker-css')) {
         const css = document.createElement('style');
@@ -837,11 +3038,55 @@ function _applyMarkerStyle(el, unit) {
             '  0%, 100% { box-shadow: 0 0 6px #ff2a6d66; }',
             '  50% { box-shadow: 0 0 16px #ff2a6d, 0 0 30px #ff2a6d44; }',
             '}',
+            '',
+            '/* Morale state animations */',
+            '@keyframes morale-suppressed-pulse {',
+            '  0%, 100% { border-color: #fcee0a44; box-shadow: 0 0 4px #fcee0a22; }',
+            '  50% { border-color: #fcee0a; box-shadow: 0 0 10px #fcee0a66; }',
+            '}',
+            '@keyframes morale-broken-pulse {',
+            '  0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 6px #ff2a6d66; }',
+            '  50% { border-color: #fcee0a; box-shadow: 0 0 12px #fcee0a88; }',
+            '}',
+            '@keyframes morale-emboldened-glow {',
+            '  0%, 100% { box-shadow: 0 0 8px #00f0ff44; }',
+            '  50% { box-shadow: 0 0 18px #00f0ff, 0 0 30px #00f0ff44; }',
+            '}',
+            '',
+            '/* Morale state classes on outer .tritium-unit-marker wrapper */',
+            '.unit-marker-suppressed .tritium-unit-inner {',
+            '  animation: morale-suppressed-pulse 1.5s ease-in-out infinite !important;',
+            '}',
+            '.unit-marker-broken .tritium-unit-inner {',
+            '  animation: morale-broken-pulse 0.5s ease-in-out infinite !important;',
+            '  transform: scale(0.85);',
+            '}',
+            '.unit-marker-emboldened .tritium-unit-inner {',
+            '  animation: morale-emboldened-glow 2s ease-in-out infinite !important;',
+            '  transform: scale(1.1);',
+            '}',
+            '',
+            '/* Morale badge positioning */',
+            '.morale-badge {',
+            '  position: absolute;',
+            '  top: -6px;',
+            '  right: -6px;',
+            '  font-family: "JetBrains Mono", monospace;',
+            '  font-size: 8px;',
+            '  font-weight: bold;',
+            '  line-height: 1;',
+            '  padding: 1px 2px;',
+            '  border-radius: 3px;',
+            '  background: #000000cc;',
+            '  pointer-events: none;',
+            '  z-index: 5;',
+            '  text-shadow: 0 0 3px currentColor;',
+            '}',
         ].join('\n');
         document.head.appendChild(css);
     }
 
-    if (has3D) {
+    if (use3DPath) {
         // ----- 3D mode: compact callsign tag below the 3D model -----
         // Labels are always viewport-aligned (never rotated) for readability.
         // Size is deliberately small so the 3D model is the primary visual.
@@ -855,27 +3100,9 @@ function _applyMarkerStyle(el, unit) {
         `;
         el.textContent = ''; // clear any icon letter
 
-        // Location dot — small map point visible when 3D models are hidden
-        let locDot = el.querySelector('.unit-loc-dot');
-        if (!modelsVisible) {
-            if (!locDot) {
-                locDot = document.createElement('div');
-                locDot.className = 'unit-loc-dot';
-                el.insertBefore(locDot, el.firstChild);
-            }
-            const dotSize = 6;
-            const selGlow = selected && _state.showSelectionFx;
-            locDot.style.cssText = `
-                width: ${dotSize}px; height: ${dotSize}px;
-                border-radius: 50%;
-                background: ${color};
-                box-shadow: 0 0 ${selGlow ? '8' : '3'}px ${color};
-                margin-bottom: 2px;
-                flex-shrink: 0;
-            `;
-        } else if (locDot) {
-            locDot.remove();
-        }
+        // Remove leftover 2D elements (loc dots) if switching from 2D path
+        const locDot = el.querySelector('.unit-loc-dot');
+        if (locDot) locDot.remove();
 
         // Callsign label — short, no-wrap, tiny (respects showLabels toggle)
         let nameLabel = el.querySelector('.unit-name-3d');
@@ -885,8 +3112,9 @@ function _applyMarkerStyle(el, unit) {
                 nameLabel.className = 'unit-name-3d';
                 el.appendChild(nameLabel);
             }
-            // Show abbreviated name: "turret-a1b2c3" → "T-A1B"
-            const shortName = _abbreviateName(unit.name || '', icon);
+            // Show short_id hex if available, else abbreviated name
+            const unitShortId = (unit.identity && unit.identity.short_id) ? unit.identity.short_id : '';
+            const shortName = unitShortId || _abbreviateName(unit.name || '', icon);
             nameLabel.textContent = shortName;
         } else if (nameLabel) {
             nameLabel.remove();
@@ -986,6 +3214,21 @@ function _applyMarkerStyle(el, unit) {
             damageGlow.remove();
         }
 
+        // Operator control indicator — pulsing cyan ring
+        let ctrlRing = el.querySelector('.unit-ctrl-ring');
+        if (controlled) {
+            if (!ctrlRing) {
+                ctrlRing = document.createElement('div');
+                ctrlRing.className = 'unit-ctrl-ring';
+                ctrlRing.style.cssText = 'position:absolute; inset:-8px; border-radius:50%; pointer-events:none; border:2px dashed #00f0ff;';
+                el.appendChild(ctrlRing);
+            }
+            ctrlRing.style.animation = 'hostile-pulse 1s ease-in-out infinite';
+            ctrlRing.style.boxShadow = '0 0 8px #00f0ff, 0 0 16px #00f0ff44';
+        } else if (ctrlRing) {
+            ctrlRing.remove();
+        }
+
         // Health bar below marker (respects showHealthBars toggle)
         let healthBar = el.querySelector('.unit-hp-bar');
         if (_state.showHealthBars) {
@@ -1025,10 +3268,50 @@ function _applyMarkerStyle(el, unit) {
                 `;
                 el.appendChild(nameLabel);
             }
-            nameLabel.textContent = unit.name || '';
+            const nameShortId = (unit.identity && unit.identity.short_id) ? `[${unit.identity.short_id}] ` : '';
+            nameLabel.textContent = nameShortId + (unit.name || '');
         } else if (nameLabel) {
             nameLabel.remove();
         }
+    }
+
+    // --- Morale badge overlay (works in both 2D and 3D modes) ---
+    // moraleState already declared above for style hash fingerprint
+    let moraleBadge = el.querySelector('.morale-badge');
+    if (moraleState) {
+        if (!moraleBadge) {
+            moraleBadge = document.createElement('div');
+            moraleBadge.className = 'morale-badge';
+            el.appendChild(moraleBadge);
+        }
+        moraleBadge.textContent = _MORALE_BADGE_TEXT[moraleState] || '';
+        moraleBadge.style.color = _MORALE_BADGE_COLORS[moraleState] || '#fff';
+        moraleBadge.style.display = 'block';
+        moraleBadge.dataset.moraleState = moraleState;
+    } else if (moraleBadge) {
+        moraleBadge.style.display = 'none';
+        delete moraleBadge.dataset.moraleState;
+    }
+
+    // --- Source indicator dot (real/graphling only — sim is default, no dot) ---
+    // unitSource already declared above for style hash fingerprint
+    let srcDot = el.querySelector('.unit-source-dot');
+    if (unitSource !== 'sim') {
+        if (!srcDot) {
+            srcDot = document.createElement('div');
+            srcDot.className = 'unit-source-dot';
+            el.appendChild(srcDot);
+        }
+        const srcColor = unitSource === 'real' ? '#05ffa1' : unitSource === 'graphling' ? '#ff2a6d' : '#888';
+        srcDot.style.cssText = `
+            position: absolute; top: -2px; right: -2px;
+            width: 5px; height: 5px; border-radius: 50%;
+            background: ${srcColor};
+            box-shadow: 0 0 4px ${srcColor};
+            pointer-events: none;
+        `;
+    } else if (srcDot) {
+        srcDot.remove();
     }
 }
 
@@ -1040,10 +3323,34 @@ function _updateMarkerElement(marker, unit) {
         el.dataset.alliance = newAlliance;
     }
     // Style the inner div, NOT the outer wrapper (which MapLibre positions via transform)
-    const inner = el.querySelector('.tritium-unit-inner') || el;
+    // Cache the querySelector result on the element to avoid DOM lookup every tick
+    if (!el._cachedInner) {
+        el._cachedInner = el.querySelector('.tritium-unit-inner') || el;
+    }
+    const inner = el._cachedInner;
     _applyMarkerStyle(inner, unit);
     // No setRotation — labels stay screen-aligned for readability.
     // Heading is shown by the 3D model's orientation instead.
+
+    // --- Morale state CSS classes on the outer wrapper ---
+    const moraleState = _getMoraleState(unit.morale);
+    const moraleClasses = ['unit-marker-suppressed', 'unit-marker-broken', 'unit-marker-emboldened'];
+    for (const cls of moraleClasses) {
+        el.classList.remove(cls);
+    }
+    if (moraleState) {
+        el.classList.add('unit-marker-' + moraleState);
+    }
+
+    // --- Tooltip with morale state ---
+    const name = unit.name || unit.id || '';
+    const alliance = unit.alliance || 'unknown';
+    const type = unit.type || 'unknown';
+    let titleParts = [`${name} [${type}] (${alliance})`];
+    if (moraleState) {
+        titleParts.push(_MORALE_TOOLTIP_TEXT[moraleState]);
+    }
+    el.title = titleParts.join(' — ');
 
     // Thought bubble above marker
     _updateThoughtBubble(el, unit);
@@ -1054,17 +3361,70 @@ const _EMOTION_COLORS = {
     happy: '#05ffa1', neutral: '#888888',
 };
 
+/**
+ * Count how many visible thought bubbles are non-critical (and not the selected unit).
+ * Critical and selected-unit bubbles are uncapped.
+ */
+function _countNonCriticalVisibleBubbles() {
+    let count = 0;
+    for (const uid of _state._visibleThoughtIds) {
+        if (uid === _state.selectedUnitId) continue;
+        const unit = typeof TritiumStore !== 'undefined' && TritiumStore.units
+            ? TritiumStore.units.get(uid) : null;
+        if (unit && unit.thoughtImportance === 'critical') continue;
+        count++;
+    }
+    return count;
+}
+
 function _updateThoughtBubble(outerEl, unit) {
     let bubble = outerEl.querySelector('.thought-bubble');
-
-    // Should we show a thought?
     const now = Date.now();
-    const hasThought = _state.showThoughts && unit.thoughtText && unit.thoughtExpires && unit.thoughtExpires > now;
+    const unitId = unit.id || unit.target_id;
 
-    if (!hasThought) {
+    // Determine if this thought should be visible.
+    // A thought is visible if:
+    //  1. showThoughts toggle is on AND
+    //  2. The thought has not expired AND
+    //  3. One of:
+    //     a. This is the currently selected unit (click-to-view)
+    //     b. The thought is critical importance (always shown)
+    //     c. The thought is high importance AND we haven't hit the bubble cap
+    const hasThought = unit.thoughtText && unit.thoughtExpires && unit.thoughtExpires > now;
+    const isCritical = unit.thoughtImportance === 'critical';
+    const isSelected = _state.selectedUnitId === unitId;
+
+    // Remove from visible set if expired or hidden
+    if (!hasThought || !_state.showThoughts) {
         if (bubble) bubble.style.display = 'none';
+        _state._visibleThoughtIds.delete(unitId);
         return;
     }
+
+    // Decide visibility: critical and selected always show.
+    // Non-critical obey the max bubble cap.
+    let shouldShow = false;
+    if (isCritical || isSelected) {
+        shouldShow = true;
+    } else {
+        // Check bubble cap (excluding critical and selected, which are uncapped)
+        const nonCriticalCount = _countNonCriticalVisibleBubbles();
+        if (_state._visibleThoughtIds.has(unitId)) {
+            // Already visible — keep showing it
+            shouldShow = true;
+        } else if (nonCriticalCount < _state._maxThoughtBubbles) {
+            shouldShow = true;
+        }
+        // else: cap reached, don't show this one
+    }
+
+    if (!shouldShow) {
+        if (bubble) bubble.style.display = 'none';
+        _state._visibleThoughtIds.delete(unitId);
+        return;
+    }
+
+    _state._visibleThoughtIds.add(unitId);
 
     // Compute opacity (fade in/out)
     const duration = (unit.thoughtDuration || 5) * 1000;
@@ -1908,18 +4268,38 @@ function _onWaveComplete(data) {
         '#05ffa1',
         3000
     );
+
+    // Fetch and render combat zone heatmap after wave completes
+    _fetchAndRenderHeatmap();
 }
 
 function _onGameStateChange(data) {
     if (data.state === 'countdown') {
         _startCountdownOverlay(data.countdown || 5);
+        // Clear heatmap when a new game starts
+        _clearHeatmap();
+    } else if (data.state === 'active') {
+        // Start polling hostile objectives during active game
+        _startHostileObjectivePoll();
     } else if (data.state === 'victory') {
         _showMapBanner('VICTORY', 'All waves cleared', '#05ffa1', 5000);
         _triggerScreenFlash('#05ffa1', 400);
+        _stopHostileObjectivePoll();
     } else if (data.state === 'defeat') {
         _showMapBanner('DEFEAT', 'Perimeter breached', '#ff2a6d', 5000);
         _triggerScreenFlash('#ff2a6d', 400);
         _triggerScreenShake(500, 8);
+        _stopHostileObjectivePoll();
+    } else if (data.state === 'idle') {
+        _stopHostileObjectivePoll();
+        _clearHazardZones();
+        _clearHostileObjectives();
+        _clearCrowdDensity();
+        _clearCoverPoints();
+        _clearUnitSignals();
+        if (_state._hostileIntelEl) {
+            _state._hostileIntelEl.style.display = 'none';
+        }
     }
 }
 
@@ -2094,10 +4474,6 @@ function _onCombatProjectile(data) {
         tgtY = tgt.y || 0;
     }
 
-    console.log('[FX-PROJ] src=(' + srcX.toFixed(1) + ',' + srcY.toFixed(1) + ')'
-        + ' tgt=(' + tgtX.toFixed(1) + ',' + tgtY.toFixed(1) + ')'
-        + ' srcStore=' + !!srcUnit + ' tgtStore=' + !!tgtUnit);
-
     const srcMc = _gameToMercator(srcX, srcY, FX.ALT);
     const tgtMc = _gameToMercator(tgtX, tgtY, FX.ALT);
     const ms = srcMc.meterInMercatorCoordinateUnits();
@@ -2264,9 +4640,6 @@ function _onCombatElimination(data) {
     // Heavy weapon kills get bigger explosions
     const isHeavyKill = methodVfx.screenShake;
     const sizeMult = isHeavyKill ? 1.5 : 1.0;
-
-    console.log('[FX-ELIM] ' + targetName + ' at (' + (pos.x||0).toFixed(1) + ',' + (pos.y||0).toFixed(1) + ')'
-        + ' fromStore=' + !!elimUnit + ' method=' + method);
 
     if (_state.threeScene && _state.showExplosions) {
         const mc = _gameToMercator(pos.x || 0, pos.y || 0, FX.ALT * 0.5);
@@ -2931,6 +5304,45 @@ function _injectFxCss() {
  * MapLibre only repaints on interaction by default; combat effects
  * need continuous animation frames.
  */
+// ============================================================
+// FPS counter
+// ============================================================
+
+const FPS_UPDATE_INTERVAL = 500;
+
+function _updateFps() {
+    const now = performance.now();
+    _state._frameTimes.push(now);
+
+    while (_state._frameTimes.length > 60) {
+        _state._frameTimes.shift();
+    }
+
+    if (now - _state._lastFpsUpdate < FPS_UPDATE_INTERVAL) return;
+    _state._lastFpsUpdate = now;
+
+    if (_state._frameTimes.length >= 2) {
+        const elapsed = _state._frameTimes[_state._frameTimes.length - 1] - _state._frameTimes[0];
+        const frames = _state._frameTimes.length - 1;
+        _state._currentFps = Math.round((frames / elapsed) * 1000);
+    }
+
+    const fpsEl = document.getElementById('map-fps');
+    if (fpsEl) fpsEl.textContent = `${_state._currentFps} FPS`;
+    const statusEl = document.getElementById('status-fps');
+    if (statusEl) statusEl.textContent = `${_state._currentFps} FPS`;
+}
+
+function _startFpsLoop() {
+    if (_state._fpsLoopRunning) return;
+    _state._fpsLoopRunning = true;
+    function tick() {
+        _updateFps();
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+}
+
 function _ensureRepaintLoop() {
     if (_state.effectsActive) return;
     _state.effectsActive = true;
@@ -2969,6 +5381,49 @@ function _createLayerHud() {
     _updateLayerHud();
 }
 
+// ============================================================
+// Viewport reporting (LOD system)
+// ============================================================
+
+/**
+ * Estimate visible radius in meters from MapLibre zoom level.
+ * At zoom 16, ~150m visible radius on a typical display.
+ * Each zoom level halves the visible area (doubles the radius).
+ */
+function _estimateViewportRadius(zoom) {
+    return 150.0 * Math.pow(2.0, 16.0 - zoom);
+}
+
+/**
+ * Throttled viewport reporter.  Sends the current map center and zoom
+ * to the backend via EventBus -> WebSocket so the LOD system can adjust
+ * simulation fidelity for offscreen targets.
+ *
+ * Throttled to at most once per second to avoid flooding the WS during
+ * smooth pan/zoom animations.
+ */
+let _lastViewportReport = 0;
+const _VIEWPORT_REPORT_INTERVAL = 1000; // ms
+
+function _reportViewport() {
+    if (!_state.map) return;
+    const now = Date.now();
+    if (now - _lastViewportReport < _VIEWPORT_REPORT_INTERVAL) return;
+    _lastViewportReport = now;
+
+    const center = _state.map.getCenter();
+    const zoom = _state.map.getZoom();
+    const radius = _estimateViewportRadius(zoom);
+
+    // Emit on EventBus for the WebSocket manager to pick up
+    EventBus.emit('viewport:update', {
+        center_lat: center.lat,
+        center_lng: center.lng,
+        zoom: zoom,
+        radius: radius,
+    });
+}
+
 function _updateLayerHud() {
     if (!_state.layerHud || !_state.map) return;
     const layers = [];
@@ -2979,7 +5434,20 @@ function _updateLayerHud() {
     if (_state.showUnits && _state.showLabels) layers.push('UNITS');
     if (_state.showModels3d) layers.push('3D');
     if (_state.showGeoLayers) layers.push('GIS');
+    if (_state.showPatrolRoutes) layers.push('PATROL');
     if (_state.showTerrain) layers.push('TERRAIN');
+    if (_state.showHeatmap) layers.push('HEAT');
+    if (_state.showWeaponRange) layers.push('WPNRNG');
+    if (_state.showSwarmHull) layers.push('SWARM');
+    if (_state.showSquadHulls) layers.push('SQUAD');
+    if (_state.showHazardZones) layers.push('HAZARD');
+    if (_state.showHostileObjectives) layers.push('HOBJ');
+    if (_state.showCrowdDensity) layers.push('CROWD');
+    if (_state.showCoverPoints) layers.push('COVER');
+    if (_state.showUnitSignals) layers.push('SIG');
+    if (_state.showHostileIntel) layers.push('INTEL');
+    if (_state.autoFollow) layers.push('AUTO');
+    if (_state.showFog) layers.push('FOG');
 
     // FX off indicators (only show when something is disabled for debugging)
     const fxOff = [];
@@ -3109,6 +5577,10 @@ function _addGridOverlay() {
  * - setup: Deployment. Satellite, buildings, grid, labels. Top-down.
  */
 export function setMapMode(mode) {
+    // Clean up ghost preview when leaving setup mode
+    if (_state.currentMode === 'setup' && mode !== 'setup') {
+        _clearSetupGhost();
+    }
     _state.currentMode = mode;
     switch (mode) {
         case 'observe':
@@ -3126,6 +5598,8 @@ export function setMapMode(mode) {
                 _state.map.easeTo({ pitch: 0, duration: 500 });
                 _state.tiltMode = 'top-down';
             }
+            // Clear weapon range circle in observe mode
+            _clearWeaponRange();
             break;
         case 'tactical':
             setLayers({
@@ -3173,45 +5647,255 @@ export function setMapMode(mode) {
 
 function _onSelectionChanged(unitId) {
     _state.selectedUnitId = unitId;
+
+    // When a unit is selected, show its latest thought (click-to-view).
+    // This makes the thought visible even if it was below broadcast threshold
+    // (stored locally from latestThought).
+    if (unitId) {
+        const unit = TritiumStore.units.get(unitId);
+        if (unit && unit.latestThought && !unit.thoughtText) {
+            // Surface the stored thought for display (auto-dismiss after duration)
+            const lt = unit.latestThought;
+            unit.thoughtText = lt.text;
+            unit.thoughtEmotion = lt.emotion || 'neutral';
+            unit.thoughtImportance = lt.importance || 'normal';
+            unit.thoughtDuration = lt.duration || 5;
+            unit.thoughtExpires = Date.now() + (lt.duration || 5) * 1000;
+        }
+    }
+
     // Re-render all markers to update selection highlight
     for (const [id, marker] of Object.entries(_state.unitMarkers)) {
         const unit = TritiumStore.units.get(id);
         if (unit) _updateMarkerElement(marker, unit);
     }
+    // Update weapon range circle for new selection (or clear if deselected)
+    _updateWeaponRange();
 }
 
 function _onUnitsUpdated() {
     _updateUnits();
 }
 
+/**
+ * Enter dispatch mode — next click on the map sends the unit to that location.
+ * Triggered by DISPATCH button in unit inspector / device modal.
+ */
+function _onDispatchModeEnter(data) {
+    if (!data || !data.id) return;
+    _state.dispatchMode = true;
+    _state.dispatchUnitId = data.id;
+    if (_state.mapContainer) _state.mapContainer.style.cursor = 'crosshair';
+    console.log(`[MAP-ML] Dispatch mode: click map to send ${data.id}`);
+}
+
+/**
+ * Handle unit:patrol-mode — enter patrol point placement mode.
+ * Similar to dispatch mode but sets patrol waypoints.
+ */
+function _onPatrolModeEnter(data) {
+    if (!data || !data.id) return;
+    _state.patrolMode = true;
+    _state.patrolUnitId = data.id;
+    _state.patrolWaypoints = [];
+    if (_state.mapContainer) _state.mapContainer.style.cursor = 'crosshair';
+    console.log(`[MAP-ML] Patrol mode: click map to set patrol points for ${data.id}`);
+}
+
+/**
+ * Handle unit:aim-mode — enter aim targeting mode.
+ * Click on the map to set aim direction for the unit.
+ */
+function _onAimModeEnter(data) {
+    if (!data || !data.id) return;
+    _state.aimMode = true;
+    _state.aimUnitId = data.id;
+    if (_state.mapContainer) _state.mapContainer.style.cursor = 'crosshair';
+    console.log(`[MAP-ML] Aim mode: click map to aim ${data.id}`);
+}
+
 function _onDispatched(data) {
-    // Could draw dispatch arrow on map
+    // Draw dispatch arrow from unit to target position
+    if (!data || !data.target) return;
+    const unit = data.id ? TritiumStore.units.get(data.id) : null;
+    if (unit && unit.position) {
+        _state.dispatchArrows.push({
+            fromX: unit.position.x,
+            fromY: unit.position.y,
+            toX: data.target.x,
+            toY: data.target.y,
+            time: Date.now(),
+        });
+    }
     console.log('[MAP-ML] Unit dispatched:', data);
 }
 
+/**
+ * Handle unit:dispatch — the request to dispatch a unit (from context menu
+ * or other UI). Sends the API call and emits unit:dispatched on success.
+ */
+function _onUnitDispatch(data) {
+    if (!data || !data.unitId || !data.target) return;
+    const unitId = data.unitId;
+    const tx = data.target.x;
+    const ty = data.target.y;
+
+    // Send dispatch command to backend
+    fetch('/api/amy/simulation/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unit_id: unitId, target: { x: tx, y: ty } }),
+    }).then(resp => {
+        if (resp.ok) {
+            EventBus.emit('unit:dispatched', { id: unitId, target: { x: tx, y: ty } });
+        } else {
+            // Fallback: emit via legacy command endpoint
+            fetch('/api/amy/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'dispatch', target_id: unitId, x: tx, y: ty }),
+            }).then(r => {
+                if (r.ok) EventBus.emit('unit:dispatched', { id: unitId, target: { x: tx, y: ty } });
+            }).catch(() => {
+                EventBus.emit('toast:show', { message: 'Dispatch failed', type: 'alert' });
+            });
+        }
+    }).catch(() => {
+        EventBus.emit('toast:show', { message: 'Dispatch failed: network error', type: 'alert' });
+    });
+}
+
 function _onMapClick(e) {
+    // Close context menu on any left click
+    if (ContextMenu.isVisible()) {
+        ContextMenu.hide();
+        return;
+    }
+
+    // Dispatch mode: send selected unit to clicked location
+    if (_state.dispatchMode && _state.dispatchUnitId) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        EventBus.emit('unit:dispatch', {
+            unitId: _state.dispatchUnitId,
+            target: { x: game.x, y: game.y },
+        });
+        _state.dispatchMode = false;
+        _state.dispatchUnitId = null;
+        if (_state.mapContainer) _state.mapContainer.style.cursor = '';
+        return;
+    }
+
+    // Patrol mode: add waypoint for patrol route
+    if (_state.patrolMode && _state.patrolUnitId) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        if (!_state.patrolWaypoints) _state.patrolWaypoints = [];
+        _state.patrolWaypoints.push({ x: game.x, y: game.y });
+        // Show transient marker at waypoint
+        _onDropWaypoint({ x: game.x, y: game.y, unitId: _state.patrolUnitId });
+        // After 2+ points, send patrol via Amy command (no control lock needed)
+        if (_state.patrolWaypoints.length >= 2) {
+            const wpStr = _state.patrolWaypoints.map(w => `{${w.x.toFixed(1)},${w.y.toFixed(1)}}`).join(',');
+            fetch('/api/amy/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: `patrol(${wpStr})`,
+                    target_id: _state.patrolUnitId,
+                }),
+            }).then(resp => {
+                if (resp.ok) EventBus.emit('toast:show', { message: 'Patrol route set', type: 'info' });
+                else EventBus.emit('toast:show', { message: 'Patrol command rejected', type: 'alert' });
+            }).catch(() => {
+                EventBus.emit('toast:show', { message: 'Failed to set patrol', type: 'alert' });
+            });
+            _state.patrolMode = false;
+            _state.patrolUnitId = null;
+            _state.patrolWaypoints = [];
+            if (_state.mapContainer) _state.mapContainer.style.cursor = '';
+        }
+        return;
+    }
+
+    // Aim mode: set turret aim direction via Amy command (no control lock needed)
+    if (_state.aimMode && _state.aimUnitId) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        fetch('/api/amy/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: `motor.aim(${game.x.toFixed(1)},${game.y.toFixed(1)})`,
+                target_id: _state.aimUnitId,
+            }),
+        }).then(resp => {
+            if (resp.ok) EventBus.emit('toast:show', { message: 'Aim set', type: 'info' });
+            else EventBus.emit('toast:show', { message: 'Aim command rejected', type: 'alert' });
+        }).catch(() => {
+            EventBus.emit('toast:show', { message: 'Aim failed', type: 'alert' });
+        });
+        _state.aimMode = false;
+        _state.aimUnitId = null;
+        if (_state.mapContainer) _state.mapContainer.style.cursor = '';
+        return;
+    }
+
+    // Operator control: click-to-dispatch the controlled unit
+    const ctrlUnitId = TritiumStore.get('controlledUnitId');
+    if (ctrlUnitId) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        fetch(`/api/npc/${encodeURIComponent(ctrlUnitId)}/action`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: `move_to:${game.x.toFixed(1)},${game.y.toFixed(1)}` }),
+        }).then(resp => {
+            if (resp.ok) {
+                EventBus.emit('unit:dispatched', { id: ctrlUnitId, target: { x: game.x, y: game.y } });
+            }
+        }).catch(() => {});
+        return;
+    }
+
+    // Setup mode: place a unit at the click location
+    if (_state.currentMode === 'setup') {
+        const unitType = (typeof window !== 'undefined' && window._setupPlacementType) || 'turret';
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        const displayName = unitType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        fetch('/api/game/place', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: displayName,
+                asset_type: unitType,
+                position: { x: game.x, y: game.y },
+            }),
+        }).then(resp => {
+            if (resp.ok) {
+                EventBus.emit('toast:show', { message: `${displayName} placed`, type: 'info' });
+            } else {
+                resp.json().then(d => {
+                    EventBus.emit('toast:show', { message: d.detail || 'Placement failed', type: 'alert' });
+                }).catch(() => {
+                    EventBus.emit('toast:show', { message: 'Placement failed', type: 'alert' });
+                });
+            }
+        }).catch(() => {
+            EventBus.emit('toast:show', { message: 'Placement failed: network error', type: 'alert' });
+        });
+        return;
+    }
     // Deselect if clicking empty area
     TritiumStore.set('map.selectedUnitId', null);
 }
 
 function _onMapRightClick(e) {
     e.preventDefault();
-    // Dispatch selected unit to clicked location
-    const selectedId = _state.selectedUnitId || TritiumStore.get('map.selectedUnitId');
-    if (!selectedId) return;
-
-    const lngLat = e.lngLat;
-    // Convert to game coordinates
     if (!_state.geoCenter) return;
-    const R = 6378137;
-    const latRad = _state.geoCenter.lat * Math.PI / 180;
-    const gx = (lngLat.lng - _state.geoCenter.lng) * Math.PI / 180 * R * Math.cos(latRad);
-    const gy = (lngLat.lat - _state.geoCenter.lat) * Math.PI / 180 * R;
 
-    EventBus.emit('unit:dispatch', {
-        unitId: selectedId,
-        target: { x: gx, y: gy },
-    });
+    const selectedId = _state.selectedUnitId || TritiumStore.get('map.selectedUnitId');
+    const gamePos = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+
+    // Show context menu at the click position
+    const container = _state.container || document.body;
+    ContextMenu.show(container, selectedId, gamePos, e.point.x, e.point.y);
 }
 
 // ============================================================
@@ -3219,6 +5903,10 @@ function _onMapRightClick(e) {
 // ============================================================
 
 export function destroyMap() {
+    // Close context menu
+    ContextMenu.hide();
+    // Clean up ghost preview
+    _clearSetupGhost();
     if (_state.map) {
         _state.map.remove();
         _state.map = null;
@@ -3238,7 +5926,17 @@ export function destroyMap() {
         _state.visionSystem.dispose();
         _state.visionSystem = null;
     }
+    // Stop adaptive unit update loop
+    clearInterval(_state._unitUpdateTimer);
+    _state._unitUpdateTimer = null;
     _state._meterScale = null;
+    // Stop hostile objective polling
+    _stopHostileObjectivePoll();
+    // Clean up hostile intel HUD
+    if (_state._hostileIntelEl) {
+        _state._hostileIntelEl.remove();
+        _state._hostileIntelEl = null;
+    }
     _state.initialized = false;
     console.log('[MAP-ML] Map destroyed');
 }
@@ -3342,6 +6040,17 @@ export function toggleTerrain() {
     console.log(`[MAP-ML] Terrain ${_state.showTerrain ? 'ON' : 'OFF'} (exaggeration: ${_state.terrainExaggeration})`);
 }
 
+export function toggleUnits() {
+    _state.showUnits = !_state.showUnits;
+    // Immediately show/hide all DOM unit markers
+    for (const marker of Object.values(_state.unitMarkers)) {
+        const el = marker.getElement();
+        if (el) el.style.display = _state.showUnits ? '' : 'none';
+    }
+    _updateLayerHud();
+    console.log(`[MAP-ML] Unit Markers ${_state.showUnits ? 'ON' : 'OFF'}`);
+}
+
 export function toggleLabels() {
     _state.showLabels = !_state.showLabels;
     // _updateUnits() runs at 10Hz and respects showLabels in its display condition
@@ -3405,12 +6114,30 @@ export function toggleMesh() {
     console.log(`[MAP-ML] Mesh network ${_state.showMesh ? 'ON' : 'OFF'}`);
 }
 
+export function togglePatrolRoutes() {
+    _state.showPatrolRoutes = !_state.showPatrolRoutes;
+    if (_state.map) {
+        const vis = _state.showPatrolRoutes ? 'visible' : 'none';
+        if (_state.map.getLayer(PATROL_ROUTES_LINE)) {
+            _state.map.setLayoutProperty(PATROL_ROUTES_LINE, 'visibility', vis);
+        }
+        if (_state.map.getLayer(PATROL_ROUTES_DOTS)) {
+            _state.map.setLayoutProperty(PATROL_ROUTES_DOTS, 'visibility', vis);
+        }
+    }
+    _updateLayerHud();
+    console.log(`[MAP-ML] Patrol Routes ${_state.showPatrolRoutes ? 'ON' : 'OFF'}`);
+}
+
 /**
  * Toggle NPC thought bubbles on/off.
  */
 export function toggleThoughts() {
     _state.showThoughts = !_state.showThoughts;
     // Immediately hide/show existing bubbles
+    if (!_state.showThoughts) {
+        _state._visibleThoughtIds.clear();
+    }
     for (const id of Object.keys(_state.unitMarkers)) {
         const el = _state.unitMarkers[id].getElement();
         const bubble = el.querySelector('.thought-bubble');
@@ -3423,7 +6150,7 @@ export function toggleAllLayers() {
     // Decide direction: if most default-on layers are currently on, turn OFF.
     const defaultOnKeys = [
         'showSatellite', 'showRoads', 'showBuildings', 'showWaterways', 'showParks',
-        'showUnits', 'showLabels', 'showMesh',
+        'showUnits', 'showLabels', 'showMesh', 'showPatrolRoutes',
         'showTracers', 'showExplosions', 'showParticles', 'showHitFlashes', 'showFloatingText',
         'showKillFeed', 'showScreenFx', 'showBanners', 'showLayerHud',
         'showHealthBars', 'showSelectionFx',
@@ -3436,7 +6163,7 @@ export function toggleAllLayers() {
 
     // Set the FX/overlay/decoration flags that setLayers doesn't cover
     const fxKeys = [
-        'showGrid', 'showMesh',
+        'showGrid', 'showMesh', 'showPatrolRoutes',
         'showHealthBars', 'showSelectionFx',
         'showTracers', 'showExplosions', 'showParticles', 'showHitFlashes', 'showFloatingText',
         'showKillFeed', 'showScreenFx', 'showBanners', 'showLayerHud',
@@ -3450,7 +6177,7 @@ export function toggleAllLayers() {
     if (feed) feed.style.display = target ? '' : 'none';
     if (_state.layerHud) _state.layerHud.style.display = target ? '' : 'none';
 
-    // Grid layers
+    // Grid + patrol route layers
     if (_state.map) {
         const vis = target ? 'visible' : 'none';
         if (_state.map.getLayer('grid-minor')) {
@@ -3458,6 +6185,12 @@ export function toggleAllLayers() {
         }
         if (_state.map.getLayer('grid-major')) {
             try { _state.map.setLayoutProperty('grid-major', 'visibility', vis); } catch (e) {}
+        }
+        if (_state.map.getLayer(PATROL_ROUTES_LINE)) {
+            try { _state.map.setLayoutProperty(PATROL_ROUTES_LINE, 'visibility', vis); } catch (e) {}
+        }
+        if (_state.map.getLayer(PATROL_ROUTES_DOTS)) {
+            try { _state.map.setLayoutProperty(PATROL_ROUTES_DOTS, 'visibility', vis); } catch (e) {}
         }
     }
 
@@ -3535,6 +6268,91 @@ export function toggleSelectionFx() {
     console.log(`[MAP-ML] Selection FX ${_state.showSelectionFx ? 'ON' : 'OFF'}`);
 }
 
+export function toggleWeaponRange() {
+    _state.showWeaponRange = !_state.showWeaponRange;
+    if (!_state.showWeaponRange) _clearWeaponRange();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Weapon Range ${_state.showWeaponRange ? 'ON' : 'OFF'}`);
+}
+
+export function toggleHeatmap() {
+    _state.showHeatmap = !_state.showHeatmap;
+    if (_state.map) {
+        if (_state.map.getLayer(COMBAT_HEATMAP_LAYER)) {
+            _state.map.setLayoutProperty(COMBAT_HEATMAP_LAYER, 'visibility',
+                _state.showHeatmap ? 'visible' : 'none');
+        }
+    }
+    _updateLayerHud();
+    console.log(`[MAP-ML] Heatmap ${_state.showHeatmap ? 'ON' : 'OFF'}`);
+}
+
+export function toggleSwarmHull() {
+    _state.showSwarmHull = !_state.showSwarmHull;
+    if (!_state.showSwarmHull) _clearSwarmHull();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Swarm Hull ${_state.showSwarmHull ? 'ON' : 'OFF'}`);
+}
+
+export function toggleSquadHulls() {
+    _state.showSquadHulls = !_state.showSquadHulls;
+    if (!_state.showSquadHulls) _clearSquadHulls();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Squad Hulls ${_state.showSquadHulls ? 'ON' : 'OFF'}`);
+}
+
+export function toggleHazardZones() {
+    _state.showHazardZones = !_state.showHazardZones;
+    if (!_state.showHazardZones) _clearHazardZones();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Hazard Zones ${_state.showHazardZones ? 'ON' : 'OFF'}`);
+}
+
+export function toggleHostileObjectives() {
+    _state.showHostileObjectives = !_state.showHostileObjectives;
+    if (!_state.showHostileObjectives) _clearHostileObjectives();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Hostile Objectives ${_state.showHostileObjectives ? 'ON' : 'OFF'}`);
+}
+
+export function toggleCrowdDensity() {
+    _state.showCrowdDensity = !_state.showCrowdDensity;
+    if (!_state.showCrowdDensity) _clearCrowdDensity();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Crowd Density ${_state.showCrowdDensity ? 'ON' : 'OFF'}`);
+}
+
+export function toggleCoverPoints() {
+    _state.showCoverPoints = !_state.showCoverPoints;
+    if (!_state.showCoverPoints) _clearCoverPoints();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Cover Points ${_state.showCoverPoints ? 'ON' : 'OFF'}`);
+}
+
+export function toggleUnitSignals() {
+    _state.showUnitSignals = !_state.showUnitSignals;
+    if (!_state.showUnitSignals) _clearUnitSignals();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Unit Signals ${_state.showUnitSignals ? 'ON' : 'OFF'}`);
+}
+
+export function toggleHostileIntel() {
+    _state.showHostileIntel = !_state.showHostileIntel;
+    if (!_state.showHostileIntel && _state._hostileIntelEl) {
+        _state._hostileIntelEl.style.display = 'none';
+    }
+    _updateLayerHud();
+    console.log(`[MAP-ML] Hostile Intel ${_state.showHostileIntel ? 'ON' : 'OFF'}`);
+}
+
+export function toggleAutoFollow() {
+    if (_state.autoFollow) {
+        _stopAutoFollow();
+    } else {
+        _startAutoFollow();
+    }
+}
+
 export function centerOnAction() {
     let sumLng = 0, sumLat = 0, count = 0;
     TritiumStore.units.forEach(u => {
@@ -3564,6 +6382,7 @@ export function resetCamera() {
             bearing: 0,
             duration: 800,
         });
+        _clearCombatRadius();
     }
 }
 
@@ -3593,6 +6412,7 @@ export function getMapState() {
         showWaterways: _state.showWaterways,
         showParks: _state.showParks,
         showMesh: _state.showMesh,
+        showPatrolRoutes: _state.showPatrolRoutes,
         showThoughts: _state.showThoughts,
         showTracers: _state.showTracers,
         showExplosions: _state.showExplosions,
@@ -3605,6 +6425,17 @@ export function getMapState() {
         showLayerHud: _state.showLayerHud,
         showHealthBars: _state.showHealthBars,
         showSelectionFx: _state.showSelectionFx,
+        showWeaponRange: _state.showWeaponRange,
+        showHeatmap: _state.showHeatmap,
+        showSwarmHull: _state.showSwarmHull,
+        showSquadHulls: _state.showSquadHulls,
+        showHazardZones: _state.showHazardZones,
+        showHostileObjectives: _state.showHostileObjectives,
+        showCrowdDensity: _state.showCrowdDensity,
+        showCoverPoints: _state.showCoverPoints,
+        showUnitSignals: _state.showUnitSignals,
+        showHostileIntel: _state.showHostileIntel,
+        autoFollow: _state.autoFollow,
         tiltMode: _state.tiltMode,
         currentMode: _state.currentMode,
     };
@@ -3727,6 +6558,36 @@ export function setLayers(layers) {
     if (layers.terrain !== undefined) {
         const want = !!layers.terrain;
         if (_state.showTerrain !== want) toggleTerrain();
+    }
+    // Patrol routes
+    if (layers.patrolRoutes !== undefined) {
+        const want = !!layers.patrolRoutes;
+        if (_state.showPatrolRoutes !== want) togglePatrolRoutes();
+    }
+    // Weapon range
+    if (layers.weaponRange !== undefined) {
+        const want = !!layers.weaponRange;
+        if (_state.showWeaponRange !== want) toggleWeaponRange();
+    }
+    // Heatmap
+    if (layers.heatmap !== undefined) {
+        const want = !!layers.heatmap;
+        if (_state.showHeatmap !== want) toggleHeatmap();
+    }
+    // Swarm hull
+    if (layers.swarmHull !== undefined) {
+        const want = !!layers.swarmHull;
+        if (_state.showSwarmHull !== want) toggleSwarmHull();
+    }
+    // Squad hulls
+    if (layers.squadHulls !== undefined) {
+        const want = !!layers.squadHulls;
+        if (_state.showSquadHulls !== want) toggleSquadHulls();
+    }
+    // Auto-follow
+    if (layers.autoFollow !== undefined) {
+        const want = !!layers.autoFollow;
+        if (_state.autoFollow !== want) toggleAutoFollow();
     }
     _updateLayerHud();
     console.log('[MAP-ML] Layers set:', JSON.stringify(getMapState()));

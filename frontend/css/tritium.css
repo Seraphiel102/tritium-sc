@@ -2933,6 +2933,19 @@ button:disabled:hover {
     font-weight: 700;
     letter-spacing: 3px;
 }
+/* Mode-specific wave title colors */
+.war-wave-title.war-wave-mode-battle {
+    color: #00f0ff;
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+}
+.war-wave-title.war-wave-mode-civil {
+    color: #ffa500;
+    text-shadow: 0 0 10px rgba(255, 165, 0, 0.5);
+}
+.war-wave-title.war-wave-mode-swarm {
+    color: #ff2a6d;
+    text-shadow: 0 0 10px rgba(255, 42, 109, 0.5);
+}
 .war-wave-complete-text {
     color: #000;
 }
@@ -3342,4 +3355,46 @@ button:disabled:hover {
     font-size: 14px;
     font-weight: bold;
     text-shadow: 0 0 6px #ff2a6d;
+}
+
+/* ========================================
+   Radio Ghost: BLE/WiFi detected but not visual
+   ======================================== */
+.tritium-unit-marker.radio-ghost .tritium-unit-inner {
+    opacity: 0.5;
+    filter: blur(2px) hue-rotate(180deg);
+    animation: radio-pulse 2s ease-in-out infinite;
+}
+.tritium-unit-marker.radio-ghost::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 40px;
+    height: 40px;
+    transform: translate(-50%, -50%);
+    border: 1px solid #00f0ff;
+    border-radius: 50%;
+    opacity: 0.4;
+    animation: radio-ring 2s ease-out infinite;
+}
+.tritium-unit-marker.radio-ghost::after {
+    content: attr(data-signal-strength);
+    position: absolute;
+    bottom: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #00f0ff;
+    font-size: 9px;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    text-shadow: 0 0 4px #00f0ff;
+}
+@keyframes radio-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.6; }
+}
+@keyframes radio-ring {
+    0% { width: 20px; height: 20px; opacity: 0.6; }
+    100% { width: 60px; height: 60px; opacity: 0; }
 }

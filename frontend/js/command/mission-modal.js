@@ -54,6 +54,7 @@ let _selectedModel = '';  // empty = auto
 let _isGenerating = false;
 let _scenario = null;
 let _totalSteps = 8;
+let _eventBus = null;
 
 
 // -- DOM Creation --------------------------------------------------------------
@@ -398,18 +399,51 @@ async function _launchMission() {
         warHudSetLoadingMessages(_scenario.loading_messages);
     }
 
+    // Pass bonus objectives to HUD for in-game tracking
+    if (_scenario && _scenario.win_conditions && _scenario.win_conditions.bonus_objectives
+        && typeof warHudSetBonusObjectives === 'function') {
+        warHudSetBonusObjectives(_scenario.win_conditions.bonus_objectives);
+    }
+
     try {
         const resp = await fetch('/api/game/mission/apply', { method: 'POST' });
+        if (!resp.ok) {
+            // Surface the backend error detail (e.g. "Cannot begin war in state: countdown")
+            let detail = 'Unknown error';
+            try { const err = await resp.json(); detail = err.detail || detail; } catch (_) { /* no body */ }
+            _statusLabel.textContent = 'DEPLOYMENT FAILED: ' + detail;
+            _overlay.querySelector('[data-action="launch"]').hidden = false;
+            return;
+        }
         const data = await resp.json();
         if (data.status === 'scenario_applied') {
             _statusLabel.textContent = 'MISSION LAUNCHED';
+
+            // Pan camera to mission area
+            if (_eventBus) {
+                if (data.mission_center) {
+                    _eventBus.emit('map:flyToMission', data.mission_center);
+                } else if (_scenario && _scenario.units) {
+                    // Fallback: compute defender centroid
+                    let sx = 0, sy = 0, count = 0;
+                    for (const u of _scenario.units) {
+                        const pos = u.position;
+                        if (Array.isArray(pos)) { sx += pos[0]; sy += pos[1]; count++; }
+                        else if (pos) { sx += (pos.x || 0); sy += (pos.y || 0); count++; }
+                    }
+                    if (count > 0) {
+                        _eventBus.emit('map:flyToMission', { x: sx / count, y: sy / count, radius_m: 200 });
+                    }
+                }
+            }
+
             setTimeout(() => hide(), 1500);
         } else {
             _statusLabel.textContent = 'DEPLOYMENT FAILED';
             _overlay.querySelector('[data-action="launch"]').hidden = false;
         }
     } catch (e) {
-        _statusLabel.textContent = 'DEPLOYMENT FAILED';
+        _statusLabel.textContent = 'DEPLOYMENT FAILED: ' + (e.message || 'Network error');
         _overlay.querySelector('[data-action="launch"]').hidden = false;
     }
 }
@@ -508,8 +542,9 @@ function _escapeHtml(text) {
 function initMissionModal(eventBus) {
     _createModal();
 
-    // Listen for WebSocket mission_progress events
+    // Store EventBus reference for map:flyToMission emission on launch
     if (eventBus) {
+        _eventBus = eventBus;
         eventBus.on('mission:progress', (data) => {
             handleMissionProgress(data);
         });

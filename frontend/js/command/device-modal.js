@@ -62,7 +62,7 @@ const DeviceAPI = {
         return fetch(`/api/devices/${deviceId}/command`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ topic_suffix: topicSuffix, payload }),
+            body: JSON.stringify(payload),
         });
     },
 };
@@ -91,6 +91,33 @@ function _healthColor(pct) {
 function _batteryStr(bat) {
     if (bat === null || bat === undefined) return '--';
     return Math.round(bat * 100) + '%';
+}
+
+/**
+ * Update dc-value spans in place by matching their dc-label sibling text.
+ * Avoids full innerHTML re-render which causes thought text flashing.
+ * @param {Element} container
+ * @param {Object<string,string>} values  label -> new text content
+ */
+function _updateStatValues(container, values) {
+    const rows = container.querySelectorAll('.dc-stat-row');
+    for (const row of rows) {
+        const label = row.querySelector('.dc-label');
+        const value = row.querySelector('.dc-value');
+        if (!label || !value) continue;
+        const newVal = values[label.textContent];
+        if (newVal !== undefined && value.textContent !== newVal) {
+            value.textContent = newVal;
+        }
+    }
+    // Update health bar if present
+    if (values._hpPct !== undefined) {
+        const fill = container.querySelector('.dc-health-fill');
+        if (fill) {
+            fill.style.width = values._hpPct + '%';
+            if (values._hpColor) fill.style.background = values._hpColor;
+        }
+    }
 }
 
 // ============================================================
@@ -147,34 +174,49 @@ const RoverControl = {
             const cmd = btn.dataset.cmd || btn.getAttribute('data-cmd');
             if (!cmd) continue;
             btn.addEventListener('click', () => {
+                const status = container.querySelector('.dc-cmd-status');
                 switch (cmd) {
                     case 'dispatch':
+                        // Use the event name that map.js and map-maplibre.js listen for
                         if (typeof EventBus !== 'undefined') {
-                            EventBus.emit('device:dispatch_mode', { deviceId: device.id });
+                            EventBus.emit('unit:dispatch-mode', { id: device.id });
                         }
+                        if (status) status.textContent = 'Click map to set destination';
                         break;
                     case 'patrol':
                         if (typeof EventBus !== 'undefined') {
-                            EventBus.emit('device:patrol_mode', { deviceId: device.id });
+                            EventBus.emit('unit:patrol-mode', { id: device.id });
                         }
+                        if (status) status.textContent = 'Click map to set patrol points';
                         break;
                     case 'recall':
                         api.recall(device.id);
+                        if (status) status.textContent = 'Recall sent';
                         break;
                     case 'stop':
                         api.stop(device.id);
+                        if (status) status.textContent = 'Stop sent';
                         break;
                     case 'fire':
                         api.fire(device.id);
+                        if (status) status.textContent = 'Fire command sent';
                         break;
                     case 'aim':
                         if (typeof EventBus !== 'undefined') {
-                            EventBus.emit('device:aim_mode', { deviceId: device.id });
+                            EventBus.emit('unit:aim-mode', { id: device.id });
                         }
+                        if (status) status.textContent = 'Click map to aim';
+                        break;
+                    case 'auto':
+                        api.sendCommand(device.id, 'auto_target()');
+                        if (status) status.textContent = 'Auto-targeting enabled';
+                        break;
+                    case 'manual':
+                        api.sendCommand(device.id, 'manual_target()');
+                        if (status) status.textContent = 'Manual mode enabled';
                         break;
                     case 'send': {
                         const input = container.querySelector('.dc-cmd-input');
-                        const status = container.querySelector('.dc-cmd-status');
                         if (input && input.value && input.value.trim()) {
                             api.sendCommand(device.id, input.value.trim())
                                 .then(r => {
@@ -204,7 +246,18 @@ const RoverControl = {
     },
 
     update(container, device) {
-        // Live telemetry update — update stat values in place
+        const hpPct = _pct(device.health, device.maxHealth);
+        const hpColor = _healthColor(hpPct);
+        _updateStatValues(container, {
+            'STATUS': (device.status || 'idle').toUpperCase(),
+            'POSITION': `(${(device.position?.x || 0).toFixed(1)}, ${(device.position?.y || 0).toFixed(1)})`,
+            'HEADING': Math.round(device.heading || 0) + '\u00B0',
+            'SPEED': (device.speed || 0).toFixed(1) + ' m/s',
+            'BATTERY': _batteryStr(device.battery),
+            'HEALTH': `${Math.round(device.health || 0)}/${device.maxHealth || 0}`,
+            _hpPct: hpPct,
+            _hpColor: hpColor,
+        });
     },
 
     destroy(container) {
@@ -301,13 +354,22 @@ const TurretControl = {
     },
 
     bind(container, device, api) {
-        // PTZ sliders
+        // PTZ sliders — update display AND send aim commands (debounced)
+        let _aimTimer = null;
         const sliders = container.querySelectorAll ? container.querySelectorAll('.dc-slider') : [];
         for (const slider of sliders) {
             slider.addEventListener('input', () => {
-                const axis = slider.dataset.axis || slider.getAttribute('data-axis');
                 const valDisplay = slider.parentElement?.querySelector('.dc-slider-val');
                 if (valDisplay) valDisplay.textContent = slider.value + '\u00B0';
+                // Debounce aim commands to avoid flooding the backend
+                if (_aimTimer) clearTimeout(_aimTimer);
+                _aimTimer = setTimeout(() => {
+                    const panSlider = container.querySelector('[data-axis="pan"]');
+                    const tiltSlider = container.querySelector('[data-axis="tilt"]');
+                    const pan = panSlider ? Number(panSlider.value) : 0;
+                    const tilt = tiltSlider ? Number(tiltSlider.value) : 0;
+                    api.aim(device.id, pan, tilt);
+                }, 150);
             });
         }
 
@@ -623,14 +685,40 @@ const NPCControl = {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ controller_id: 'operator' }),
                         }).then(r => {
-                            if (status) status.textContent = r.ok ? 'Control acquired' : 'Failed';
+                            if (r.ok) {
+                                if (status) status.textContent = 'Control acquired — WASD to move, click map to dispatch';
+                                if (typeof TritiumStore !== 'undefined') {
+                                    TritiumStore.set('controlledUnitId', deviceId);
+                                }
+                                if (typeof EventBus !== 'undefined') {
+                                    EventBus.emit('unit:control-acquired', { id: deviceId });
+                                }
+                                btn.disabled = true;
+                                const releaseBtn = container.querySelector('[data-cmd="release_control"]');
+                                if (releaseBtn) releaseBtn.classList.add('dc-btn-active');
+                            } else {
+                                if (status) status.textContent = 'Failed';
+                            }
                         }).catch(() => { if (status) status.textContent = 'Error'; });
                         break;
                     case 'release_control':
                         fetch(`/api/npc/${encodeURIComponent(deviceId)}/control`, {
                             method: 'DELETE',
                         }).then(r => {
-                            if (status) status.textContent = r.ok ? 'Released' : 'Failed';
+                            if (r.ok) {
+                                if (status) status.textContent = 'Released';
+                                if (typeof TritiumStore !== 'undefined') {
+                                    TritiumStore.set('controlledUnitId', null);
+                                }
+                                if (typeof EventBus !== 'undefined') {
+                                    EventBus.emit('unit:control-released', { id: deviceId });
+                                }
+                                const takeBtn = container.querySelector('[data-cmd="take_control"]');
+                                if (takeBtn) takeBtn.disabled = false;
+                                btn.classList.remove('dc-btn-active');
+                            } else {
+                                if (status) status.textContent = 'Failed';
+                            }
                         }).catch(() => { if (status) status.textContent = 'Error'; });
                         break;
                     case 'set_thought': {
@@ -654,7 +742,33 @@ const NPCControl = {
         }
     },
 
-    update(container, device) {},
+    update(container, device) {
+        const pos = device.position || { x: 0, y: 0 };
+        const fsm = (device.fsm_state || device.fsmState || 'unknown').toUpperCase();
+        const maxHp = device.max_health || device.maxHealth || 100;
+        const hp = device.health !== undefined ? Math.round(device.health) : '--';
+        const hpPct = device.health !== undefined ? _pct(device.health, maxHp) : 0;
+        _updateStatValues(container, {
+            'FSM STATE': fsm,
+            'POSITION': `(${(pos.x || 0).toFixed(1)}, ${(pos.y || 0).toFixed(1)})`,
+            'SPEED': (device.speed || 0).toFixed(1) + ' m/s',
+            'HEADING': device.heading !== undefined ? Math.round(device.heading) + '\u00B0' : '--',
+            'HEALTH': `${hp}/${Math.round(maxHp)} (${hpPct}%)`,
+        });
+        // Update thought in place without re-rendering entire block
+        const thoughtEl = container.querySelector('.dc-npc-thought');
+        if (thoughtEl) {
+            const thought = device.thoughtText || null;
+            const emotion = device.thoughtEmotion || 'neutral';
+            const emotionColor = { curious: '#00f0ff', afraid: '#fcee0a', angry: '#ff2a6d', happy: '#05ffa1', neutral: '#888888' }[emotion] || '#888888';
+            const newHTML = thought
+                ? `<span class="dc-npc-emotion" style="background:${emotionColor}">${_esc(emotion)}</span> <q>${_esc(thought)}</q>`
+                : '<span style="color:var(--text-ghost)">No active thought</span>';
+            if (thoughtEl.innerHTML !== newHTML) {
+                thoughtEl.innerHTML = newHTML;
+            }
+        }
+    },
     destroy(container) {
         if (this._pollInterval) {
             clearInterval(this._pollInterval);
@@ -714,7 +828,9 @@ const DeviceControlRegistry = {
             'tank': 'rover',
             'apc': 'rover',
             'swarm_drone': 'drone',
-            'person': 'sensor',
+            'person': 'npc',
+            'animal': 'npc',
+            'vehicle': 'npc',
             'pir': 'sensor',
             'microwave': 'sensor',
             'acoustic': 'sensor',

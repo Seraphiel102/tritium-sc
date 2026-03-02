@@ -77,6 +77,8 @@ export class Panel {
     }
 
     mount() {
+        // Clear previous content so remount after close() doesn't duplicate
+        this.bodyEl.innerHTML = '';
         // Create content via panel definition
         if (this.def.create) {
             const content = this.def.create(this);
@@ -378,6 +380,10 @@ export class PanelManager {
     open(id) {
         if (this._panels.has(id)) {
             const panel = this._panels.get(id);
+            // Remount if panel was previously closed (unmounted)
+            if (!panel._visible) {
+                panel.mount();
+            }
             panel.show();
             if (panel.minimized) panel.restore();
             return panel;
@@ -392,7 +398,14 @@ export class PanelManager {
         const panel = new Panel(def, this);
         this._panels.set(id, panel);
         this.container.appendChild(panel.el);
-        panel.mount();
+        try {
+            panel.mount();
+        } catch (err) {
+            console.error(`[PanelManager] mount() failed for panel '${id}':`, err);
+            panel.el.remove();
+            this._panels.delete(id);
+            return null;
+        }
         panel._clampToBounds();
 
         EventBus.emit('panel:opened', { id });
@@ -400,13 +413,14 @@ export class PanelManager {
     }
 
     /**
-     * Close a panel (hide it, preserving state for reopen).
+     * Close a panel (unmount subscriptions and hide; remounted on reopen).
      * @param {string} id
      */
     close(id) {
         const panel = this._panels.get(id);
         if (!panel) return;
 
+        panel.unmount();
         panel.hide();
         this.saveLayout();
         EventBus.emit('panel:closed', { id });

@@ -11,15 +11,6 @@
 
 import { EventBus } from './events.js';
 
-/**
- * Get the currently selected battle scenario name.
- * Deprecated: always returns null. All missions route through MissionModal.
- * @returns {null}
- */
-export function getSelectedScenario() {
-    return null;
-}
-
 // ---------------------------------------------------------------------------
 // Menu definitions (data-driven)
 // ---------------------------------------------------------------------------
@@ -65,7 +56,7 @@ function _fileMenuItems(layoutManager) {
 }
 
 function _viewMenuItems(panelManager) {
-    const keyMap = { amy: '1', units: '2', alerts: '3', game: '4' };
+    const keyMap = { amy: '1', units: '2', alerts: '3', game: '4', mesh: '5', cameras: '6', search: '7', tak: '8', videos: '9', zones: '0' };
     const items = panelManager.getRegisteredPanels().map(p => ({
         label: p.title, shortcut: keyMap[p.id] || '', checkable: true,
         checked: () => panelManager.isOpen(p.id),
@@ -123,6 +114,7 @@ function _mapMenuItems(mapActions) {
         { label: 'Grid', checkable: true, checked: () => s().showGrid, action: () => mapActions.toggleGrid() },
         { separator: true },
         // Unit layers
+        { label: 'Unit Markers', shortcut: 'U', checkable: true, checked: () => s().showUnits, action: () => mapActions.toggleUnits() },
         { label: '3D Models', checkable: true, checked: () => s().showModels3d, action: () => mapActions.toggleModels() },
         { label: 'Labels', checkable: true, checked: () => s().showLabels, action: () => mapActions.toggleLabels() },
         { label: 'Mesh Network', checkable: true, checked: () => s().showMesh, action: () => mapActions.toggleMesh() },
@@ -152,7 +144,7 @@ function _mapMenuItems(mapActions) {
         { separator: true },
         // Camera controls
         { label: 'Center on Action', shortcut: 'F', action: () => mapActions.centerOnAction() },
-        { label: 'Reset Camera', shortcut: 'R', action: () => mapActions.resetCamera() },
+        { label: 'Reset Camera', action: () => mapActions.resetCamera() },
         { label: 'Zoom In', shortcut: ']', action: () => mapActions.zoomIn() },
         { label: 'Zoom Out', shortcut: '[', action: () => mapActions.zoomOut() },
     ];
@@ -163,7 +155,7 @@ function _gameMenuItems(mapActions) {
         { label: 'New Mission', shortcut: 'B',
           action: () => { if (mapActions.beginWar) mapActions.beginWar(); } },
         { separator: true },
-        { label: 'Reset Game', shortcut: 'R',
+        { label: 'Reset Game',
           action: () => { if (mapActions.resetGame) mapActions.resetGame(); } },
     ];
 }
@@ -423,6 +415,6 @@ function _shortLabel(title) {
 }
 
 function _panelKey(id) {
-    const map = { amy: '1', units: '2', alerts: '3', game: '4' };
+    const map = { amy: '1', units: '2', alerts: '3', game: '4', mesh: '5', cameras: '6', search: '7', tak: '8', videos: '9', zones: '0' };
     return map[id] || '';
 }

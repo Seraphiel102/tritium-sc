@@ -63,11 +63,12 @@ export function updateSweepAngle(currentAngle, rpm, dt) {
 // GhostTracker
 // ============================================================
 
-const GHOST_FADE_SECONDS = 30;
+const VISUAL_GHOST_FADE_SECONDS = 30;
+const RADIO_GHOST_FADE_SECONDS = 60;
 
 export class GhostTracker {
     constructor() {
-        /** @type {Map<string, {x: number, y: number, age: number, opacity: number}>} */
+        /** @type {Map<string, {x: number, y: number, age: number, opacity: number, type: string, mac: string, uncertainty: number}>} */
         this._ghosts = new Map();
         /** @type {Set<string>} IDs that have fully faded -- do not re-create */
         this._fadedIds = new Set();
@@ -75,13 +76,15 @@ export class GhostTracker {
 
     /**
      * Update ghost state from the current unit list.
-     * @param {Array} units - array of unit objects with target_id, alliance, visible, position
+     * @param {Array} units - array of unit objects with target_id, alliance, visible, position,
+     *                        radio_detected, radio_signal_strength, identity
      * @param {number} dt - time step in seconds
      */
     update(units, dt) {
         // Track which hostile IDs are currently visible
         const visibleIds = new Set();
         const invisibleHostiles = new Map();
+        const radioDetected = new Map();
 
         for (const u of units) {
             if (u.alliance !== 'hostile') continue;
@@ -89,6 +92,10 @@ export class GhostTracker {
                 visibleIds.add(u.target_id);
             } else if (u.visible === false) {
                 invisibleHostiles.set(u.target_id, u);
+            }
+            // Track radio-detected units separately
+            if (u.radio_detected === true) {
+                radioDetected.set(u.target_id, u);
             }
         }
 
@@ -100,18 +107,34 @@ export class GhostTracker {
 
         // Create or update ghosts for invisible hostiles
         for (const [id, u] of invisibleHostiles) {
+            // Determine ghost type: radio if radio_detected, else visual
+            const isRadio = radioDetected.has(id);
+            const fadeSecs = isRadio ? RADIO_GHOST_FADE_SECONDS : VISUAL_GHOST_FADE_SECONDS;
+            const ghostType = isRadio ? 'radio' : 'visual';
+            const mac = isRadio ? _extractMac(u) : '';
+
             if (!this._ghosts.has(id) && !this._fadedIds.has(id)) {
                 this._ghosts.set(id, {
                     x: u.position.x,
                     y: u.position.y,
                     age: 0,
                     opacity: 1.0,
+                    type: ghostType,
+                    mac: mac,
+                    uncertainty: 0,
                 });
             } else if (this._ghosts.has(id)) {
-                // Ghost already exists, just age it
                 const g = this._ghosts.get(id);
                 g.age += dt;
-                g.opacity = Math.max(0, 1.0 - g.age / GHOST_FADE_SECONDS);
+                // If radio contact re-established, upgrade ghost type and reset fade
+                if (isRadio && g.type === 'visual') {
+                    g.type = 'radio';
+                    g.mac = mac;
+                }
+                const activeFade = g.type === 'radio' ? RADIO_GHOST_FADE_SECONDS : VISUAL_GHOST_FADE_SECONDS;
+                g.opacity = Math.max(0, 1.0 - g.age / activeFade);
+                // Uncertainty ring grows with age (meters of positional error)
+                g.uncertainty = g.age * 0.5;
             }
         }
 
@@ -119,7 +142,9 @@ export class GhostTracker {
         for (const [id, g] of this._ghosts) {
             if (!invisibleHostiles.has(id) && !visibleIds.has(id)) {
                 g.age += dt;
-                g.opacity = Math.max(0, 1.0 - g.age / GHOST_FADE_SECONDS);
+                const fadeSecs = g.type === 'radio' ? RADIO_GHOST_FADE_SECONDS : VISUAL_GHOST_FADE_SECONDS;
+                g.opacity = Math.max(0, 1.0 - g.age / fadeSecs);
+                g.uncertainty = g.age * 0.5;
             }
         }
 
@@ -135,7 +160,7 @@ export class GhostTracker {
     /**
      * Get ghost data for a specific target.
      * @param {string} targetId
-     * @returns {{x: number, y: number, age: number, opacity: number}|null}
+     * @returns {{x: number, y: number, age: number, opacity: number, type: string, mac: string, uncertainty: number}|null}
      */
     getGhost(targetId) {
         return this._ghosts.get(targetId) || null;
@@ -143,11 +168,39 @@ export class GhostTracker {
 
     /**
      * Get all ghost entries as [id, ghostData] pairs.
-     * @returns {Array<[string, {x: number, y: number, age: number, opacity: number}]>}
+     * @returns {Array<[string, {x: number, y: number, age: number, opacity: number, type: string, mac: string, uncertainty: number}]>}
      */
     getAll() {
         return [...this._ghosts.entries()];
     }
+
+    /**
+     * Get only radio-type ghosts.
+     * @returns {Array<[string, object]>}
+     */
+    getRadioGhosts() {
+        return [...this._ghosts.entries()].filter(([, g]) => g.type === 'radio');
+    }
+
+    /**
+     * Get only visual-type ghosts.
+     * @returns {Array<[string, object]>}
+     */
+    getVisualGhosts() {
+        return [...this._ghosts.entries()].filter(([, g]) => g.type === 'visual');
+    }
+}
+
+/**
+ * Extract the best MAC address from a unit for radio ghost labeling.
+ * Prefers bluetooth_mac, falls back to wifi_mac.
+ * @param {object} u - unit object with identity field
+ * @returns {string} MAC address or empty string
+ */
+function _extractMac(u) {
+    const id = u.identity;
+    if (!id) return '';
+    return id.bluetooth_mac || id.wifi_mac || '';
 }
 
 // ============================================================
@@ -267,21 +320,74 @@ export class FrontendVisionSystem {
     }
 
     /**
-     * Convert game-meter position to fog canvas pixel coords.
+     * Convert game-meter position {x, y} or {lng, lat} to fog canvas pixel coords.
+     * Uses MapLibre's project() to go from geographic coords to screen pixels,
+     * then scales to the 1024x1024 fog canvas.
      * Override in tests for mocking.
      */
     _worldToScreen(pos) {
         if (!this._mapState || !this._mapState.map) return { x: 0, y: 0 };
-        // This would use mapState.map.project() in the real implementation
-        return { x: pos.x, y: pos.y };
+
+        const map = this._mapState.map;
+        const container = map.getContainer();
+        if (!container) return { x: 0, y: 0 };
+
+        // If position has lat/lng, use those directly; otherwise fall back
+        // to pos.x/pos.y (game meters) which need geo-reference conversion.
+        // The units array from TritiumStore includes both lat/lng and position.
+        let screenPt;
+        if (pos.lng !== undefined && pos.lat !== undefined) {
+            screenPt = map.project([pos.lng, pos.lat]);
+        } else {
+            // Fallback: treat x/y as game-meter offsets from geo center
+            const center = this._mapState.geoCenter;
+            if (!center) return { x: pos.x, y: pos.y };
+            // Convert meters to approximate lat/lng offset
+            const mPerDegLat = 111320;
+            const mPerDegLng = 111320 * Math.cos(center.lat * Math.PI / 180);
+            const lng = center.lng + pos.x / mPerDegLng;
+            const lat = center.lat + pos.y / mPerDegLat;
+            screenPt = map.project([lng, lat]);
+        }
+
+        // Scale screen pixels to fog canvas (1024x1024)
+        const cw = container.clientWidth || 1;
+        const ch = container.clientHeight || 1;
+        const canvasW = this._fogCanvas ? this._fogCanvas.width : 1024;
+        const canvasH = this._fogCanvas ? this._fogCanvas.height : 1024;
+
+        return {
+            x: (screenPt.x / cw) * canvasW,
+            y: (screenPt.y / ch) * canvasH,
+        };
     }
 
     /**
-     * Convert meters to pixels at current zoom.
+     * Convert meters to pixels at current zoom level.
+     * Uses the Web Mercator meters-per-pixel formula:
+     *   pixelsPerMeter = 256 * 2^zoom / (40075016.686 * cos(lat))
+     * Then scales to the fog canvas dimensions.
      * Override in tests for mocking.
      */
     _metersToPixels(meters) {
-        return meters;
+        if (!this._mapState || !this._mapState.map) return meters;
+
+        const map = this._mapState.map;
+        const zoom = map.getZoom();
+        const center = map.getCenter();
+        const lat = center.lat;
+
+        // Meters per pixel at this zoom/lat in screen space
+        const earthCircumference = 40075016.686;
+        const metersPerPixel = earthCircumference * Math.cos(lat * Math.PI / 180) / (256 * Math.pow(2, zoom));
+        const screenPixels = meters / metersPerPixel;
+
+        // Scale from screen pixels to fog canvas pixels
+        const container = map.getContainer();
+        const cw = (container && container.clientWidth) || 1;
+        const canvasW = this._fogCanvas ? this._fogCanvas.width : 1024;
+
+        return screenPixels * (canvasW / cw);
     }
 
     /**

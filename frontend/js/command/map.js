@@ -19,7 +19,7 @@
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { resolveLabels } from './label-collision.js';
-import { drawUnit as drawUnitIcon } from './unit-icons.js';
+import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator } from './unit-icons.js';
 import { DeviceModalManager } from './device-modal.js';
 
 // ============================================================
@@ -165,6 +165,8 @@ const _state = {
 
     // NPC thought bubbles
     showThoughts: true,
+    _visibleThoughtIds: new Set(),  // unit IDs with visible thought bubbles
+    _maxThoughtBubbles: 5,          // max non-critical visible at once
 
     // Screen shake tracking
     _shakeActive: false,
@@ -292,12 +294,21 @@ export function initMap() {
         EventBus.on('unit:dispatched', _onDispatched),
         EventBus.on('mesh:center-on-node', _onMeshCenterOnNode),
         EventBus.on('minimap:pan', _onMinimapPan),
+        EventBus.on('map:flyToMission', _onPanToMission),
         EventBus.on('device:open-modal', _onDeviceOpenModal),
     );
 
     // Subscribe to store for selectedUnitId changes (highlight sync)
     _state.unsubs.push(
         TritiumStore.on('map.selectedUnitId', _onSelectedUnitChanged),
+    );
+
+    // Start/stop hostile objective polling when game state changes
+    _state.unsubs.push(
+        TritiumStore.on('game.phase', (phase) => {
+            if (phase === 'active') _startHostileObjectivePoll();
+            else _stopHostileObjectivePoll();
+        }),
     );
 
     // Load geo reference + satellite tiles
@@ -331,6 +342,9 @@ export function destroyMap() {
     // Unbind DOM events
     _unbindCanvasEvents();
     _unbindMinimapEvents();
+
+    // Stop hostile objective polling
+    _stopHostileObjectivePoll();
 
     // Stop ResizeObserver
     if (_state.resizeObserver) {
@@ -492,6 +506,15 @@ function _draw() {
     // Layer 4: Zones
     _drawZones(ctx);
 
+    // Layer 4.3: Environmental hazards (fire, flood, roadblock)
+    _drawHazards(ctx);
+
+    // Layer 4.4: Crowd density heatmap (civil_unrest mode only)
+    _drawCrowdDensity(ctx);
+
+    // Layer 4.45: Cover points (translucent shield markers)
+    _drawCoverPoints(ctx);
+
     // Layer 4.5: Fog of war (darkens areas far from friendly units)
     if (typeof fogDraw === 'function' && _state.fogEnabled) {
         const fogTargets = _buildTargetsObject();
@@ -509,6 +532,9 @@ function _draw() {
 
     // Layer 5: Targets (shapes only — labels handled separately)
     _drawTargets(ctx);
+
+    // Layer 5.05: Squad formation lines (thin lines connecting squad members)
+    _drawSquadLines(ctx);
 
     // Layer 5.1: Unit labels (collision-resolved)
     _drawLabels(ctx);
@@ -551,6 +577,30 @@ function _draw() {
         ctx.restore();
         _state._shakeActive = false;
     }
+
+    // Layer 9.5: Canvas HUD overlays (fixed-position, above world)
+    if (typeof warHudDrawCanvasCountdown === 'function') {
+        warHudDrawCanvasCountdown(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawFriendlyHealthBars === 'function') {
+        warHudDrawFriendlyHealthBars(ctx, worldToScreen, _state.cam.zoom);
+    }
+    if (typeof warHudDrawModeHud === 'function') {
+        warHudDrawModeHud(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawBonusObjectives === 'function') {
+        warHudDrawBonusObjectives(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawHostileIntel === 'function') {
+        const intel = TritiumStore.get('game.hostileIntel');
+        warHudDrawHostileIntel(ctx, cssW, cssH, intel);
+    }
+
+    // Layer 9.6: Hostile objective lines (dashed lines from hostiles to targets)
+    _drawHostileObjectives(ctx);
+
+    // Layer 9.7: Unit communication signals (distress/contact/regroup rings)
+    _drawUnitSignals(ctx);
 
     // Layer 10: Scanlines
     if (typeof warFxDrawScanlines === 'function') warFxDrawScanlines(ctx, cssW, cssH);
@@ -875,12 +925,410 @@ function _drawZones(ctx) {
 }
 
 // ============================================================
+// Layer 4.3: Environmental Hazards
+// ============================================================
+
+function _drawHazards(ctx) {
+    const hazards = TritiumStore.get('hazards');
+    if (!hazards || !(hazards instanceof Map) || hazards.size === 0) return;
+
+    const now = Date.now();
+
+    for (const [id, h] of hazards) {
+        const pos = h.position;
+        if (!pos) continue;
+        // Accept both {x, y} objects and [x, y] arrays
+        const px = Array.isArray(pos) ? pos[0] : (pos.x !== undefined ? pos.x : undefined);
+        const py = Array.isArray(pos) ? pos[1] : (pos.y !== undefined ? pos.y : undefined);
+        if (px === undefined || py === undefined) continue;
+
+        // Calculate remaining time fraction (1.0 = just spawned, 0.0 = expired)
+        const totalMs = (h.duration || 60) * 1000;
+        const elapsed = now - (h.spawned_at || now);
+        const remaining = Math.max(0, Math.min(1, 1 - elapsed / totalMs));
+        if (remaining <= 0) continue; // fully expired, skip
+
+        // World to screen transform
+        const sp = worldToScreen(px, py);
+        const sr = (h.radius || 10) * _state.cam.zoom;
+
+        // Color per hazard type
+        let color;
+        switch (h.hazard_type) {
+            case 'fire':      color = '#ff4400'; break;
+            case 'flood':     color = '#0088ff'; break;
+            case 'roadblock': color = '#ffcc00'; break;
+            default:          color = '#ffffff'; break;
+        }
+
+        // Base opacity fades with remaining time
+        const baseAlpha = h.hazard_type === undefined ? 0.20 : 0.30;
+        const fillAlpha = baseAlpha * remaining;
+
+        // Filled circle
+        ctx.save();
+        ctx.globalAlpha = fillAlpha;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pulsing neon border ring
+        const pulse = 0.55 + 0.15 * Math.sin(now / 400);
+        ctx.globalAlpha = pulse * remaining;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Label centered on circle
+        if (_state.cam.zoom > 0.15) {
+            const label = (h.hazard_type || 'HAZARD').toUpperCase();
+            ctx.globalAlpha = 0.7 * remaining;
+            ctx.fillStyle = color;
+            ctx.font = `${Math.max(8, 10 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(label, sp.x, sp.y + 4);
+        }
+
+        ctx.restore();
+    }
+}
+
+// ============================================================
+// Layer 9.6: Hostile Objective Lines (active game only)
+// ============================================================
+
+/**
+ * Draw dashed lines from hostile units to their assigned objective targets.
+ * Only renders when the game is active. Reads objective data from
+ * TritiumStore 'game.hostileObjectives' (polled from /api/game/hostile-intel).
+ *
+ * Color per objective type:
+ *   assault -> #ff2a6d (red/magenta)
+ *   flank   -> #ff8800 (orange)
+ *   advance -> #fcee0a (yellow)
+ *   retreat -> #888888 (grey)
+ */
+
+/**
+ * Draw unit communication signal rings on the map.
+ * Signals fade out as they age toward their TTL.
+ * Colors: distress=red, contact=orange, regroup=cyan, retreat=grey.
+ */
+function _drawUnitSignals(ctx) {
+    let signals = TritiumStore.get('game.signals');
+    if (!Array.isArray(signals) || signals.length === 0) return;
+
+    const now = Date.now();
+    // Remove expired signals and update store
+    signals = signals.filter(s => now - s.received_at < (s.ttl || 10) * 1000);
+    TritiumStore.set('game.signals', signals);
+
+    if (signals.length === 0) return;
+
+    const SIGNAL_COLORS = {
+        distress: '#ff2a6d',
+        contact: '#ff8800',
+        regroup: '#00f0ff',
+        retreat: '#888888',
+        instigator_marked: '#ff2a6d',
+        emp_jamming: '#fcee0a',
+    };
+
+    ctx.save();
+    for (const sig of signals) {
+        const pos = sig.position;
+        if (!pos) continue;
+        const px = Array.isArray(pos) ? pos[0] : pos.x;
+        const py = Array.isArray(pos) ? pos[1] : pos.y;
+        if (px === undefined || py === undefined) continue;
+
+        const sp = worldToScreen(px, py);
+        const color = SIGNAL_COLORS[sig.signal_type] || '#ffffff';
+        const elapsed = (now - sig.received_at) / 1000;
+        const ttl = sig.ttl || 10;
+        const frac = Math.max(0, 1 - elapsed / ttl);
+
+        // Expanding ring effect
+        const expansion = 1 - frac;  // 0 -> 1 as signal ages
+        const radiusWorld = (sig.signal_range || 50) * expansion;
+        const radiusPx = radiusWorld * (_state.zoom / 100) * (_state.canvas.width / _state.dpr / 800);
+
+        if (radiusPx < 2) continue;
+
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = frac * 0.6;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label at center
+        if (frac > 0.3) {
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = color;
+            ctx.globalAlpha = frac * 0.8;
+            ctx.fillText(sig.signal_type.toUpperCase(), sp.x, sp.y - radiusPx - 6);
+        }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+}
+function _drawHostileObjectives(ctx) {
+    const phase = TritiumStore.get('game.phase');
+    if (phase !== 'active') return;
+
+    const objectives = TritiumStore.get('game.hostileObjectives');
+    if (!objectives || typeof objectives !== 'object') return;
+
+    const units = TritiumStore.units;
+
+    ctx.save();
+
+    for (const [uid, obj] of Object.entries(objectives)) {
+        // Look up unit position from store
+        const unit = units.get(uid);
+        if (!unit || !unit.position) continue;
+
+        // Validate target_position
+        const tp = obj.target_position;
+        if (!tp || !Array.isArray(tp) || tp.length < 2) continue;
+
+        // Color per objective type
+        let color;
+        switch (obj.type) {
+            case 'assault': color = '#ff2a6d'; break;
+            case 'flank':   color = '#ff8800'; break;
+            case 'advance': color = '#fcee0a'; break;
+            case 'retreat': color = '#888888'; break;
+            default:        color = '#ff2a6d'; break;
+        }
+
+        const from = worldToScreen(unit.position.x, unit.position.y);
+        const to = worldToScreen(tp[0], tp[1]);
+
+        // Dashed line at ~30% opacity
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Small arrowhead at target end
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const headLen = 8;
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(to.x, to.y);
+        ctx.lineTo(to.x - headLen * Math.cos(angle - 0.4), to.y - headLen * Math.sin(angle - 0.4));
+        ctx.lineTo(to.x - headLen * Math.cos(angle + 0.4), to.y - headLen * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+
+// ============================================================
+// Hostile Objective Polling (5s interval during active game)
+// ============================================================
+
+let _hostileObjPollTimer = null;
+
+/**
+ * Start polling /api/game/hostile-intel every 5 seconds.
+ * Stores the objectives in TritiumStore 'game.hostileObjectives'.
+ */
+function _startHostileObjectivePoll() {
+    if (_hostileObjPollTimer) return; // already running
+    _hostileObjPollTimer = setInterval(async () => {
+        const phase = TritiumStore.get('game.phase');
+        if (phase !== 'active') {
+            _stopHostileObjectivePoll();
+            return;
+        }
+        try {
+            const resp = await fetch('/api/game/hostile-intel');
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.objectives) {
+                    TritiumStore.set('game.hostileObjectives', data.objectives);
+                }
+            }
+        } catch (e) {
+            // Silently ignore fetch errors (server may be down)
+        }
+    }, 5000);
+}
+
+function _stopHostileObjectivePoll() {
+    if (_hostileObjPollTimer) {
+        clearInterval(_hostileObjPollTimer);
+        _hostileObjPollTimer = null;
+    }
+    TritiumStore.set('game.hostileObjectives', null);
+}
+
+
+// ============================================================
+// Layer 4.4: Crowd Density Heatmap (civil_unrest mode only)
+// ============================================================
+
+/**
+ * Draw a crowd density heatmap overlay on the tactical map.
+ * Only active when game_mode_type is 'civil_unrest'.
+ *
+ * Reads grid data from TritiumStore 'game.crowdDensity':
+ *   { grid: [[str,...]], cell_size, bounds: [xMin,yMin,xMax,yMax],
+ *     max_density, critical_count }
+ *
+ * Density levels:
+ *   sparse   -> invisible (skip)
+ *   moderate -> pale yellow at ~20% opacity
+ *   dense    -> orange at ~40% opacity
+ *   critical -> pulsing red at ~60% opacity (sin-wave pulse)
+ */
+function _drawCrowdDensity(ctx) {
+    // Gate: only render in civil_unrest mode
+    const modeType = TritiumStore.get('game.modeType');
+    if (modeType !== 'civil_unrest') return;
+
+    const data = TritiumStore.get('game.crowdDensity');
+    if (!data || !data.grid) return;
+
+    const grid = data.grid;
+    if (!Array.isArray(grid) || grid.length === 0) return;
+
+    const cellSize = data.cell_size || 10;
+    const bounds = data.bounds || [0, 0, 0, 0];
+    const xMin = bounds[0];
+    const yMin = bounds[1];
+
+    const now = performance.now();
+    const vpW = _state.canvas.width / _state.dpr;
+    const vpH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+
+    // Draw each grid cell
+    for (let row = 0; row < grid.length; row++) {
+        const cols = grid[row];
+        if (!Array.isArray(cols)) continue;
+        for (let col = 0; col < cols.length; col++) {
+            const level = cols[col];
+
+            // Sparse cells are invisible -- skip
+            if (level === 'sparse' || !level) continue;
+
+            // World coordinates for this cell (bottom-left corner)
+            const wx = xMin + col * cellSize;
+            const wy = yMin + row * cellSize;
+
+            // Convert cell corners to screen space
+            const topLeft = worldToScreen(wx, wy + cellSize);
+            const bottomRight = worldToScreen(wx + cellSize, wy);
+            const sw = bottomRight.x - topLeft.x;
+            const sh = bottomRight.y - topLeft.y;
+
+            // Skip cells outside viewport
+            if (bottomRight.x < 0 || topLeft.x > vpW) continue;
+            if (bottomRight.y < 0 || topLeft.y > vpH) continue;
+
+            // Set color and opacity based on density level
+            switch (level) {
+                case 'moderate':
+                    ctx.fillStyle = 'rgba(252, 238, 10, 0.20)';
+                    ctx.globalAlpha = 1;
+                    break;
+                case 'dense':
+                    ctx.fillStyle = 'rgba(255, 140, 0, 0.40)';
+                    ctx.globalAlpha = 1;
+                    break;
+                case 'critical': {
+                    // Pulsing red: sin-wave oscillates alpha between 0.4 and 0.7
+                    const pulse = 0.55 + 0.15 * Math.sin(now / 300);
+                    ctx.fillStyle = 'rgba(255, 42, 50, 0.60)';
+                    ctx.globalAlpha = pulse;
+                    break;
+                }
+                default:
+                    continue;
+            }
+
+            ctx.fillRect(topLeft.x, topLeft.y, sw, sh);
+        }
+    }
+
+    ctx.restore();
+
+    // HUD pill: show max_density and critical_count in top-right area
+    const maxDensity = data.max_density || '';
+    const criticalCount = data.critical_count || 0;
+    if (maxDensity) {
+        ctx.save();
+        const cssW = _state.canvas.width / _state.dpr;
+        const label = `CROWD: ${maxDensity.toUpperCase()}`;
+        const countLabel = criticalCount > 0 ? `  ${criticalCount} CRITICAL` : '';
+        const fullText = label + countLabel;
+
+        ctx.font = `11px ${FONT_FAMILY}`;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+
+        // Background pill
+        const textWidth = ctx.measureText(fullText).width;
+        const pillX = cssW - 12 - textWidth - 10;
+        const pillY = 54;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(pillX, pillY, textWidth + 20, 20);
+
+        // Density-colored border accent
+        let accentColor = '#05ffa1';
+        if (maxDensity === 'critical') accentColor = '#ff2a6d';
+        else if (maxDensity === 'dense') accentColor = '#ff8800';
+        else if (maxDensity === 'moderate') accentColor = '#fcee0a';
+
+        ctx.fillStyle = accentColor;
+        ctx.fillRect(pillX, pillY, 3, 20);
+
+        // Text
+        ctx.fillStyle = '#cccccc';
+        ctx.fillText(fullText, cssW - 12, pillY + 4);
+
+        ctx.restore();
+    }
+}
+
+// ============================================================
 // Layer 5: Targets
 // ============================================================
 
 function _drawTargets(ctx) {
     const units = TritiumStore.units;
+    const fogEnabled = _state.fogEnabled;
     for (const [id, unit] of units) {
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        // Fog of war: hide hostile/unknown units not seen by any friendly
+        if (fogEnabled && alliance === 'hostile') {
+            if (!unit.visible) {
+                // Not visually detected — check radio
+                if (unit.radio_detected) {
+                    _drawRadioGhost(ctx, unit);
+                }
+                continue; // skip full unit render
+            }
+        }
         _drawUnit(ctx, id, unit);
     }
 }
@@ -899,24 +1347,33 @@ function _drawLabels(ctx) {
 
     // Collect label entries from all units
     const entries = [];
+    const fogEnabled = _state.fogEnabled;
     for (const [id, unit] of units) {
         const pos = unit.position;
         if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        // Fog of war: skip labels for invisible hostile units
+        if (fogEnabled && alliance === 'hostile' && !unit.visible) {
+            continue; // radio ghost labels are drawn by _drawRadioGhost
+        }
         const fsm = unit.fsm_state || '';
         const status = (unit.status || 'active').toLowerCase();
         const badgeColor = FSM_BADGE_COLORS[fsm] || FSM_BADGE_COLORS[status] || null;
         const fsmState = fsm ? ` [${fsm.toUpperCase()}]` : '';
         const elims = unit.eliminations ? ` ${unit.eliminations}K` : '';
         const badgeText = fsm || status;
+        // Use short_id hex as prefix if available
+        const shortId = (unit.identity && unit.identity.short_id) ? unit.identity.short_id : '';
+        const labelText = shortId ? `[${shortId}] ${unit.name || id}` : (unit.name || id);
         entries.push({
             id,
-            text: unit.name || id,
+            text: labelText,
             badge: fsmState + elims,
             badgeColor,
             badgeText,
             worldX: pos.x,
             worldY: pos.y,
-            alliance: (unit.alliance || 'unknown').toLowerCase(),
+            alliance,
             status,
             isSelected: id === selectedId,
         });
@@ -1011,7 +1468,8 @@ function _emotionColor(emotion) {
 
 /**
  * Draw NPC thought bubbles above units that have active thoughts.
- * Iterates TritiumStore.units, renders speech bubble with emotion-colored border.
+ * Only shows critical/high importance thoughts and the selected unit's thought.
+ * Caps visible non-critical bubbles to _state._maxThoughtBubbles.
  */
 function _drawThoughtBubbles(ctx) {
     const units = TritiumStore.units;
@@ -1026,14 +1484,46 @@ function _drawThoughtBubbles(ctx) {
     const fadeInDuration = 300;
     const fadeOutStart = 1000; // start fading 1s before expiry
 
+    // Clean expired entries from the visible set
+    for (const uid of _state._visibleThoughtIds) {
+        const u = units.get(uid);
+        if (!u || !u.thoughtText || !u.thoughtExpires || u.thoughtExpires <= now) {
+            _state._visibleThoughtIds.delete(uid);
+        }
+    }
+
     ctx.save();
     ctx.font = `${fontSize}px ${FONT_FAMILY}`;
     ctx.textBaseline = 'top';
     ctx.textAlign = 'left';
 
+    // Count non-critical visible bubbles (excluding selected and critical)
+    const selectedUnitId = TritiumStore.get('map.selectedUnitId');
+    let nonCriticalCount = 0;
+    for (const uid of _state._visibleThoughtIds) {
+        if (uid === selectedUnitId) continue;
+        const u = units.get(uid);
+        if (u && u.thoughtImportance === 'critical') continue;
+        nonCriticalCount++;
+    }
+
     for (const [id, unit] of units) {
         if (!unit.thoughtText || !unit.thoughtExpires) continue;
         if (unit.thoughtExpires <= now) continue;
+
+        // Visibility filter: critical + selected always show, others capped
+        const isCritical = unit.thoughtImportance === 'critical';
+        const isSelected = selectedUnitId === id;
+        if (!isCritical && !isSelected) {
+            if (_state._visibleThoughtIds.has(id)) {
+                // Already visible, keep it
+            } else if (nonCriticalCount >= _state._maxThoughtBubbles) {
+                continue; // Cap reached, skip
+            } else {
+                nonCriticalCount++;
+            }
+        }
+        _state._visibleThoughtIds.add(id);
 
         const pos = unit.position;
         if (!pos || pos.x === undefined || pos.y === undefined) continue;
@@ -1216,6 +1706,59 @@ function _drawStatusBadge(ctx, unit, sp) {
     ctx.restore();
 }
 
+/**
+ * Draw a radio-only ghost blip for a hostile detected via BLE/WiFi/cell
+ * but not visually confirmed.  Renders as a pulsing hollow ring with a "?"
+ * marker and optional MAC address label.
+ */
+function _drawRadioGhost(ctx, unit) {
+    const pos = unit.position;
+    if (!pos || pos.x === undefined || pos.y === undefined) return;
+    const sp = worldToScreen(pos.x, pos.y);
+
+    ctx.save();
+    const strength = unit.radio_signal_strength || 0.3;
+    const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 400);
+    const alpha = 0.3 + 0.4 * strength * pulse;
+    const radius = 8 + 4 * (1 - strength); // weaker = larger uncertainty ring
+
+    // Outer uncertainty ring
+    ctx.strokeStyle = `rgba(255, 42, 109, ${alpha})`; // magenta ghost
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Inner dot
+    ctx.fillStyle = `rgba(255, 42, 109, ${alpha * 0.8})`;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // "?" marker
+    ctx.fillStyle = `rgba(255, 42, 109, ${Math.min(1, alpha + 0.2)})`;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', sp.x, sp.y);
+
+    // MAC address label (if available from identity)
+    const identity = unit.identity;
+    if (identity) {
+        const mac = identity.bluetooth_mac || identity.wifi_mac || identity.cell_id || '';
+        if (mac) {
+            const shortMac = mac.length > 8 ? mac.slice(-8) : mac;
+            ctx.fillStyle = `rgba(255, 42, 109, ${alpha * 0.6})`;
+            ctx.font = '8px monospace';
+            ctx.fillText(shortMac, sp.x, sp.y + radius + 8);
+        }
+    }
+
+    ctx.restore();
+}
+
 function _drawUnit(ctx, id, unit) {
     const pos = unit.position;
     if (!pos || pos.x === undefined || pos.y === undefined) return;
@@ -1266,10 +1809,20 @@ function _drawUnit(ctx, id, unit) {
     }
 
     // Draw using procedural unit icons
-    drawUnitIcon(ctx, iconType, alliance, smoothedHeading, sp.x, sp.y, scale, isSelected, health);
+    drawUnitIcon(ctx, iconType, alliance, smoothedHeading, sp.x, sp.y, scale, isSelected, health, isHovered);
+
+    // Crowd role indicator (civil_unrest mode — instigator/rioter visual differentiation)
+    if (unit.crowdRole && unit.crowdRole !== 'civilian') {
+        drawCrowdRoleIndicator(ctx, sp.x, sp.y, scale, unit.crowdRole, unit.instigatorState);
+    }
 
     // FSM status badge above unit
     _drawStatusBadge(ctx, unit, sp);
+
+    // Morale indicator for combatant units
+    if (unit.is_combatant) {
+        _drawMoraleIndicator(ctx, unit, sp, scale);
+    }
 
     // Labels are drawn by _drawLabels() using label-collision.js
 }
@@ -1377,6 +1930,153 @@ function _drawHealthBar(ctx, cx, cy, unitSize, health, maxHealth) {
     }
     ctx.fillStyle = `rgb(${r}, ${g}, 0)`;
     ctx.fillRect(bx, by, barW * pct, barH);
+}
+
+// ============================================================
+// Morale indicator (drawn per-unit in _drawUnit)
+// ============================================================
+
+function _drawMoraleIndicator(ctx, unit, sp, scale) {
+    const morale = unit.morale;
+    if (morale === undefined || morale === null) return;
+
+    // Normal morale (0.3-0.9): no special indicator
+    if (morale >= 0.3 && morale <= 0.9) return;
+
+    ctx.save();
+    const r = 12 * scale;
+
+    if (morale < 0.1) {
+        // BROKEN: pulsing red ring
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() * 0.006));
+        ctx.strokeStyle = `rgba(255, 42, 109, ${pulse})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        // "BROKEN" text
+        ctx.font = `bold 7px ${FONT_FAMILY}`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = `rgba(255, 42, 109, ${pulse})`;
+        ctx.fillText('BROKEN', sp.x, sp.y + r + 14);
+    } else if (morale < 0.3) {
+        // SUPPRESSED: yellow dashed outline
+        ctx.strokeStyle = 'rgba(252, 238, 10, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    } else if (morale > 0.9) {
+        // EMBOLDENED: green glow
+        ctx.shadowColor = '#05ffa1';
+        ctx.shadowBlur = 8 * scale;
+        ctx.strokeStyle = 'rgba(5, 255, 161, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Cover points overlay (Layer 4.45)
+// ============================================================
+
+function _drawCoverPoints(ctx) {
+    const points = TritiumStore.get('game.coverPoints');
+    if (!Array.isArray(points) || points.length === 0) return;
+
+    ctx.save();
+    for (const cp of points) {
+        if (!cp.position || !Array.isArray(cp.position)) continue;
+        const sp = worldToScreen(cp.position[0], cp.position[1]);
+        const radiusPx = (cp.radius || 2) * _state.cam.zoom;
+
+        // Translucent radius circle
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(74, 158, 255, 0.08)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Shield icon at center (small chevron/V shape)
+        const sz = Math.max(4, 6 * Math.min(_state.cam.zoom, 2));
+        ctx.beginPath();
+        ctx.moveTo(sp.x - sz, sp.y - sz * 0.6);
+        ctx.lineTo(sp.x, sp.y + sz * 0.6);
+        ctx.lineTo(sp.x + sz, sp.y - sz * 0.6);
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// ============================================================
+// Squad formation lines (Layer 5.05)
+// ============================================================
+
+const SQUAD_COLORS = [
+    'rgba(0, 240, 255, 0.35)',   // cyan
+    'rgba(255, 136, 0, 0.35)',   // orange
+    'rgba(5, 255, 161, 0.35)',   // green
+    'rgba(252, 238, 10, 0.35)',  // yellow
+    'rgba(170, 100, 255, 0.35)', // purple
+    'rgba(255, 42, 109, 0.35)',  // magenta
+    'rgba(100, 200, 255, 0.35)', // light blue
+    'rgba(255, 200, 100, 0.35)', // gold
+];
+
+function _drawSquadLines(ctx) {
+    // Group units by squadId
+    const squads = new Map();
+    for (const [id, unit] of TritiumStore.units) {
+        const sid = unit.squadId || unit.squad_id;
+        if (!sid) continue;
+        const status = (unit.status || 'active').toLowerCase();
+        if (status === 'eliminated' || status === 'destroyed') continue;
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        if (!squads.has(sid)) squads.set(sid, []);
+        squads.get(sid).push({ x: pos.x, y: pos.y });
+    }
+
+    if (squads.size === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1;
+    let colorIdx = 0;
+
+    for (const [sid, members] of squads) {
+        if (members.length < 2) continue;
+        ctx.strokeStyle = SQUAD_COLORS[colorIdx % SQUAD_COLORS.length];
+        colorIdx++;
+
+        // Draw lines from each member to the centroid
+        let cx = 0, cy = 0;
+        for (const m of members) { cx += m.x; cy += m.y; }
+        cx /= members.length;
+        cy /= members.length;
+        const centroid = worldToScreen(cx, cy);
+
+        for (const m of members) {
+            const sp = worldToScreen(m.x, m.y);
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            ctx.lineTo(centroid.x, centroid.y);
+            ctx.stroke();
+        }
+    }
+
+    ctx.restore();
 }
 
 // ============================================================
@@ -1907,6 +2607,7 @@ function _onMouseDown(e) {
         if (hitId) {
             TritiumStore.set('map.selectedUnitId', hitId);
             EventBus.emit('unit:selected', { id: hitId });
+            EventBus.emit('panel:request-open', { id: 'unit-inspector' });
         } else {
             TritiumStore.set('map.selectedUnitId', null);
             EventBus.emit('unit:deselected', {});
@@ -2003,9 +2704,13 @@ function _onDblClick(e) {
 
     const hitId = _hitTestUnit(sx, sy);
     if (hitId) {
+        TritiumStore.set('map.selectedUnitId', hitId);
+        EventBus.emit('unit:selected', { id: hitId });
+        EventBus.emit('panel:request-open', { id: 'unit-inspector' });
         const unit = TritiumStore.units.get(hitId);
-        if (unit) {
-            DeviceModalManager.open(hitId, _resolveModalType(unit), unit);
+        if (unit && unit.position) {
+            _state.cam.targetX = unit.position.x;
+            _state.cam.targetY = unit.position.y;
         }
     }
 }
@@ -2065,11 +2770,17 @@ function _hitTestUnit(sx, sy) {
     const hitRadius = 14;
     let closest = null;
     let closestDist = Infinity;
+    const fogEnabled = _state.fogEnabled;
 
     const units = TritiumStore.units;
     for (const [id, unit] of units) {
         const pos = unit.position;
         if (!pos || pos.x === undefined) continue;
+        // Fog of war: cannot select invisible hostile units
+        if (fogEnabled) {
+            const alliance = (unit.alliance || '').toLowerCase();
+            if (alliance === 'hostile' && !unit.visible) continue;
+        }
         const sp = worldToScreen(pos.x, pos.y);
         const dx = sp.x - sx;
         const dy = sp.y - sy;
@@ -2206,26 +2917,31 @@ function _handleContextAction(action, worldPos, selectedId, building) {
 
 function _doDispatch(unitId, wx, wy) {
     const unit = TritiumStore.units.get(unitId);
-    if (unit && unit.position) {
-        // Add visual dispatch arrow
-        _state.dispatchArrows.push({
-            fromX: unit.position.x,
-            fromY: unit.position.y,
-            toX: wx,
-            toY: wy,
-            time: Date.now(),
-        });
-    }
 
-    EventBus.emit('unit:dispatched', { id: unitId, target: { x: wx, y: wy } });
-
-    // Send dispatch command to backend
-    fetch('/api/amy/command', {
+    // Send dispatch command to backend FIRST, then show feedback on success
+    fetch('/api/amy/simulation/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'dispatch', target_id: unitId, x: wx, y: wy }),
-    }).catch(err => {
-        console.error('[MAP] Dispatch failed:', err);
+        body: JSON.stringify({ unit_id: unitId, target: { x: wx, y: wy } }),
+    }).then(resp => {
+        if (resp.ok) {
+            // Show visual dispatch arrow only on confirmed success
+            if (unit && unit.position) {
+                _state.dispatchArrows.push({
+                    fromX: unit.position.x,
+                    fromY: unit.position.y,
+                    toX: wx,
+                    toY: wy,
+                    time: Date.now(),
+                });
+            }
+            EventBus.emit('unit:dispatched', { id: unitId, target: { x: wx, y: wy } });
+            EventBus.emit('toast:show', { message: 'Dispatch command sent', type: 'info' });
+        } else {
+            EventBus.emit('toast:show', { message: 'Dispatch failed', type: 'alert' });
+        }
+    }).catch(() => {
+        EventBus.emit('toast:show', { message: 'Dispatch failed: network error', type: 'alert' });
     });
 }
 
@@ -2364,9 +3080,38 @@ function _onMinimapPan(data) {
     _state.cam.targetY = data.y;
 }
 
+/**
+ * Handle map:flyToMission event — move camera to mission area.
+ * Accepts x/y game coordinates. Calculates zoom from radius.
+ */
+function _onPanToMission(data) {
+    if (!data) return;
+    if (data.x !== undefined && data.y !== undefined) {
+        _state.cam.targetX = data.x;
+        _state.cam.targetY = data.y;
+    }
+    if (data.radius_m) {
+        // At zoom 1.0, viewport shows ~500m. Scale proportionally.
+        const z = 250 / Math.max(data.radius_m, 20);
+        _state.cam.targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    }
+    console.log(`[MAP] Pan to mission: (${_state.cam.targetX.toFixed(1)}, ${_state.cam.targetY.toFixed(1)}), zoom=${_state.cam.targetZoom.toFixed(2)}`);
+}
+
 function _onSelectedUnitChanged(newId, _oldId) {
-    // If a unit is selected, optionally center camera on it
-    // (Only on explicit programmatic selection, not on every click)
+    // When a unit is clicked, show its latest thought (click-to-view).
+    // Surfaces stored thoughts even if they were below broadcast threshold.
+    if (newId) {
+        const unit = TritiumStore.units.get(newId);
+        if (unit && unit.latestThought && !unit.thoughtText) {
+            const lt = unit.latestThought;
+            unit.thoughtText = lt.text;
+            unit.thoughtEmotion = lt.emotion || 'neutral';
+            unit.thoughtImportance = lt.importance || 'normal';
+            unit.thoughtDuration = lt.duration || 5;
+            unit.thoughtExpires = Date.now() + (lt.duration || 5) * 1000;
+        }
+    }
 }
 
 // ============================================================

@@ -1796,26 +1796,122 @@ body.v2 {
 .chat-user .chat-sender { color: var(--green); }
 .chat-error .chat-sender { color: var(--magenta); }
 
-/* Chat messages (from main.js appendChatMessage) */
+/* Chat message bubbles (from main.js appendChatMessage) */
 .chat-msg {
+    max-width: 88%;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
     font-size: 0.75rem;
     color: var(--text-secondary);
     line-height: 1.4;
 }
 
+.chat-msg-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 2px;
+}
+
 .chat-msg-sender {
-    font-size: 0.6rem;
+    font-size: 0.55rem;
     letter-spacing: 0.08em;
-    margin-right: 6px;
+    text-transform: uppercase;
+}
+
+.chat-msg-time {
+    font-size: 0.5rem;
+    color: var(--text-ghost);
 }
 
 .chat-msg-text {
-    /* inherits from .chat-msg */
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
-.chat-msg-amy .chat-msg-sender { color: var(--cyan); }
-.chat-msg-user .chat-msg-sender { color: var(--green); }
+/* User messages: right-aligned, cyan accent */
+.chat-msg-user {
+    align-self: flex-end;
+    background: rgba(0, 240, 255, 0.06);
+    border: 1px solid rgba(0, 240, 255, 0.12);
+    border-radius: var(--radius-md) var(--radius-md) 2px var(--radius-md);
+}
+.chat-msg-user .chat-msg-sender { color: #00f0ff; }
+
+/* Amy messages: left-aligned, magenta accent */
+.chat-msg-amy {
+    align-self: flex-start;
+    background: rgba(255, 42, 109, 0.06);
+    border: 1px solid rgba(255, 42, 109, 0.12);
+    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 2px;
+}
+.chat-msg-amy .chat-msg-sender { color: #ff2a6d; }
+
+/* System / autonomous thought messages: centered, dim, italic */
+.chat-msg-system {
+    align-self: center;
+    text-align: center;
+    font-style: italic;
+    color: var(--text-ghost);
+    font-size: 0.65rem;
+    padding: 4px 8px;
+    max-width: 95%;
+    border: none;
+    background: none;
+}
+.chat-msg-system .chat-msg-sender { color: var(--text-ghost); font-style: normal; }
+.chat-msg-system .chat-msg-time { display: none; }
+
+/* Error messages */
+.chat-msg-error {
+    align-self: center;
+    text-align: center;
+    color: var(--magenta);
+    font-size: 0.65rem;
+    padding: 4px 8px;
+}
 .chat-msg-error .chat-msg-sender { color: var(--magenta); }
+
+/* Typing indicator: three bouncing dots */
+.chat-typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    align-self: flex-start;
+    background: rgba(255, 42, 109, 0.04);
+    border: 1px solid rgba(255, 42, 109, 0.08);
+    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 2px;
+    max-width: 120px;
+}
+
+.chat-typing-label {
+    font-size: 0.55rem;
+    letter-spacing: 0.08em;
+    color: #ff2a6d;
+}
+
+.chat-typing-dots {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+}
+
+.chat-typing-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #ff2a6d;
+    opacity: 0.4;
+    animation: chat-dot-bounce 1.4s ease-in-out infinite;
+}
+.chat-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes chat-dot-bounce {
+    0%, 80%, 100% { opacity: 0.4; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-4px); }
+}
 
 .chat-input-area {
     display: flex;
@@ -1898,9 +1994,51 @@ body.v2 {
 .score-sep { width: 1px; height: 12px; background: var(--border); }
 
 .connection-indicator { display: flex; align-items: center; gap: 4px; }
-.conn-dot { width: 6px; height: 6px; border-radius: 50%; background: #4a5568; }
-.connection-indicator[data-state="connected"] .conn-dot { background: var(--green); box-shadow: 0 0 6px rgba(5, 255, 161, 0.4); }
+.conn-dot { width: 6px; height: 6px; border-radius: 50%; background: #4a5568; transition: background 0.3s ease, box-shadow 0.3s ease; }
+.connection-indicator[data-state="connected"] .conn-dot {
+    background: var(--green);
+    box-shadow: 0 0 6px rgba(5, 255, 161, 0.4);
+    animation: conn-pulse 2.5s ease-in-out infinite;
+}
 .conn-label { font-size: 0.55rem; color: var(--text-dim); }
+
+/* Connection indicator pulse animation */
+@keyframes conn-pulse {
+    0%, 100% {
+        box-shadow: 0 0 4px rgba(5, 255, 161, 0.3);
+        background: #05ffa1;
+    }
+    50% {
+        box-shadow: 0 0 10px rgba(5, 255, 161, 0.6);
+        background: #05ffa1;
+    }
+}
+
+/* Header threat count: active threat pulse */
+#header-threats.has-threats .stat-dot {
+    background: #ff2a6d;
+    box-shadow: 0 0 6px rgba(255, 42, 109, 0.5);
+    animation: threat-dot-pulse 1.2s ease-in-out infinite;
+}
+#header-threats.has-threats .stat-value {
+    color: #ff2a6d;
+}
+
+@keyframes threat-dot-pulse {
+    0%, 100% {
+        box-shadow: 0 0 4px rgba(255, 42, 109, 0.3);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 12px rgba(255, 42, 109, 0.7);
+        transform: scale(1.3);
+    }
+}
+
+/* Header unit count: friendly green coloring */
+#header-units .stat-value {
+    color: #05ffa1;
+}
 
 /* Sidebar sections */
 .sidebar-section { border-bottom: 1px solid var(--border); }
@@ -2220,6 +2358,10 @@ body.v2 {
     background: linear-gradient(135deg, var(--surface-2) 0%, var(--surface-1) 100%);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
+    max-height: 85vh;
+    overflow-y: auto;
+    min-width: 420px;
+    max-width: 640px;
 }
 
 .game-over-title {
@@ -2232,10 +2374,150 @@ body.v2 {
     margin-bottom: 20px;
 }
 
-.game-over-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+.game-over-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 20px; }
 .go-stat { text-align: center; }
 .go-stat-label { font-size: 0.55rem; color: var(--text-dim); letter-spacing: 0.1em; display: block; margin-bottom: 4px; }
 .go-stat-value { font-size: 1.2rem; color: var(--text-primary); font-weight: 600; }
+
+/* Game Over: MVP Spotlight */
+.go-mvp-section { margin-bottom: 16px; }
+
+.go-mvp-spotlight {
+    text-align: center;
+    padding: 16px 20px;
+    border: 1px solid rgba(0, 240, 255, 0.25);
+    border-radius: var(--radius-md, 6px);
+    background: linear-gradient(135deg, rgba(0, 240, 255, 0.06) 0%, rgba(0, 240, 255, 0.02) 100%);
+    margin-bottom: 4px;
+}
+
+.go-mvp-label {
+    font-size: 0.5rem;
+    color: var(--text-dim, #888);
+    letter-spacing: 0.2em;
+    margin-bottom: 6px;
+}
+
+.go-mvp-name {
+    font-family: var(--font-mono, monospace);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #00f0ff;
+    text-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+    letter-spacing: 0.08em;
+    margin-bottom: 2px;
+}
+
+.go-mvp-type {
+    font-size: 0.5rem;
+    color: var(--text-dim, #888);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.go-mvp-details {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.7rem;
+    color: var(--text-muted, #aaa);
+}
+
+.go-mvp-kills { color: #05ffa1; font-weight: 600; }
+.go-mvp-sep { color: var(--text-dim, #555); margin: 0 8px; }
+.go-mvp-acc { color: #fcee0a; font-weight: 600; }
+
+/* Game Over: Combat Stats Grid */
+.go-combat-section { margin-bottom: 16px; }
+
+.go-combat-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+}
+
+.go-stat-card {
+    text-align: center;
+    padding: 8px 6px;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    border-radius: var(--radius-sm, 4px);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.go-stat-card-value {
+    display: block;
+    font-family: var(--font-mono, monospace);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary, #eee);
+    margin-bottom: 2px;
+}
+
+.go-stat-card-label {
+    display: block;
+    font-size: 0.45rem;
+    color: var(--text-dim, #888);
+    letter-spacing: 0.1em;
+}
+
+/* Game Over: Unit Performance Table */
+.go-units-section { margin-bottom: 16px; }
+
+.go-unit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.65rem;
+}
+
+.go-unit-table th {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.5rem;
+    color: var(--text-dim, #888);
+    letter-spacing: 0.1em;
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.go-unit-table td {
+    padding: 5px 8px;
+    color: var(--text-muted, #aaa);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.go-unit-table tbody tr:nth-child(odd) {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.go-unit-table tbody tr:hover {
+    background: rgba(0, 240, 255, 0.04);
+}
+
+.go-unit-name {
+    font-weight: 500;
+    color: var(--text-primary, #eee);
+}
+
+.go-unit-type {
+    font-size: 0.5rem;
+    color: var(--text-dim, #888);
+    text-transform: uppercase;
+}
+
+.go-unit-kills { font-weight: 600; color: #05ffa1; }
+.go-unit-acc { color: #fcee0a; }
+.go-unit-dmg { color: var(--text-muted, #aaa); }
+.go-unit-status { font-family: var(--font-mono, monospace); font-size: 0.5rem; letter-spacing: 0.08em; font-weight: 600; }
+
+/* War HUD game-over MVP slot */
+.war-gameover-mvp-slot { margin: 8px 0; }
+
+.war-gameover-mvp {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #00f0ff;
+    text-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+    letter-spacing: 0.05em;
+}
 
 /* Mission Generation Modal */
 .mission-modal-overlay {
@@ -2947,4 +3229,217 @@ body.v2 {
 /* Panel toggle buttons on the right side of the menu bar */
 .menu-bar-spacer {
     flex: 1;
+}
+
+
+/* ========================================
+   Mission Mode HUD Styles
+   ======================================== */
+
+/* Mode indicator badge (used if switching to DOM-based HUD) */
+.mode-indicator-badge {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    backdrop-filter: blur(4px);
+}
+
+.mode-indicator-badge.drone-swarm {
+    color: var(--magenta);
+    border: 1px solid rgba(255, 42, 109, 0.3);
+    background: rgba(255, 42, 109, 0.08);
+}
+
+.mode-indicator-badge.civil-unrest {
+    color: var(--amber, #ffa500);
+    border: 1px solid rgba(255, 165, 0, 0.3);
+    background: rgba(255, 165, 0, 0.08);
+}
+
+/* Infrastructure health bar (drone_swarm mode) */
+.mode-infra-bar {
+    height: 10px;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid #333;
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+}
+
+.mode-infra-bar-fill {
+    height: 100%;
+    transition: width 0.3s ease, background 0.3s ease;
+    border-radius: 1px;
+}
+
+.mode-infra-bar-fill.health-high {
+    background: var(--green, #05ffa1);
+}
+
+.mode-infra-bar-fill.health-mid {
+    background: var(--yellow, #fcee0a);
+}
+
+.mode-infra-bar-fill.health-low {
+    background: var(--magenta, #ff2a6d);
+}
+
+/* Civilian harm counter (civil_unrest mode) */
+.mode-harm-counter {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+}
+
+.mode-harm-counter.warning {
+    color: var(--amber, #ffa500);
+}
+
+.mode-harm-counter.critical {
+    color: var(--magenta, #ff2a6d);
+    animation: mode-harm-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mode-harm-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Ammo bar in unit detail panel */
+.mode-ammo-bar {
+    transition: width 0.2s ease;
+}
+
+/* Altitude indicator for aerial units on map */
+.mode-altitude-line {
+    stroke: rgba(255, 42, 109, 0.5);
+    stroke-width: 1;
+    stroke-dasharray: 3 2;
+}
+
+.mode-altitude-label {
+    font-family: var(--font-mono);
+    font-size: 0.45rem;
+    color: var(--text-ghost);
+}
+
+
+/* ========================================
+   Right-Click Context Menu
+   ======================================== */
+
+.map-context-menu {
+    position: fixed;
+    z-index: 9999;
+    background: rgba(10, 10, 15, 0.95);
+    border: 1px solid var(--cyan, #00f0ff);
+    min-width: 200px;
+    padding: 4px 0;
+    backdrop-filter: blur(8px);
+    box-shadow:
+        0 0 12px rgba(0, 240, 255, 0.15),
+        0 4px 20px rgba(0, 0, 0, 0.6);
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    pointer-events: auto;
+    animation: ctx-menu-in 120ms ease-out;
+}
+
+@keyframes ctx-menu-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.map-context-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--text, #c8ccd0);
+    white-space: nowrap;
+    transition: background 100ms, color 100ms;
+}
+
+.map-context-item:hover {
+    background: rgba(0, 240, 255, 0.12);
+    color: var(--cyan, #00f0ff);
+}
+
+.map-context-item:active {
+    background: rgba(0, 240, 255, 0.25);
+}
+
+.map-context-item[data-action="cancel"] {
+    color: var(--text-ghost, #555);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    margin-top: 2px;
+}
+
+.map-context-item[data-action="cancel"]:hover {
+    color: var(--text, #c8ccd0);
+}
+
+.map-context-separator {
+    height: 1px;
+    margin: 4px 12px;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+
+/* ========================================
+   Morale / Suppression Visual Indicators
+   Matches backend thresholds in morale.py:
+     broken < 0.1, suppressed < 0.3, emboldened > 0.9
+   ======================================== */
+
+/* --- Keyframes --- */
+@keyframes morale-suppressed-pulse {
+    0%, 100% { border-color: #fcee0a44; box-shadow: 0 0 4px #fcee0a22; }
+    50%      { border-color: #fcee0a;   box-shadow: 0 0 10px #fcee0a66; }
+}
+
+@keyframes morale-broken-pulse {
+    0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 6px #ff2a6d66; }
+    50%      { border-color: #fcee0a; box-shadow: 0 0 12px #fcee0a88; }
+}
+
+@keyframes morale-emboldened-glow {
+    0%, 100% { box-shadow: 0 0 8px #00f0ff44; }
+    50%      { box-shadow: 0 0 18px #00f0ff, 0 0 30px #00f0ff44; }
+}
+
+/* --- Morale state classes (applied to .tritium-unit-marker outer wrapper) --- */
+.unit-marker-suppressed .tritium-unit-inner {
+    animation: morale-suppressed-pulse 1.5s ease-in-out infinite !important;
+}
+
+.unit-marker-broken .tritium-unit-inner {
+    animation: morale-broken-pulse 0.5s ease-in-out infinite !important;
+    transform: scale(0.85);
+}
+
+.unit-marker-emboldened .tritium-unit-inner {
+    animation: morale-emboldened-glow 2s ease-in-out infinite !important;
+    transform: scale(1.1);
+}
+
+/* --- Morale badge (positioned top-right of inner marker element) --- */
+.morale-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    font-size: 8px;
+    font-weight: bold;
+    line-height: 1;
+    padding: 1px 2px;
+    border-radius: 3px;
+    background: #000000cc;
+    pointer-events: none;
+    z-index: 5;
+    text-shadow: 0 0 3px currentColor;
 }

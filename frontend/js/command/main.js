@@ -10,7 +10,7 @@
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { WebSocketManager } from './websocket.js';
-import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode } from './map-maplibre.js';
+import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow } from './map-maplibre.js';
 import { PanelManager } from './panel-manager.js';
 import { LayoutManager } from './layout-manager.js';
 import { createMenuBar, focusSaveInput } from './menu-bar.js';
@@ -27,6 +27,15 @@ import { ScenariosPanelDef } from './panels/scenarios.js';
 import { SystemPanelDef } from './panels/system.js';
 import { MinimapPanelDef } from './panels/minimap.js';
 import { GraphlingsPanelDef } from './panels/graphlings.js';
+import { ReplayPanelDef } from './panels/replay.js';
+import { BattleStatsPanelDef } from './panels/stats.js';
+import { SensorNetPanelDef } from './panels/sensors.js';
+import { UnitInspectorPanelDef } from './panels/unit-inspector.js';
+import { CamerasPanelDef } from './panels/cameras.js';
+import { SearchPanelDef } from './panels/search.js';
+import { TakPanelDef } from './panels/tak.js';
+import { VideosPanelDef } from './panels/videos.js';
+import { ZonesPanelDef } from './panels/zones.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 
 // Make available on window for console debugging
@@ -51,6 +60,17 @@ function init() {
 
     // WebSocket
     ws.connect();
+
+    // Forward viewport updates from the map to the backend for LOD fidelity
+    EventBus.on('viewport:update', (data) => {
+        ws.send({
+            type: 'viewport_update',
+            center_lat: data.center_lat,
+            center_lng: data.center_lng,
+            zoom: data.zoom,
+            radius: data.radius,
+        });
+    });
 
     // Connection status indicator
     TritiumStore.on('connection.status', (status) => {
@@ -84,6 +104,8 @@ function init() {
         if (threatEl) {
             const val = threatEl.querySelector('.stat-value');
             if (val) val.textContent = hostileCount;
+            // Toggle pulsing threat indicator when threats are active
+            threatEl.classList.toggle('has-threats', hostileCount > 0);
         }
 
         // Status bar
@@ -129,12 +151,6 @@ function init() {
     TritiumStore.on('game.eliminations', (elims) => {
         const header = document.getElementById('game-eliminations');
         if (header) header.textContent = elims;
-    });
-
-    // Chat thought context
-    TritiumStore.on('amy.lastThought', (thought) => {
-        const ctx = document.getElementById('chat-context-text');
-        if (ctx) ctx.textContent = thought || '--';
     });
 
     // Keyboard shortcuts
@@ -221,6 +237,27 @@ function init() {
         });
         fetchAmyStatus();
     }
+
+    // WASD control mode indicator
+    TritiumStore.on('controlledUnitId', (id) => {
+        let indicator = document.getElementById('wasd-control-indicator');
+        if (id) {
+            const unit = TritiumStore.units.get(id);
+            const name = unit?.name || id;
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.id = 'wasd-control-indicator';
+                indicator.className = 'wasd-control-indicator';
+                document.body.appendChild(indicator);
+            }
+            indicator.innerHTML =
+                `<span class="wasd-label mono">CONTROLLING: ${escapeHtml(name)}</span>` +
+                `<span class="wasd-hint mono">WASD move // ESC release</span>`;
+            indicator.hidden = false;
+        } else if (indicator) {
+            indicator.hidden = true;
+        }
+    });
 
     // Audio: initialize on first user interaction and wire combat events
     let _audioInitialized = false;
@@ -355,6 +392,22 @@ function initPanelSystem(container) {
     panelManager.register(SystemPanelDef);
     panelManager.register(MinimapPanelDef);
     panelManager.register(GraphlingsPanelDef);
+    panelManager.register(ReplayPanelDef);
+    panelManager.register(BattleStatsPanelDef);
+    panelManager.register(SensorNetPanelDef);
+    panelManager.register(UnitInspectorPanelDef);
+    panelManager.register(CamerasPanelDef);
+    panelManager.register(SearchPanelDef);
+    panelManager.register(TakPanelDef);
+    panelManager.register(VideosPanelDef);
+    panelManager.register(ZonesPanelDef);
+
+    // panel:request-open — allows map click to open panels by id
+    EventBus.on('panel:request-open', (data) => {
+        if (data && data.id && panelManager) {
+            panelManager.open(data.id);
+        }
+    });
 
     // Try loading saved layout; if none, open defaults
     if (!panelManager.loadLayout()) {
@@ -377,6 +430,7 @@ function initPanelSystem(container) {
             toggleGrid: () => (_activeMapModule ? _activeMapModule.toggleGrid() : toggleGrid()),
             toggleFog: () => (_activeMapModule ? _activeMapModule.toggleFog() : toggleFog()),
             toggleTerrain: () => (_activeMapModule ? _activeMapModule.toggleTerrain() : toggleTerrain()),
+            toggleUnits: () => (_activeMapModule ? _activeMapModule.toggleUnits() : toggleUnits()),
             toggleLabels: () => (_activeMapModule ? _activeMapModule.toggleLabels() : toggleLabels()),
             toggleModels: () => (_activeMapModule ? _activeMapModule.toggleModels() : toggleModels()),
             toggleWaterways: () => (_activeMapModule ? _activeMapModule.toggleWaterways() : toggleWaterways()),
@@ -397,6 +451,8 @@ function initPanelSystem(container) {
             toggleLayerHud: () => (_activeMapModule ? _activeMapModule.toggleLayerHud() : toggleLayerHud()),
             toggleHealthBars: () => (_activeMapModule ? _activeMapModule.toggleHealthBars() : toggleHealthBars()),
             toggleSelectionFx: () => (_activeMapModule ? _activeMapModule.toggleSelectionFx() : toggleSelectionFx()),
+            toggleSquadHulls: () => (_activeMapModule ? _activeMapModule.toggleSquadHulls() : toggleSquadHulls()),
+            toggleAutoFollow: () => (_activeMapModule ? _activeMapModule.toggleAutoFollow() : toggleAutoFollow()),
             centerOnAction: () => (_activeMapModule ? _activeMapModule.centerOnAction() : centerOnAction()),
             resetCamera: () => (_activeMapModule ? _activeMapModule.resetCamera() : resetCamera()),
             zoomIn: () => (_activeMapModule ? _activeMapModule.zoomIn() : zoomIn()),
@@ -514,7 +570,18 @@ function showGameOver(phase) {
     const elimsEl = document.getElementById('go-eliminations');
     if (elimsEl) elimsEl.textContent = TritiumStore.game.eliminations || 0;
 
+    // Clear previous stats sections
+    const mvpSection = document.getElementById('go-mvp-section');
+    const combatSection = document.getElementById('go-combat-section');
+    const unitsSection = document.getElementById('go-units-section');
+    if (mvpSection) mvpSection.innerHTML = '';
+    if (combatSection) combatSection.innerHTML = '';
+    if (unitsSection) unitsSection.innerHTML = '';
+
     overlay.hidden = false;
+
+    // Fetch after-action stats from backend (parallel requests)
+    _fetchGameOverStats(mvpSection, combatSection, unitsSection);
 
     overlay.querySelector('[data-action="play-again"]')?.addEventListener('click', () => {
         overlay.hidden = true;
@@ -522,9 +589,55 @@ function showGameOver(phase) {
     }, { once: true });
 }
 
+/**
+ * Fetch after-action stats and populate game-over overlay sections.
+ * Uses game-over-stats.js helper functions to build HTML.
+ * Gracefully handles API failures by leaving sections empty.
+ */
+async function _fetchGameOverStats(mvpSection, combatSection, unitsSection) {
+    try {
+        // Parallel fetch: summary (includes MVP) and full unit stats
+        const [summaryResp, statsResp] = await Promise.all([
+            fetch('/api/game/stats/summary').catch(() => null),
+            fetch('/api/game/stats').catch(() => null),
+        ]);
+
+        // Process summary response (includes MVP data)
+        if (summaryResp && summaryResp.ok) {
+            const summary = await summaryResp.json();
+
+            // MVP spotlight
+            if (mvpSection && summary.mvp && typeof goBuildMvpSpotlightHtml === 'function') {
+                mvpSection.innerHTML = goBuildMvpSpotlightHtml(summary.mvp);
+            }
+
+            // Combat stats grid
+            if (combatSection && typeof goBuildCombatStatsHtml === 'function') {
+                combatSection.innerHTML = goBuildCombatStatsHtml(summary);
+            }
+        }
+
+        // Process full stats response (per-unit table)
+        if (statsResp && statsResp.ok) {
+            const stats = await statsResp.json();
+            if (unitsSection && stats.units && typeof goBuildUnitTableHtml === 'function') {
+                unitsSection.innerHTML = goBuildUnitTableHtml(stats.units);
+            }
+        }
+    } catch (e) {
+        console.warn('[TRITIUM] Failed to fetch after-action stats:', e);
+        // Graceful degradation: overlay still shows basic score/wave/elims
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
+
+// In-memory chat history for the session
+const _chatHistory = [];
+// Track whether Amy is currently thinking (typing indicator)
+let _amyThinking = false;
 
 function initChat() {
     const chatClose = document.getElementById('chat-close');
@@ -560,6 +673,39 @@ function initChat() {
             document.getElementById('chat-input')?.focus();
         }
     });
+
+    // Amy's response arrives asynchronously via WebSocket transcript events.
+    // When Amy speaks (speaker === 'amy'), show it in the chat and clear the
+    // typing indicator.
+    EventBus.on('chat:amy_response', (data) => {
+        _hideTypingIndicator();
+        appendChatMessage('AMY', data.text || '...', 'amy');
+    });
+
+    // Optionally show Amy's autonomous thoughts as dimmed system messages in
+    // the chat so the operator sees she is alive even when not talking.
+    EventBus.on('amy:thought', (data) => {
+        const overlay = document.getElementById('chat-overlay');
+        // Only show thoughts when the chat is open
+        if (overlay && !overlay.hidden) {
+            appendChatMessage('AMY', data.text || '', 'system');
+        }
+    });
+
+    // Wire context hint: show Amy's last thought above the chat input
+    TritiumStore.on('amy.lastThought', (thought) => {
+        const ctx = document.getElementById('chat-context-text');
+        if (ctx) ctx.textContent = thought || '--';
+    });
+
+    // Show Amy's mood in the context area when it changes
+    TritiumStore.on('amy.mood', (mood) => {
+        const label = document.querySelector('.chat-context-label');
+        if (label) {
+            const moodStr = mood ? ` // ${mood.toUpperCase()}` : '';
+            label.textContent = `LATEST THOUGHT${moodStr}`;
+        }
+    });
 }
 
 function toggleChat(open) {
@@ -581,29 +727,92 @@ async function sendChat(input) {
     input.value = '';
 
     appendChatMessage('YOU', text, 'user');
+    _showTypingIndicator();
 
     try {
         const resp = await fetch('/api/amy/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text }),
+            body: JSON.stringify({ text: text }),
         });
-        const data = await resp.json();
-        appendChatMessage('AMY', data.response || data.text || '...', 'amy');
+        if (!resp.ok) {
+            const errData = await resp.json().catch(() => ({}));
+            _hideTypingIndicator();
+            appendChatMessage('SYSTEM', errData.error || `Error ${resp.status}`, 'error');
+        }
+        // Amy's actual response will arrive via WebSocket (amy_transcript event).
+        // The typing indicator stays visible until that event arrives.
+        // Safety timeout: clear typing indicator after 30s if no response.
+        setTimeout(() => _hideTypingIndicator(), 30000);
     } catch (e) {
+        _hideTypingIndicator();
         appendChatMessage('SYSTEM', 'Failed to reach Amy', 'error');
     }
 }
 
+function _showTypingIndicator() {
+    if (_amyThinking) return;
+    _amyThinking = true;
+    const messages = document.getElementById('chat-messages');
+    if (!messages) return;
+    // Remove any existing indicator first
+    messages.querySelector('.chat-typing-indicator')?.remove();
+    const indicator = document.createElement('div');
+    indicator.className = 'chat-typing-indicator';
+    indicator.innerHTML = '<span class="chat-typing-label mono">AMY</span><span class="chat-typing-dots"><span></span><span></span><span></span></span>';
+    messages.appendChild(indicator);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function _hideTypingIndicator() {
+    _amyThinking = false;
+    const messages = document.getElementById('chat-messages');
+    if (!messages) return;
+    messages.querySelector('.chat-typing-indicator')?.remove();
+}
+
+/**
+ * Format a timestamp for display in chat bubbles.
+ * @param {Date} date
+ * @returns {string} e.g. "14:32"
+ */
+function _formatChatTime(date) {
+    const h = String(date.getHours()).padStart(2, '0');
+    const m = String(date.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+}
+
+/**
+ * Append a message bubble to the chat messages container.
+ * @param {string} sender - display name (YOU, AMY, SYSTEM)
+ * @param {string} text - message text
+ * @param {string} type - 'user' | 'amy' | 'system' | 'error'
+ */
 function appendChatMessage(sender, text, type) {
     const messages = document.getElementById('chat-messages');
     if (!messages) return;
 
+    const now = new Date();
+    const timeStr = _formatChatTime(now);
+
+    // Store in session history
+    _chatHistory.push({ role: type, text, time: now.toISOString() });
+
     const msg = document.createElement('div');
     msg.className = `chat-msg chat-msg-${type}`;
-    msg.innerHTML = `<span class="chat-msg-sender mono">${escapeHtml(sender)}</span><span class="chat-msg-text">${escapeHtml(text)}</span>`;
+    msg.innerHTML =
+        `<div class="chat-msg-header"><span class="chat-msg-sender mono">${escapeHtml(sender)}</span><span class="chat-msg-time mono">${timeStr}</span></div>` +
+        `<div class="chat-msg-text">${escapeHtml(text)}</div>`;
     messages.appendChild(msg);
     messages.scrollTop = messages.scrollHeight;
+}
+
+/**
+ * Get the in-memory chat history for the current session.
+ * @returns {Array<{role: string, text: string, time: string}>}
+ */
+function getChatHistory() {
+    return _chatHistory.slice();
 }
 
 // ---------------------------------------------------------------------------
@@ -767,6 +976,11 @@ function initMapModes() {
             document.querySelectorAll('[data-map-mode]').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             EventBus.emit('map:mode', { mode });
+
+            // Auto-open Game HUD in setup mode (contains PLACE UNIT toolbar)
+            if (mode === 'setup' && panelManager && !panelManager.isOpen('game')) {
+                panelManager.open('game');
+            }
         });
     });
 }
@@ -841,6 +1055,38 @@ function initKeyboard() {
             }
         }
 
+        // WASD operator control — when controlling a unit, intercept movement keys
+        const controlledId = TritiumStore.get('controlledUnitId');
+        if (controlledId && !e.ctrlKey && !e.altKey) {
+            const moveMap = {
+                'w': 'move_forward', 'W': 'move_forward',
+                's': 'move_backward', 'S': 'move_backward',
+                'a': 'move_left',    'A': 'move_left',
+                'd': 'move_right',   'D': 'move_right',
+            };
+            const action = moveMap[e.key];
+            if (action) {
+                e.preventDefault();
+                fetch(`/api/npc/${encodeURIComponent(controlledId)}/action`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action }),
+                }).catch(() => {});
+                return;
+            }
+            // Escape releases control
+            if (e.key === 'Escape') {
+                fetch(`/api/npc/${encodeURIComponent(controlledId)}/control`, {
+                    method: 'DELETE',
+                }).then(() => {
+                    TritiumStore.set('controlledUnitId', null);
+                    EventBus.emit('unit:control-released', { id: controlledId });
+                    EventBus.emit('toast:show', { message: 'Unit control released', type: 'info' });
+                }).catch(() => {});
+                return;
+            }
+        }
+
         // Ctrl+Shift+S: save layout
         if (e.ctrlKey && e.shiftKey && (e.key === 'S' || e.key === 's')) {
             e.preventDefault();
@@ -873,6 +1119,9 @@ function initKeyboard() {
                 document.getElementById('modal-overlay').hidden = true;
                 document.getElementById('game-over-overlay').hidden = true;
                 MissionModal.hide();
+                if (TritiumStore.get('map.mode') === 'setup') {
+                    document.querySelector('[data-map-mode="observe"]')?.click();
+                }
                 break;
             case '/':
                 e.preventDefault();
@@ -880,7 +1129,7 @@ function initKeyboard() {
                 break;
             case 'm':
             case 'M':
-                panelManager.toggle('minimap');
+                if (panelManager) panelManager.toggle('minimap');
                 break;
             case 'o':
             case 'O':
@@ -925,13 +1174,44 @@ function initKeyboard() {
             case '5':
                 if (panelManager) panelManager.toggle('mesh');
                 break;
+            case '6':
+                if (panelManager) panelManager.toggle('cameras');
+                break;
+            case '7':
+                if (panelManager) panelManager.toggle('search');
+                break;
+            case '8':
+                if (panelManager) panelManager.toggle('tak');
+                break;
+            case '9':
+                if (panelManager) panelManager.toggle('videos');
+                break;
+            case '0':
+                if (panelManager) panelManager.toggle('zones');
+                break;
+            case 'a':
+            case 'A':
+                _mapActions ? _mapActions.toggleAutoFollow() : toggleAutoFollow();
+                break;
             case 'f':
             case 'F':
                 _mapActions ? _mapActions.centerOnAction() : centerOnAction();
                 break;
             case 'r':
             case 'R':
-                _mapActions ? _mapActions.resetCamera() : resetCamera();
+                if (panelManager) panelManager.toggle('replay');
+                break;
+            case 'e':
+            case 'E':
+                if (panelManager) panelManager.toggle('sensors');
+                break;
+            case 'p':
+            case 'P':
+                if (panelManager) panelManager.toggle('battle-stats');
+                break;
+            case 'j':
+            case 'J':
+                if (panelManager) panelManager.toggle('unit-inspector');
                 break;
             case '[':
                 _mapActions ? _mapActions.zoomOut() : zoomOut();
@@ -939,13 +1219,13 @@ function initKeyboard() {
             case ']':
                 _mapActions ? _mapActions.zoomIn() : zoomIn();
                 break;
+            case 'u':
+            case 'U':
+                _mapActions ? _mapActions.toggleUnits() : toggleUnits();
+                break;
             case 'v':
             case 'V':
-                if (_activeMapModule && _activeMapModule.toggleTilt) {
-                    _activeMapModule.toggleTilt();
-                } else if (typeof toggleTilt === 'function') {
-                    toggleTilt();
-                }
+                _mapActions ? _mapActions.toggleFog() : toggleFog();
                 break;
             case 'k':
             case 'K':
@@ -965,8 +1245,27 @@ function initKeyboard() {
                 break;
             case 'Tab':
                 if (panelManager) {
-                    // In unified layout, Tab cycles panel focus
                     e.preventDefault();
+                    const openPanels = panelManager.getRegisteredPanels().filter(p => p.isOpen);
+                    if (openPanels.length > 0) {
+                        const currentFocus = panelManager._focusedPanelId || null;
+                        let idx = openPanels.findIndex(p => p.id === currentFocus);
+                        idx = (idx + 1) % openPanels.length;
+                        const nextId = openPanels[idx].id;
+                        // Remove focus indicator from all panels
+                        if (panelManager._panels) {
+                            for (const [, panel] of panelManager._panels) {
+                                if (panel.el) panel.el.classList.remove('panel-focused');
+                            }
+                        }
+                        // Add focus indicator to next panel
+                        const nextPanel = panelManager._panels?.get(nextId);
+                        if (nextPanel && nextPanel.el) {
+                            nextPanel.el.classList.add('panel-focused');
+                        }
+                        panelManager._focusedPanelId = nextId;
+                        EventBus.emit('panel:focused', { id: nextId });
+                    }
                 } else {
                     // Legacy: toggle sidebar
                     e.preventDefault();
@@ -1011,7 +1310,7 @@ function escapeHtml(text) {
 }
 
 // Export for use by other modules
-export { showToast, showBanner, selectUnit, dispatchUnit, escapeHtml, ws, panelManager, layoutManager };
+export { showToast, showBanner, selectUnit, dispatchUnit, escapeHtml, ws, panelManager, layoutManager, appendChatMessage, getChatHistory, toggleChat };
 
 // ---------------------------------------------------------------------------
 // Boot

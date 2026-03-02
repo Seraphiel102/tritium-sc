@@ -16,9 +16,27 @@
 const _projectiles = []; // active in-flight projectiles
 
 const PROJECTILE_STYLES = {
+    // Standard nerf darts
     nerf_dart: { color: '#ffa500', trailColor: '#ffcc00', radius: 5, trailLen: 8, speed: 25 },
+    nerf_dart_gun: { color: '#ffa500', trailColor: '#ffcc00', radius: 5, trailLen: 8, speed: 25 },
+    nerf_pistol: { color: '#ffa500', trailColor: '#ffcc00', radius: 4, trailLen: 6, speed: 20 },
+    nerf_scout_gun: { color: '#ffa500', trailColor: '#ffcc00', radius: 4, trailLen: 6, speed: 28 },
+    // Turret weapons
+    nerf_turret_gun: { color: '#00f0ff', trailColor: '#40e0ff', radius: 5, trailLen: 10, speed: 30 },
+    nerf_heavy_turret: { color: '#ff2a6d', trailColor: '#ff6060', radius: 8, trailLen: 12, speed: 20 },
+    // Rockets/missiles
     nerf_rocket: { color: '#ff2a6d', trailColor: '#ff6040', radius: 7, trailLen: 8, speed: 15 },
+    nerf_missile_launcher: { color: '#ff2a6d', trailColor: '#ff4040', radius: 9, trailLen: 14, speed: 18 },
+    // Vehicle weapons
+    nerf_cannon: { color: '#fcee0a', trailColor: '#ffee80', radius: 7, trailLen: 10, speed: 22 },
+    nerf_tank_cannon: { color: '#ff6600', trailColor: '#ff9930', radius: 10, trailLen: 16, speed: 15 },
+    nerf_apc_mg: { color: '#05ffa1', trailColor: '#60ffc0', radius: 4, trailLen: 6, speed: 35 },
+    // Splash
     water_balloon: { color: '#00a0ff', trailColor: '#40c0ff', radius: 8, trailLen: 6, speed: 12 },
+    // Civil unrest
+    thrown_object: { color: '#aa8844', trailColor: '#886630', radius: 6, trailLen: 4, speed: 10 },
+    melee_strike: { color: '#ffffff', trailColor: '#cccccc', radius: 3, trailLen: 2, speed: 40 },
+    // Default fallback
     default: { color: '#fcee0a', trailColor: '#ffee80', radius: 5, trailLen: 8, speed: 20 },
 };
 

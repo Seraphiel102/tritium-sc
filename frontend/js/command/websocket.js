@@ -38,6 +38,9 @@ export class WebSocketManager {
                 TritiumStore.set('connection.status', 'connected');
                 this._reconnectDelay = 2000;
                 EventBus.emit('ws:connected');
+                // Sync full state on every connect (covers initial load and
+                // reconnects — events may have been missed during the gap).
+                this._refreshState();
             };
 
             this._ws.onclose = () => {
@@ -134,6 +137,33 @@ export class WebSocketManager {
         if (t.squad_id !== undefined) update.squadId = t.squad_id;
         if (t.detected_by !== undefined) update.detectedBy = t.detected_by;
         if (t.detected !== undefined) update.detected = t.detected;
+        // Mission-specific fields
+        if (t.crowd_role !== undefined) update.crowdRole = t.crowd_role;
+        if (t.drone_variant !== undefined) update.droneVariant = t.drone_variant;
+        if (t.ammo_count !== undefined) {
+            update.ammoCount = t.ammo_count;
+            // Clear ammo flags when ammo state updates from telemetry
+            if (t.ammo_count > 0) update.ammoDepleted = false;
+            if (t.ammo_max && t.ammo_count / t.ammo_max > 0.2) update.ammoLow = false;
+        }
+        if (t.ammo_max !== undefined) update.ammoMax = t.ammo_max;
+        if (t.altitude !== undefined) update.altitude = t.altitude;
+        if (t.instigator_state !== undefined) update.instigatorState = t.instigator_state;
+        if (t.identified !== undefined) update.identified = t.identified;
+        // Rich identity data
+        if (t.identity !== undefined) update.identity = t.identity;
+        // Radio detection (BLE/WiFi/cell through-wall tracking)
+        if (t.radio_detected !== undefined) update.radio_detected = t.radio_detected;
+        if (t.radio_signal_strength !== undefined) update.radio_signal_strength = t.radio_signal_strength;
+        // Source classification (sim, real, graphling)
+        if (t.source !== undefined) update.source = t.source;
+        // Patrol route fields
+        if (t.waypoints !== undefined) update.waypoints = t.waypoints;
+        if (t.loop_waypoints !== undefined) update.loopWaypoints = t.loop_waypoints;
+        // Inventory system
+        if (t.inventory !== undefined) update.inventory = t.inventory;
+        // Per-unit combat stats from StatsTracker
+        if (t.stats) update.stats = t.stats;
         TritiumStore.updateUnit(t.target_id, update);
 
         // Clean up terminal-state units after a delay so effects/animations complete.
@@ -157,6 +187,41 @@ export class WebSocketManager {
     }
 
     /**
+     * Fetch full game state and unit positions from the REST API.
+     * Called on every WS connect to fill gaps from missed events during
+     * disconnection (or to hydrate initial state on page load).
+     */
+    async _refreshState() {
+        try {
+            const [gameRes, targetsRes] = await Promise.all([
+                fetch('/api/game/state'),
+                fetch('/api/targets'),
+            ]);
+            if (gameRes.ok) {
+                const game = await gameRes.json();
+                if (game.state) TritiumStore.set('game.phase', game.state);
+                if (game.wave !== undefined) TritiumStore.set('game.wave', game.wave);
+                if (game.total_waves !== undefined) TritiumStore.set('game.totalWaves', game.total_waves);
+                if (game.score !== undefined) TritiumStore.set('game.score', game.score);
+                if (game.wave_name !== undefined) TritiumStore.set('game.waveName', game.wave_name);
+                if (game.countdown !== undefined) TritiumStore.set('game.countdown', game.countdown);
+                if (game.wave_hostiles_remaining !== undefined) TritiumStore.set('game.waveHostilesRemaining', game.wave_hostiles_remaining);
+                if (game.difficulty_multiplier !== undefined) TritiumStore.set('game.difficultyMultiplier', game.difficulty_multiplier);
+            }
+            if (targetsRes.ok) {
+                const targets = await targetsRes.json();
+                if (Array.isArray(targets)) {
+                    for (const t of targets) {
+                        this._updateUnit(t);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[WS] State refresh failed:', e);
+        }
+    }
+
+    /**
      * Route an incoming WebSocket message to the store and event bus.
      * @param {Object} msg - parsed JSON message
      */
@@ -175,6 +240,16 @@ export class WebSocketManager {
                 // Auto-clear speaking flag after estimated duration
                 setTimeout(() => TritiumStore.set('amy.speaking', false), 5000);
                 break;
+
+            case 'amy_transcript': {
+                // Transcript events carry {speaker, text} from Amy's event bus.
+                // When speaker is 'amy', route to chat as Amy's response.
+                const td = msg.data || msg;
+                if (td.speaker === 'amy') {
+                    EventBus.emit('chat:amy_response', { text: td.text });
+                }
+                break;
+            }
 
             case 'amy_state':
                 if (msg.data?.state) TritiumStore.set('amy.state', msg.data.state);
@@ -214,6 +289,43 @@ export class WebSocketManager {
                 if (d.score !== undefined) TritiumStore.set('game.score', d.score);
                 if (d.total_eliminations !== undefined) TritiumStore.set('game.eliminations', d.total_eliminations);
                 else if (d.total_kills !== undefined) TritiumStore.set('game.eliminations', d.total_kills);
+                if (d.wave_name !== undefined) TritiumStore.set('game.waveName', d.wave_name);
+                if (d.countdown !== undefined) TritiumStore.set('game.countdown', d.countdown);
+                if (d.wave_hostiles_remaining !== undefined) TritiumStore.set('game.waveHostilesRemaining', d.wave_hostiles_remaining);
+                if (d.difficulty_multiplier !== undefined) TritiumStore.set('game.difficultyMultiplier', d.difficulty_multiplier);
+                // Idle = initial state before any game.  Clear units so stale
+                // data from a previous session is wiped.  Setup = backend reset
+                // after a game; do NOT clear units because defenders are being
+                // placed.  Both states clear per-game overlays.
+                if (d.state === 'idle') {
+                    TritiumStore.units.clear();
+                    TritiumStore._notify('units', TritiumStore.units);
+                }
+                if (d.state === 'idle' || d.state === 'setup') {
+                    // Clear per-game overlays to prevent leaking into next game
+                    TritiumStore.set('hazards', new Map());
+                    TritiumStore.set('game.hostileIntel', null);
+                    TritiumStore.set('game.hostileObjectives', null);
+                    TritiumStore.set('game.crowdDensity', null);
+                    TritiumStore.set('game.coverPoints', []);
+                    TritiumStore.set('game.signals', []);
+                    // Clear mission-mode-specific state
+                    TritiumStore.set('game.modeType', null);
+                    TritiumStore.set('game.infrastructureHealth', null);
+                    TritiumStore.set('game.infrastructureMax', null);
+                    TritiumStore.set('game.deEscalationScore', null);
+                    TritiumStore.set('game.civilianHarmCount', null);
+                    TritiumStore.set('game.civilianHarmLimit', null);
+                    TritiumStore.set('game.weightedTotalScore', null);
+                }
+                // Mission mode type and mode-specific fields
+                if (d.game_mode_type) TritiumStore.set('game.modeType', d.game_mode_type);
+                if (d.infrastructure_health !== undefined) TritiumStore.set('game.infrastructureHealth', d.infrastructure_health);
+                if (d.infrastructure_max !== undefined) TritiumStore.set('game.infrastructureMax', d.infrastructure_max);
+                if (d.de_escalation_score !== undefined) TritiumStore.set('game.deEscalationScore', d.de_escalation_score);
+                if (d.civilian_harm_count !== undefined) TritiumStore.set('game.civilianHarmCount', d.civilian_harm_count);
+                if (d.civilian_harm_limit !== undefined) TritiumStore.set('game.civilianHarmLimit', d.civilian_harm_limit);
+                if (d.weighted_total_score !== undefined) TritiumStore.set('game.weightedTotalScore', d.weighted_total_score);
                 EventBus.emit('game:state', d);
                 if (typeof warHudUpdateGameState === 'function') {
                     warHudUpdateGameState(d);
@@ -230,17 +342,40 @@ export class WebSocketManager {
                 else if (d.total_kills !== undefined) TritiumStore.set('game.eliminations', d.total_kills);
                 EventBus.emit('game:state', { ...d, state: phase });
                 if (typeof warHudShowGameOver === 'function') {
-                    warHudShowGameOver(d.result, d.score, d.waves || d.wave, d.total_eliminations || d.total_kills);
+                    // Pass mode-specific data as 5th argument
+                    const modeData = {
+                        game_mode_type: d.game_mode_type,
+                        reason: d.reason,
+                        de_escalation_score: d.de_escalation_score,
+                        civilian_harm_count: d.civilian_harm_count,
+                        civilian_harm_limit: d.civilian_harm_limit,
+                        weighted_total_score: d.weighted_total_score,
+                        infrastructure_health: d.infrastructure_health,
+                        infrastructure_max: d.infrastructure_max,
+                    };
+                    warHudShowGameOver(d.result, d.score, d.waves || d.wave, d.total_eliminations || d.total_kills, modeData);
                 }
                 break;
             }
 
+            case 'target_eliminated':
+            case 'amy_target_eliminated':
             case 'game_elimination':
             case 'game_kill':
+            case 'amy_game_elimination':
+            case 'amy_game_kill':
+                if (typeof warCombatAddEliminationEffect === 'function') {
+                    warCombatAddEliminationEffect(msg.data || msg);
+                }
+                if (typeof warHudAddKillFeedEntry === 'function') {
+                    warHudAddKillFeedEntry(msg.data || msg);
+                }
+                EventBus.emit('combat:elimination', msg.data || msg);
                 EventBus.emit('game:elimination', msg.data || msg);
                 break;
 
             case 'announcer':
+            case 'amy_announcer':
                 EventBus.emit('announcer', msg.data || msg);
                 if (typeof warHudShowAmyAnnouncement === 'function') {
                     const d = msg.data || msg;
@@ -249,25 +384,56 @@ export class WebSocketManager {
                 break;
 
             case 'robot_thought':
+            case 'amy_robot_thought':
                 EventBus.emit('robot:thought', msg.data || msg);
                 break;
 
             case 'amy_npc_thought': {
                 const d = msg.data || msg;
+                const importance = d.importance || 'normal';
                 const units = TritiumStore.units;
                 const unit = units && units.get(d.unit_id);
                 if (unit) {
-                    unit.thoughtText = d.text;
-                    unit.thoughtEmotion = d.emotion || 'neutral';
-                    unit.thoughtDuration = d.duration || 5;
-                    unit.thoughtExpires = Date.now() + unit.thoughtDuration * 1000;
+                    // Always store the latest thought (accessible via click-to-view)
+                    unit.latestThought = {
+                        text: d.text,
+                        emotion: d.emotion || 'neutral',
+                        importance: importance,
+                        duration: d.duration || 5,
+                        time: Date.now(),
+                    };
+
+                    // Always append to history
                     if (!unit.thoughtHistory) unit.thoughtHistory = [];
                     unit.thoughtHistory.push({
                         text: d.text,
                         emotion: d.emotion || 'neutral',
+                        importance: importance,
                         time: Date.now(),
                     });
                     if (unit.thoughtHistory.length > 10) unit.thoughtHistory.shift();
+
+                    // Only auto-display thought bubbles for high/critical importance.
+                    // The backend only broadcasts high+ thoughts, but double-check here.
+                    const _VISIBLE_IMPORTANCE = { high: true, critical: true };
+                    if (_VISIBLE_IMPORTANCE[importance]) {
+                        unit.thoughtText = d.text;
+                        unit.thoughtEmotion = d.emotion || 'neutral';
+                        unit.thoughtImportance = importance;
+                        unit.thoughtDuration = d.duration || 5;
+                        unit.thoughtExpires = Date.now() + (d.duration || 5) * 1000;
+                    }
+                    // If this is the selected unit, always show it regardless of importance
+                    const selectedId = TritiumStore.get('map.selectedUnitId');
+                    if (selectedId === d.unit_id) {
+                        unit.thoughtText = d.text;
+                        unit.thoughtEmotion = d.emotion || 'neutral';
+                        unit.thoughtImportance = importance;
+                        unit.thoughtDuration = d.duration || 5;
+                        unit.thoughtExpires = Date.now() + (d.duration || 5) * 1000;
+                    }
+                    // Trigger store notification so detail panel updates
+                    TritiumStore._scheduleNotify('units');
                 }
                 EventBus.emit('npc:thought', d);
                 break;
@@ -281,12 +447,14 @@ export class WebSocketManager {
                     delete unit.thoughtText;
                     delete unit.thoughtEmotion;
                     delete unit.thoughtExpires;
+                    TritiumStore._scheduleNotify('units');
                 }
                 EventBus.emit('npc:thought_clear', d);
                 break;
             }
 
             case 'escalation_change':
+            case 'amy_escalation_change':
                 TritiumStore.addAlert({
                     type: 'escalation',
                     message: msg.data?.message || 'Threat level changed',
@@ -296,6 +464,7 @@ export class WebSocketManager {
                 break;
 
             case 'detection':
+            case 'amy_detection':
                 // YOLO detection from camera
                 EventBus.emit('detection', msg.data || msg);
                 break;
@@ -314,17 +483,6 @@ export class WebSocketManager {
                     warCombatAddHitEffect(msg.data || msg);
                 }
                 EventBus.emit('combat:hit', msg.data || msg);
-                break;
-
-            case 'target_eliminated':
-            case 'amy_target_eliminated':
-                if (typeof warCombatAddEliminationEffect === 'function') {
-                    warCombatAddEliminationEffect(msg.data || msg);
-                }
-                if (typeof warHudAddKillFeedEntry === 'function') {
-                    warHudAddKillFeedEntry(msg.data || msg);
-                }
-                EventBus.emit('combat:elimination', msg.data || msg);
                 break;
 
             case 'elimination_streak':
@@ -390,6 +548,342 @@ export class WebSocketManager {
             case 'amy_scenario_generated':
                 EventBus.emit('mission:scenario', msg.data || msg);
                 break;
+
+            case 'backstory_generated':
+            case 'amy_backstory_generated': {
+                const d = msg.data || msg;
+                const targetId = d.target_id;
+                const backstory = d.backstory;
+                if (targetId && backstory) {
+                    const update = {};
+                    if (backstory.name) update.backstoryName = backstory.name;
+                    if (backstory.background) update.backstoryBackground = backstory.background;
+                    if (backstory.motivation) update.backstoryMotivation = backstory.motivation;
+                    if (backstory.personality_traits) update.backstoryTraits = backstory.personality_traits;
+                    if (backstory.speech_pattern) update.backstorySpeechPattern = backstory.speech_pattern;
+                    if (backstory.tactical_preference) update.backstoryTacticalPref = backstory.tactical_preference;
+                    if (backstory.neighborhood_relationship) update.backstoryNeighborhood = backstory.neighborhood_relationship;
+                    if (backstory.daily_routine) update.backstoryRoutine = backstory.daily_routine;
+                    // Update the unit name to the backstory-generated name
+                    if (backstory.name) update.name = backstory.name;
+                    // Rich identity data from backstory
+                    if (backstory.identity) update.identity = backstory.identity;
+                    TritiumStore.updateUnit(targetId, update);
+                }
+                EventBus.emit('unit:backstory', d);
+                break;
+            }
+
+            // Mission-specific events (civil_unrest + drone_swarm)
+            // Bridge sends these with amy_ prefix; handle both variants.
+            case 'crowd_density':
+            case 'amy_crowd_density': {
+                const d = msg.data || msg;
+                TritiumStore.set('game.crowdDensity', d);
+                EventBus.emit('mission:crowd_density', d);
+                break;
+            }
+
+            case 'infrastructure_damage':
+            case 'amy_infrastructure_damage': {
+                const d = msg.data || msg;
+                if (d.infrastructure_health !== undefined) TritiumStore.set('game.infrastructureHealth', d.infrastructure_health);
+                if (d.infrastructure_max !== undefined) TritiumStore.set('game.infrastructureMax', d.infrastructure_max);
+                EventBus.emit('mission:infrastructure_damage', d);
+                break;
+            }
+
+            case 'civilian_harmed':
+            case 'amy_civilian_harmed': {
+                const d = msg.data || msg;
+                if (d.civilian_harm_count !== undefined) TritiumStore.set('game.civilianHarmCount', d.civilian_harm_count);
+                if (d.civilian_harm_limit !== undefined) TritiumStore.set('game.civilianHarmLimit', d.civilian_harm_limit);
+                EventBus.emit('mission:civilian_harmed', d);
+                break;
+            }
+
+            case 'bomber_detonation':
+            case 'amy_bomber_detonation':
+                EventBus.emit('mission:bomber_detonation', msg.data || msg);
+                break;
+
+            case 'de_escalation':
+            case 'amy_de_escalation': {
+                const d = msg.data || msg;
+                if (d.de_escalation_score !== undefined) TritiumStore.set('game.deEscalationScore', d.de_escalation_score);
+                EventBus.emit('mission:de_escalation', d);
+                break;
+            }
+
+            case 'infrastructure_overwhelmed':
+            case 'amy_infrastructure_overwhelmed':
+                EventBus.emit('mission:infrastructure_overwhelmed', msg.data || msg);
+                break;
+
+            case 'instigator_identified':
+            case 'amy_instigator_identified':
+                EventBus.emit('mission:instigator_identified', msg.data || msg);
+                break;
+
+            case 'emp_activated':
+            case 'amy_emp_activated':
+                EventBus.emit('mission:emp_activated', msg.data || msg);
+                break;
+
+            case 'auto_dispatch_speech':
+            case 'amy_auto_dispatch_speech': {
+                const d = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'dispatch',
+                    message: d.text || 'Unit dispatched',
+                    source: 'auto_dispatch',
+                });
+                EventBus.emit('dispatch:speech', d);
+                break;
+            }
+
+            case 'zone_violation':
+            case 'amy_zone_violation': {
+                const d = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'zone',
+                    message: `Zone breach: ${d.zone_name || 'unknown'} (${d.zone_type || ''})`,
+                    source: 'zone',
+                });
+                EventBus.emit('zone:violation', d);
+                break;
+            }
+
+            case 'formation_created':
+            case 'amy_formation_created':
+                EventBus.emit('formation:created', msg.data || msg);
+                break;
+
+            case 'mode_change':
+            case 'amy_mode_change':
+                EventBus.emit('amy:mode_change', msg.data || msg);
+                break;
+
+            case 'upgrade_applied':
+            case 'amy_upgrade_applied': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit) {
+                        if (!unit.upgrades) unit.upgrades = [];
+                        if (d.upgrade_id) unit.upgrades.push(d.upgrade_id);
+                    }
+                }
+                EventBus.emit('upgrade:applied', d);
+                break;
+            }
+
+            case 'ability_activated':
+            case 'amy_ability_activated': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit) {
+                        if (!unit.activeAbilities) unit.activeAbilities = [];
+                        unit.activeAbilities.push({
+                            ability_id: d.ability_id,
+                            remaining: d.duration || 0,
+                        });
+                    }
+                }
+                EventBus.emit('ability:activated', d);
+                break;
+            }
+
+            case 'ability_expired':
+            case 'amy_ability_expired': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit && unit.activeAbilities) {
+                        unit.activeAbilities = unit.activeAbilities.filter(
+                            a => a.ability_id !== d.ability_id
+                        );
+                    }
+                }
+                EventBus.emit('ability:expired', d);
+                break;
+            }
+
+            case 'npc_alliance_change':
+            case 'amy_npc_alliance_change': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit && d.new_alliance) {
+                        unit.alliance = d.new_alliance;
+                    }
+                }
+                EventBus.emit('npc:alliance_change', d);
+                break;
+            }
+
+            case 'weapon_jam':
+            case 'amy_weapon_jam': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit) {
+                        unit.weaponJammed = true;
+                        // Auto-clear after 3s if not re-fired (jam is per-tick event)
+                        unit._weaponJamTimer && clearTimeout(unit._weaponJamTimer);
+                        unit._weaponJamTimer = setTimeout(() => {
+                            unit.weaponJammed = false;
+                            delete unit._weaponJamTimer;
+                        }, 3000);
+                    }
+                }
+                EventBus.emit('combat:weapon_jam', d);
+                break;
+            }
+
+            case 'ammo_low':
+            case 'amy_ammo_low': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit) {
+                        unit.ammoLow = true;
+                    }
+                }
+                EventBus.emit('combat:ammo_low', d);
+                break;
+            }
+
+            case 'ammo_depleted':
+            case 'amy_ammo_depleted': {
+                const d = msg.data || msg;
+                if (d.unit_id) {
+                    const unit = TritiumStore.units.get(d.unit_id);
+                    if (unit) {
+                        unit.ammoDepleted = true;
+                    }
+                }
+                EventBus.emit('combat:ammo_depleted', d);
+                break;
+            }
+
+            // -- Environmental hazards --
+            case 'hazard_spawned':
+            case 'amy_hazard_spawned': {
+                const d = msg.data || msg;
+                const hid = d.hazard_id || d.id;
+                if (hid) {
+                    let hazards = TritiumStore.get('hazards');
+                    if (!hazards) {
+                        hazards = new Map();
+                        TritiumStore.set('hazards', hazards);
+                    }
+                    hazards.set(hid, {
+                        hazard_id: hid,
+                        hazard_type: d.hazard_type,
+                        position: d.position,
+                        radius: d.radius,
+                        duration: d.duration,
+                        spawned_at: Date.now(),
+                    });
+                    TritiumStore._scheduleNotify('hazards');
+                }
+                EventBus.emit('hazard:spawned', d);
+                break;
+            }
+
+            case 'hazard_expired':
+            case 'amy_hazard_expired': {
+                const d = msg.data || msg;
+                const hid = d.hazard_id || d.id;
+                if (hid) {
+                    const hazards = TritiumStore.get('hazards');
+                    if (hazards) {
+                        hazards.delete(hid);
+                        TritiumStore._scheduleNotify('hazards');
+                    }
+                }
+                EventBus.emit('hazard:expired', d);
+                break;
+            }
+
+            // -- Sensor network --
+            case 'sensor_triggered':
+            case 'amy_sensor_triggered':
+                EventBus.emit('sensor:triggered', msg.data || msg);
+                break;
+
+            case 'sensor_cleared':
+            case 'amy_sensor_cleared':
+                EventBus.emit('sensor:cleared', msg.data || msg);
+                break;
+
+            case 'target_neutralized':
+            case 'amy_target_neutralized': {
+                const d = msg.data || msg;
+                const tid = d.target_id || d.unit_id;
+                if (tid) {
+                    const unit = TritiumStore.units.get(tid);
+                    if (unit) {
+                        unit.status = 'neutralized';
+                    }
+                }
+                EventBus.emit('combat:neutralized', d);
+                break;
+            }
+
+            // -- Hostile Commander Intel --
+            case 'hostile_intel':
+            case 'amy_hostile_intel': {
+                const d = msg.data || msg;
+                if (d) TritiumStore.set('game.hostileIntel', d);
+                EventBus.emit('hostile:intel', d);
+                break;
+            }
+
+            // -- Bonus objective completion --
+            case 'bonus_objective_completed':
+            case 'amy_bonus_objective_completed': {
+                const d = msg.data || msg;
+                if (typeof warHudCompleteBonusObjective === 'function') {
+                    warHudCompleteBonusObjective(d.name);
+                }
+                EventBus.emit('objective:completed', d);
+                break;
+            }
+
+            case 'cover_points':
+            case 'amy_cover_points': {
+                const d = msg.data || msg;
+                if (d && Array.isArray(d.points)) {
+                    TritiumStore.set('game.coverPoints', d.points);
+                }
+                break;
+            }
+
+            case 'unit_signal':
+            case 'amy_unit_signal': {
+                const d = msg.data || msg;
+                if (d && d.signal_type && d.position) {
+                    // Store active signals as a list (auto-expire via TTL)
+                    let signals = TritiumStore.get('game.signals');
+                    if (!Array.isArray(signals)) signals = [];
+                    signals.push({
+                        signal_type: d.signal_type,
+                        sender_id: d.sender_id,
+                        sender_alliance: d.sender_alliance,
+                        position: d.position,
+                        target_position: d.target_position,
+                        signal_range: d.signal_range || 50,
+                        ttl: d.ttl || 10,
+                        received_at: Date.now(),
+                    });
+                    TritiumStore.set('game.signals', signals);
+                }
+                EventBus.emit('unit:signal', d);
+                break;
+            }
 
             default:
                 // Forward unknown events for extensibility

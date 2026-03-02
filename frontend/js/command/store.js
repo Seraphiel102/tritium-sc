@@ -23,6 +23,10 @@ export const TritiumStore = {
         totalWaves: 10,
         score: 0,
         eliminations: 0,
+        waveName: '',
+        countdown: 0,
+        waveHostilesRemaining: 0,
+        difficultyMultiplier: 1.0,
     },
 
     // Units -- single source of truth (from WebSocket sim_telemetry)
@@ -38,6 +42,9 @@ export const TritiumStore = {
         nodeCount: 0,
     },
 
+    // Operator unit control (TAKE CONTROL / RELEASE)
+    controlledUnitId: null,   // unit id when operator has direct control
+
     // Connection state
     connection: {
         status: 'disconnected',  // connected | disconnected | error
@@ -48,6 +55,63 @@ export const TritiumStore = {
 
     // Cameras (from API /api/cameras)
     cameras: [],
+
+    // Graphlings (from plugin SSE /api/graphlings/thoughts)
+    graphlings: {
+        deployed: [],   // soul_id strings
+        agents: [],     // { soul_id, role_name, emotion, last_thought }
+    },
+
+    // -----------------------------------------------------------------------
+    // Notification batching (requestAnimationFrame coalescing)
+    // -----------------------------------------------------------------------
+    _pendingNotify: null,   // Set of dirty keys awaiting RAF flush
+    _notifyRAF: null,       // RAF handle (null when no flush scheduled)
+
+    /**
+     * Schedule a notification for a key, coalesced to one RAF frame.
+     * Multiple updateUnit() calls within the same frame fire _notify once.
+     * Falls back to synchronous _notify when requestAnimationFrame is
+     * unavailable (Node.js test environment).
+     * @param {string} key
+     */
+    _scheduleNotify(key) {
+        // Fallback for non-browser (Node.js tests): notify synchronously
+        if (typeof requestAnimationFrame === 'undefined') {
+            this._notify(key, key === 'units' ? this.units : this[key]);
+            return;
+        }
+        if (!this._pendingNotify) this._pendingNotify = new Set();
+        this._pendingNotify.add(key);
+        if (!this._notifyRAF) {
+            this._notifyRAF = requestAnimationFrame(() => {
+                this._notifyRAF = null;
+                const keys = this._pendingNotify;
+                this._pendingNotify = null;
+                for (const k of keys) {
+                    this._notify(k, k === 'units' ? this.units : this[k]);
+                }
+            });
+        }
+    },
+
+    /**
+     * Flush any pending RAF-batched notifications synchronously.
+     * Useful in tests or when you need immediate consistency.
+     */
+    flushNotify() {
+        if (this._notifyRAF && typeof cancelAnimationFrame !== 'undefined') {
+            cancelAnimationFrame(this._notifyRAF);
+            this._notifyRAF = null;
+        }
+        if (this._pendingNotify) {
+            const keys = this._pendingNotify;
+            this._pendingNotify = null;
+            for (const k of keys) {
+                this._notify(k, k === 'units' ? this.units : this[k]);
+            }
+        }
+    },
 
     // -----------------------------------------------------------------------
     // Subscriber system
@@ -106,13 +170,20 @@ export const TritiumStore = {
 
     /**
      * Update a unit (merge fields into existing entry).
+     * Mutates in place to avoid object spread overhead on hot path.
+     * Notification is batched via requestAnimationFrame (one notify per frame).
      * @param {string} id
      * @param {Object} data
      */
     updateUnit(id, data) {
-        const existing = this.units.get(id) || {};
-        this.units.set(id, { ...existing, ...data, id });
-        this._notify('units', this.units);
+        let unit = this.units.get(id);
+        if (!unit) {
+            unit = { id };
+            this.units.set(id, unit);
+        }
+        Object.assign(unit, data);
+        unit.id = id;  // ensure id cannot be overwritten by data
+        this._scheduleNotify('units');
     },
 
     /**
@@ -121,7 +192,7 @@ export const TritiumStore = {
      */
     removeUnit(id) {
         this.units.delete(id);
-        this._notify('units', this.units);
+        this._scheduleNotify('units');
     },
 
     /**

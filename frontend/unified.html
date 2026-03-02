@@ -218,9 +218,17 @@
                     <div class="help-row"><kbd>T</kbd><span>Tactical mode</span></div>
                     <div class="help-row"><kbd>S</kbd><span>Setup mode</span></div>
                     <div class="help-row"><kbd>F</kbd><span>Center on action</span></div>
-                    <div class="help-row"><kbd>R</kbd><span>Reset camera</span></div>
+                    <div class="help-row"><kbd>R</kbd><span>Toggle Replay panel</span></div>
                     <div class="help-row"><kbd>I</kbd><span>Toggle satellite imagery</span></div>
+                    <div class="help-row"><kbd>A</kbd><span>Toggle auto-follow</span></div>
+                    <div class="help-row"><kbd>U</kbd><span>Toggle unit markers</span></div>
+                    <div class="help-row"><kbd>V</kbd><span>Toggle fog of war</span></div>
+                    <div class="help-row"><kbd>K</kbd><span>Toggle buildings layer</span></div>
+                    <div class="help-row"><kbd>G</kbd><span>Toggle roads layer</span></div>
+                    <div class="help-row"><kbd>H</kbd><span>Toggle terrain layer</span></div>
                     <div class="help-row"><kbd>[</kbd> / <kbd>]</kbd><span>Zoom in / out</span></div>
+                    <div class="help-row"><kbd>Tab</kbd><span>Cycle panel focus</span></div>
+                    <div class="help-row"><kbd>WASD</kbd><span>Direct unit control</span></div>
                 </div>
                 <div class="help-section">
                     <div class="help-section-title mono">PANELS</div>
@@ -228,6 +236,15 @@
                     <div class="help-row"><kbd>2</kbd><span>Toggle Units panel</span></div>
                     <div class="help-row"><kbd>3</kbd><span>Toggle Alerts panel</span></div>
                     <div class="help-row"><kbd>4</kbd><span>Toggle Game HUD panel</span></div>
+                    <div class="help-row"><kbd>5</kbd><span>Toggle Mesh panel</span></div>
+                    <div class="help-row"><kbd>6</kbd><span>Toggle Cameras panel</span></div>
+                    <div class="help-row"><kbd>7</kbd><span>Toggle Intel panel</span></div>
+                    <div class="help-row"><kbd>8</kbd><span>Toggle TAK panel</span></div>
+                    <div class="help-row"><kbd>9</kbd><span>Toggle Recordings panel</span></div>
+                    <div class="help-row"><kbd>0</kbd><span>Toggle Zones panel</span></div>
+                    <div class="help-row"><kbd>E</kbd><span>Toggle Sensors panel</span></div>
+                    <div class="help-row"><kbd>P</kbd><span>Toggle Battle Stats panel</span></div>
+                    <div class="help-row"><kbd>J</kbd><span>Toggle Unit Inspector panel</span></div>
                 </div>
                 <div class="help-section">
                     <div class="help-section-title mono">LAYOUTS</div>
@@ -240,6 +257,7 @@
                 <div class="help-section">
                     <div class="help-section-title mono">GAME</div>
                     <div class="help-row"><kbd>B</kbd><span>Begin War</span></div>
+                    <div class="help-row"><kbd>N</kbd><span>Toggle Mission Modal</span></div>
                 </div>
             </div>
         </div>
@@ -265,6 +283,16 @@
                     <span id="go-eliminations" class="go-stat-value" data-element="go-eliminations">0</span>
                 </div>
             </div>
+
+            <!-- MVP spotlight (populated by JS from /api/game/stats/mvp) -->
+            <div id="go-mvp-section" class="go-mvp-section" data-element="go-mvp-section"></div>
+
+            <!-- Combat stats grid (populated by JS from /api/game/stats/summary) -->
+            <div id="go-combat-section" class="go-combat-section" data-element="go-combat-section"></div>
+
+            <!-- Unit performance table (populated by JS from /api/game/stats) -->
+            <div id="go-units-section" class="go-units-section" data-element="go-units-section"></div>
+
             <button class="game-btn game-btn-primary mono" data-action="play-again">[ PLAY AGAIN ]</button>
         </div>
     </div>
@@ -284,6 +312,7 @@
     <script src="/static/js/war-hud.js"></script>
     <script src="/static/js/war-audio.js"></script>
     <script src="/static/js/war-events.js"></script>
+    <script src="/static/js/command/game-over-stats.js"></script>
 
     <!-- ================================================================== -->
     <!-- Mesh radio overlay (global, loaded before module entry)            -->
