@@ -459,6 +459,7 @@ export class WebSocketManager {
                     source: 'escalation',
                 });
                 EventBus.emit('alert:new', msg.data || msg);
+                EventBus.emit('escalation:change', msg.data || msg);
                 break;
 
             case 'detection':

@@ -867,6 +867,7 @@ console.log('\n--- Message Routing: escalation_change ---');
 (function testEscalationChange() {
     const ctx = createFreshContext();
     listenEvent(ctx, 'alert:new');
+    listenEvent(ctx, 'escalation:change');
     const ws = vm.runInContext('new WebSocketManager()', ctx);
     ws.connect();
     createdSockets[0]._simulateOpen();
@@ -879,6 +880,7 @@ console.log('\n--- Message Routing: escalation_change ---');
     assertEqual(alerts[0].type, 'escalation', 'Alert type is escalation');
     assertEqual(alerts[0].message, 'Threat level elevated to AMBER', 'Alert message from data');
     assertDefined(_bridge['alert:new'], 'escalation_change emits alert:new');
+    assertDefined(_bridge['escalation:change'], 'escalation_change emits escalation:change for audio');
 })();
 
 (function testEscalationChangeDefaultMessage() {
