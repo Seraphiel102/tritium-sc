@@ -1044,6 +1044,13 @@ console.log('\n--- resetGameState ---');
     assertEqual(store.controlledUnitId, null, 'resetGameState clears controlled unit');
 })();
 
+(function testResetGameStateClearsReplayMode() {
+    const store = createStore();
+    store.set('replay.active', true);
+    store.resetGameState();
+    assertEqual(store.replay.active, false, 'resetGameState exits replay mode');
+})();
+
 // ============================================================
 // Summary
 // ============================================================

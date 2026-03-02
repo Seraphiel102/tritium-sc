@@ -279,6 +279,9 @@ export const TritiumStore = {
         this.units.clear();
         this._notify('units', this.units);
 
+        // Exit replay mode if active
+        this.set('replay.active', false);
+
         // Deselect unit and release control
         this.set('map.selectedUnitId', null);
         this.set('controlledUnitId', null);

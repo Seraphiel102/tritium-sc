@@ -112,6 +112,8 @@ export class WebSocketManager {
      */
     _updateUnit(t) {
         if (!t || !t.target_id) return;
+        // Skip live telemetry updates while replaying historical frames
+        if (TritiumStore.get('replay.active')) return;
         const update = {
             name: t.name || t.target_id,
             type: t.asset_type || t.type || 'unknown',
@@ -586,11 +588,19 @@ export class WebSocketManager {
             case 'unit_dispatched':
             case 'amy_unit_dispatched': {
                 const d = msg.data || msg;
-                // Route through warHandle* for dispatch arrow + audio
+                const unitId = d.unit_id || d.target_id;
+                // Route through warHandle* for dispatch arrow + audio (legacy canvas)
                 if (typeof warHandleDispatch === 'function') {
                     warHandleDispatch({
-                        target_id: d.unit_id || d.target_id,
+                        target_id: unitId,
                         destination: d.destination,
+                    });
+                }
+                // Emit unit:dispatched so MapLibre map draws dispatch arrows
+                if (d.destination) {
+                    EventBus.emit('unit:dispatched', {
+                        id: unitId,
+                        target: { x: d.destination.x, y: d.destination.y },
                     });
                 }
                 EventBus.emit('game:dispatch', d);

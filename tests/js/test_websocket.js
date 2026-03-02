@@ -3164,6 +3164,7 @@ console.log('\n--- Audio-relevant EventBus emissions ---');
         warHandleDispatch = function(d) { _dispatchData = d; };
     `, ctx);
     listenEvent(ctx, 'game:dispatch');
+    listenEvent(ctx, 'unit:dispatched');
     const ws = vm.runInContext('new WebSocketManager()', ctx);
     ws.connect();
     createdSockets[0]._simulateOpen();
@@ -3176,6 +3177,10 @@ console.log('\n--- Audio-relevant EventBus emissions ---');
     assertEqual(data.target_id, 'rover-01', 'dispatch data maps unit_id to target_id');
     assertEqual(data.destination.x, 100, 'dispatch data passes destination');
     assertDefined(_bridge['game:dispatch'], 'unit_dispatched emits game:dispatch event');
+    assertDefined(_bridge['unit:dispatched'], 'unit_dispatched emits unit:dispatched for MapLibre arrows');
+    assertEqual(_bridge['unit:dispatched'].id, 'rover-01', 'unit:dispatched has correct unit id');
+    assertEqual(_bridge['unit:dispatched'].target.x, 100, 'unit:dispatched has correct target x');
+    assertEqual(_bridge['unit:dispatched'].target.y, 200, 'unit:dispatched has correct target y');
 })();
 
 (function testUnitDispatchedAmy() {
@@ -3249,6 +3254,49 @@ console.log('\n--- Audio-relevant EventBus emissions ---');
         !src.includes("_patchWarHandler('warHandleKillStreak'"),
         'war-events.js does NOT patch warHandleKillStreak (alias, would leave canonical unpatched)'
     );
+})();
+
+// ============================================================
+// replay mode suppresses live telemetry
+// ============================================================
+
+(function testReplayModeSuppressesTelemetry() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+
+    // Add a unit first (replay is not active)
+    createdSockets[0]._simulateMessage({
+        type: 'sim_telemetry',
+        data: { target_id: 'turret-01', name: 'Turret Alpha', asset_type: 'turret', alliance: 'friendly', position: { x: 10, y: 20 } },
+    });
+    const store = vm.runInContext('TritiumStore', ctx);
+    const unit = store.units.get('turret-01');
+    assert(unit !== undefined, 'unit exists before replay mode');
+    assertEqual(unit.position.x, 10, 'unit has original position x');
+
+    // Enable replay mode
+    store.set('replay.active', true);
+
+    // Try to update the unit via live telemetry
+    createdSockets[0]._simulateMessage({
+        type: 'sim_telemetry',
+        data: { target_id: 'turret-01', name: 'Turret Alpha', asset_type: 'turret', alliance: 'friendly', position: { x: 999, y: 999 } },
+    });
+    // Position should NOT have changed
+    const unitAfter = store.units.get('turret-01');
+    assertEqual(unitAfter.position.x, 10, 'replay mode suppresses live telemetry position update');
+    assertEqual(unitAfter.position.y, 20, 'replay mode suppresses live telemetry position y');
+
+    // Disable replay mode — normal updates resume
+    store.set('replay.active', false);
+    createdSockets[0]._simulateMessage({
+        type: 'sim_telemetry',
+        data: { target_id: 'turret-01', name: 'Turret Alpha', asset_type: 'turret', alliance: 'friendly', position: { x: 50, y: 60 } },
+    });
+    const unitResumed = store.units.get('turret-01');
+    assertEqual(unitResumed.position.x, 50, 'telemetry resumes after replay mode exits');
 })();
 
 // ============================================================
