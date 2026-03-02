@@ -1411,6 +1411,8 @@ console.log('\n--- Edge Cases ---');
         warHandleGameOver = function(d) { _bridge.handleGameOverCalled = true; };
         warHandleWaveStart = function(d) { _bridge.handleWaveStartCalled = true; };
         warHandleWaveComplete = function(d) { _bridge.handleWaveCompleteCalled = true; };
+        warHandleAmyAnnouncement = function(d) { _bridge.handleAnnouncerCalled = true; };
+        warHandleThreatEscalation = function(d) { _bridge.handleEscalationCalled = true; };
         warHandleProjectileFired = function(d) { _bridge.handleProjectileCalled = true; };
         warHandleProjectileHit = function(d) { _bridge.handleHitCalled = true; };
         warHandleTargetEliminated = function(d) { _bridge.handleElimCalled = true; };
@@ -1435,7 +1437,7 @@ console.log('\n--- Edge Cases ---');
     assert(_bridge.gameOverCalled, 'warHudShowGameOver also called for amy_game_over');
 
     createdSockets[0]._simulateMessage({ type: 'announcer', data: { text: 'test', category: 'streak' } });
-    assert(_bridge.announcerCalled, 'warHudShowAmyAnnouncement called for announcer');
+    assert(_bridge.handleAnnouncerCalled, 'warHandleAmyAnnouncement called for announcer (includes audio hooks)');
 
     createdSockets[0]._simulateMessage({ type: 'wave_start', data: { wave: 1, wave_name: 'TEST', hostile_count: 5 } });
     assert(_bridge.handleWaveStartCalled, 'warHandleWaveStart called for wave_start (includes audio hooks)');
@@ -1461,6 +1463,10 @@ console.log('\n--- Edge Cases ---');
     createdSockets[0]._simulateMessage({ type: 'elimination_streak', data: {} });
     assert(_bridge.handleStreakCalled, 'warHandleEliminationStreak preferred for elimination_streak (includes audio)');
     assert(!_bridge.streakCalled, 'warCombatAddEliminationStreakEffect NOT called when warHandle* available');
+
+    // Escalation and announcer should also route through warHandle*
+    createdSockets[0]._simulateMessage({ type: 'escalation_change', data: { message: 'ELEVATED' } });
+    assert(_bridge.handleEscalationCalled, 'warHandleThreatEscalation called for escalation_change (includes audio)');
 })();
 
 // 21b. Combat events fall back to warCombat* when warHandle* not available

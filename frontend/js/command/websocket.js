@@ -395,13 +395,19 @@ export class WebSocketManager {
                 break;
 
             case 'announcer':
-            case 'amy_announcer':
-                EventBus.emit('announcer', msg.data || msg);
-                if (typeof warHudShowAmyAnnouncement === 'function') {
-                    const d = msg.data || msg;
-                    warHudShowAmyAnnouncement(d.text || d.message, d.category);
+            case 'amy_announcer': {
+                const d = msg.data || msg;
+                // Normalize: some messages use 'message' instead of 'text'
+                if (!d.text && d.message) d.text = d.message;
+                EventBus.emit('announcer', d);
+                // Route through warHandle* for audio hooks
+                if (typeof warHandleAmyAnnouncement === 'function') {
+                    warHandleAmyAnnouncement(d);
+                } else if (typeof warHudShowAmyAnnouncement === 'function') {
+                    warHudShowAmyAnnouncement(d.text, d.category);
                 }
                 break;
+            }
 
             case 'robot_thought':
             case 'amy_robot_thought':
@@ -474,15 +480,21 @@ export class WebSocketManager {
             }
 
             case 'escalation_change':
-            case 'amy_escalation_change':
+            case 'amy_escalation_change': {
+                const d = msg.data || msg;
                 TritiumStore.addAlert({
                     type: 'escalation',
-                    message: msg.data?.message || 'Threat level changed',
+                    message: d.message || 'Threat level changed',
                     source: 'escalation',
                 });
-                EventBus.emit('alert:new', msg.data || msg);
-                EventBus.emit('escalation:change', msg.data || msg);
+                // Route through warHandle* for audio hooks (escalation siren)
+                if (typeof warHandleThreatEscalation === 'function') {
+                    warHandleThreatEscalation(d);
+                }
+                EventBus.emit('alert:new', d);
+                EventBus.emit('escalation:change', d);
                 break;
+            }
 
             case 'amy_alert': {
                 const ad = msg.data || msg;
