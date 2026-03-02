@@ -127,6 +127,10 @@ function init() {
         // Game over overlay
         if (phase === 'victory' || phase === 'defeat') {
             showGameOver(phase);
+        } else if (phase === 'idle' || phase === 'setup') {
+            // Dismiss game-over overlay on reset
+            const goOverlay = document.getElementById('game-over-overlay');
+            if (goOverlay) goOverlay.hidden = true;
         }
 
         // Auto-enable fog of war during battle, disable when idle

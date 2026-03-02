@@ -101,6 +101,9 @@ function warHudUpdateGameState(data) {
     // Show/hide BEGIN WAR button based on state
     if (_hudState.gameState === 'setup' || _hudState.gameState === 'idle') {
         warHudShowBeginWarButton();
+        // Dismiss game-over overlay on reset
+        const goEl = document.getElementById('war-game-over');
+        if (goEl) goEl.style.display = 'none';
     } else {
         warHudHideBeginWarButton();
     }

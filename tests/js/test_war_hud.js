@@ -177,6 +177,18 @@ w.warHudUpdateGameState({ state: 'idle' });
 const scoreEl2 = mockElements['war-score'];
 assert(scoreEl2 && scoreEl2.style.display === 'none', 'score panel hidden during idle');
 
+// Game-over overlay dismissed on idle/setup
+resetElements();
+// Pre-create the game-over element with display:block to simulate it being shown
+mockElements['war-game-over'] = { style: { display: 'block', opacity: '' }, textContent: '', innerHTML: '', className: '', classList: { _classes: [], add(cls) { this._classes.push(cls); }, remove(cls) { this._classes = this._classes.filter(c => c !== cls); } }, onclick: null, offsetWidth: 100 };
+w.warHudUpdateGameState({ state: 'idle' });
+assert(mockElements['war-game-over'].style.display === 'none', 'game-over overlay hidden on idle state');
+
+resetElements();
+mockElements['war-game-over'] = { style: { display: 'block', opacity: '' }, textContent: '', innerHTML: '', className: '', classList: { _classes: [], add(cls) { this._classes.push(cls); }, remove(cls) { this._classes = this._classes.filter(c => c !== cls); } }, onclick: null, offsetWidth: 100 };
+w.warHudUpdateGameState({ state: 'setup' });
+assert(mockElements['war-game-over'].style.display === 'none', 'game-over overlay hidden on setup state');
+
 // ============================================================
 // warHudShowWaveBanner
 // ============================================================
