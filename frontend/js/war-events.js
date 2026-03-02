@@ -252,7 +252,7 @@ function _wireWarAudioEvents() {
     _patchWarHandler('warHandleWaveStart', function(data) {
         warEventMapper.onWaveStart(data);
     });
-    _patchWarHandler('warHandleKillStreak', function(data) {
+    _patchWarHandler('warHandleEliminationStreak', function(data) {
         warEventMapper.onKillStreak(data);
     });
     _patchWarHandler('warHandleGameOver', function(data) {

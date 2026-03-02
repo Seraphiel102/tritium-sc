@@ -341,6 +341,10 @@ export class WebSocketManager {
                 } else if (typeof warHudUpdateGameState === 'function') {
                     warHudUpdateGameState(d);
                 }
+                // Trigger countdown audio when entering countdown state
+                if (d.state === 'countdown' && typeof warHandleCountdown === 'function') {
+                    warHandleCountdown(d);
+                }
                 break;
             }
 
@@ -576,6 +580,20 @@ export class WebSocketManager {
                     warHudShowWaveComplete(d.wave || d.wave_number, d.eliminations, d.score_bonus);
                 }
                 EventBus.emit('game:wave_complete', d);
+                break;
+            }
+
+            case 'unit_dispatched':
+            case 'amy_unit_dispatched': {
+                const d = msg.data || msg;
+                // Route through warHandle* for dispatch arrow + audio
+                if (typeof warHandleDispatch === 'function') {
+                    warHandleDispatch({
+                        target_id: d.unit_id || d.target_id,
+                        destination: d.destination,
+                    });
+                }
+                EventBus.emit('game:dispatch', d);
                 break;
             }
 

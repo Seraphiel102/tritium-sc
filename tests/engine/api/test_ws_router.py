@@ -678,6 +678,13 @@ class TestHeadlessBridgeTacticalEvents:
         source = inspect.getsource(start_headless_event_bridge)
         assert '"mode_change"' in source or "'mode_change'" in source
 
+    def test_allowlist_includes_unit_dispatched(self):
+        """unit_dispatched must be in the headless bridge whitelist so dispatch arrows render."""
+        import inspect
+        from app.routers.ws import start_headless_event_bridge
+        source = inspect.getsource(start_headless_event_bridge)
+        assert '"unit_dispatched"' in source or "'unit_dispatched'" in source
+
 
 class TestTakBridgePassthrough:
     """TAK events must pass through both bridges without amy_ prefix."""

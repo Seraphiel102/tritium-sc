@@ -3154,6 +3154,104 @@ console.log('\n--- Audio-relevant EventBus emissions ---');
 })();
 
 // ============================================================
+// unit_dispatched event routing
+// ============================================================
+
+(function testUnitDispatchedRoutesWarHandleDispatch() {
+    const ctx = createFreshContext();
+    vm.runInContext(`
+        var _dispatchData = null;
+        warHandleDispatch = function(d) { _dispatchData = d; };
+    `, ctx);
+    listenEvent(ctx, 'game:dispatch');
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'unit_dispatched',
+        data: { unit_id: 'rover-01', destination: { x: 100, y: 200 } },
+    });
+    const data = vm.runInContext('_dispatchData', ctx);
+    assert(data !== null, 'unit_dispatched calls warHandleDispatch');
+    assertEqual(data.target_id, 'rover-01', 'dispatch data maps unit_id to target_id');
+    assertEqual(data.destination.x, 100, 'dispatch data passes destination');
+    assertDefined(_bridge['game:dispatch'], 'unit_dispatched emits game:dispatch event');
+})();
+
+(function testUnitDispatchedAmy() {
+    const ctx = createFreshContext();
+    vm.runInContext(`
+        var _dispatchCalled = false;
+        warHandleDispatch = function(d) { _dispatchCalled = true; };
+    `, ctx);
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'amy_unit_dispatched',
+        data: { unit_id: 'drone-01', destination: { x: 50, y: 75 } },
+    });
+    const called = vm.runInContext('_dispatchCalled', ctx);
+    assert(called, 'amy_unit_dispatched also routes through warHandleDispatch');
+})();
+
+// ============================================================
+// countdown audio trigger on state transition
+// ============================================================
+
+(function testCountdownStateTriggersAudio() {
+    const ctx = createFreshContext();
+    vm.runInContext(`
+        var _countdownCalled = false;
+        warHandleGameState = function(d) {};
+        warHandleCountdown = function(d) { _countdownCalled = true; };
+    `, ctx);
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'game_state',
+        data: { state: 'countdown', countdown: 5 },
+    });
+    const called = vm.runInContext('_countdownCalled', ctx);
+    assert(called, 'game_state with state=countdown triggers warHandleCountdown for audio');
+})();
+
+(function testNonCountdownStateDoesNotTriggerCountdownAudio() {
+    const ctx = createFreshContext();
+    vm.runInContext(`
+        var _countdownCalled = false;
+        warHandleGameState = function(d) {};
+        warHandleCountdown = function(d) { _countdownCalled = true; };
+    `, ctx);
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    createdSockets[0]._simulateMessage({
+        type: 'game_state',
+        data: { state: 'active', wave: 1 },
+    });
+    const called = vm.runInContext('_countdownCalled', ctx);
+    assert(!called, 'game_state with state=active does NOT trigger warHandleCountdown');
+})();
+
+// ============================================================
+// war-events.js patches correct function name
+// ============================================================
+
+(function testWarEventsPatches_EliminationStreak_NotKillStreak() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/war-events.js', 'utf8');
+    assert(
+        src.includes("_patchWarHandler('warHandleEliminationStreak'"),
+        'war-events.js patches warHandleEliminationStreak (canonical name used by websocket.js)'
+    );
+    assert(
+        !src.includes("_patchWarHandler('warHandleKillStreak'"),
+        'war-events.js does NOT patch warHandleKillStreak (alias, would leave canonical unpatched)'
+    );
+})();
+
+// ============================================================
 // Summary
 // ============================================================
 

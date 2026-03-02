@@ -513,6 +513,8 @@ def start_headless_event_bridge(event_bus, loop: asyncio.AbstractEventLoop,
                     # Auto-dispatch and zone breach announcements
                     "auto_dispatch_speech",
                     "zone_violation",
+                    # Unit dispatch
+                    "unit_dispatched",
                     # Amy mode/formation events
                     "formation_created",
                     "mode_change",
