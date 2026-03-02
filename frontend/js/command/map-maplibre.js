@@ -5786,13 +5786,21 @@ function _onUnitDispatch(data) {
         if (resp.ok) {
             EventBus.emit('unit:dispatched', { id: unitId, target: { x: tx, y: ty } });
         } else {
-            // Fallback: emit via legacy command endpoint
+            // Fallback: emit via Lua command endpoint
             fetch('/api/amy/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'dispatch', target_id: unitId, x: tx, y: ty }),
+                body: JSON.stringify({ action: 'dispatch', params: [unitId, tx, ty] }),
             }).then(r => {
-                if (r.ok) EventBus.emit('unit:dispatched', { id: unitId, target: { x: tx, y: ty } });
+                if (r.ok) {
+                    EventBus.emit('unit:dispatched', { id: unitId, target: { x: tx, y: ty } });
+                } else {
+                    r.json().then(d => {
+                        EventBus.emit('toast:show', { message: (d && d.detail) || 'Dispatch failed', type: 'alert' });
+                    }).catch(() => {
+                        EventBus.emit('toast:show', { message: 'Dispatch failed', type: 'alert' });
+                    });
+                }
             }).catch(() => {
                 EventBus.emit('toast:show', { message: 'Dispatch failed', type: 'alert' });
             });
@@ -5831,13 +5839,13 @@ function _onMapClick(e) {
         _onDropWaypoint({ x: game.x, y: game.y, unitId: _state.patrolUnitId });
         // After 2+ points, send patrol via Amy command (no control lock needed)
         if (_state.patrolWaypoints.length >= 2) {
-            const wpStr = _state.patrolWaypoints.map(w => `{${w.x.toFixed(1)},${w.y.toFixed(1)}}`).join(',');
+            const wpsJson = JSON.stringify(_state.patrolWaypoints.map(w => [w.x, w.y]));
             fetch('/api/amy/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    action: `patrol(${wpStr})`,
-                    target_id: _state.patrolUnitId,
+                    action: 'patrol',
+                    params: [_state.patrolUnitId, wpsJson],
                 }),
             }).then(resp => {
                 if (resp.ok) EventBus.emit('toast:show', { message: 'Patrol route set', type: 'info' });

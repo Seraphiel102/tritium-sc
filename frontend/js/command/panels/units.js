@@ -204,6 +204,7 @@ export const UnitsPanelDef = {
         }
 
         function render() {
+            if (!listEl) return;
             const units = [];
             TritiumStore.units.forEach((u) => {
                 if (currentFilter === 'all') {

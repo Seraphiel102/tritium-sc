@@ -654,12 +654,13 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
     assert(!aimBlock.includes('/api/npc/'), 'aim mode does NOT use NPC action endpoint (would need control lock)');
 })();
 
-// Patrol sends formatted Lua patrol command
-(function testPatrolSendsLuaCommand() {
+// Patrol sends params-style patrol command
+(function testPatrolSendsParamsCommand() {
     const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
     const patrolIdx = source.indexOf('patrolMode && _state.patrolUnitId');
     const patrolBlock = source.slice(patrolIdx, patrolIdx + 1000);
-    assert(patrolBlock.includes('patrol('), 'patrol sends Lua patrol() command');
+    assert(patrolBlock.includes("action: 'patrol'"), 'patrol sends action: patrol');
+    assert(patrolBlock.includes('params: [_state.patrolUnitId, wpsJson]'), 'patrol sends unit ID and waypoints in params array');
 })();
 
 // Aim sends formatted Lua motor.aim command
