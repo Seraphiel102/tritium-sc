@@ -248,3 +248,35 @@ class TestResetClearsAmbientSpawnerNames:
         engine.reset_game()
         # The spawner should still be alive (not stopped)
         assert engine._ambient_spawner is not None
+
+
+class TestResetClearsNPCManager:
+    """reset_game() should clear NPC manager tracking data."""
+
+    def test_npc_manager_missions_cleared(self):
+        """Stale NPC missions should not leak across games."""
+        engine = _make_engine()
+        from engine.simulation.npc import NPCManager
+        mgr = NPCManager(engine)
+        mgr._missions["npc-1"] = object()
+        mgr._npc_ids.add("npc-1")
+        engine._npc_manager = mgr
+        engine.reset_game()
+        assert len(mgr._missions) == 0
+        assert len(mgr._npc_ids) == 0
+
+    def test_npc_manager_used_names_cleared(self):
+        """Name pool should recycle between games."""
+        engine = _make_engine()
+        from engine.simulation.npc import NPCManager
+        mgr = NPCManager(engine)
+        mgr._used_names.update({"Alice", "Bob", "Carol"})
+        engine._npc_manager = mgr
+        engine.reset_game()
+        assert len(mgr._used_names) == 0
+
+    def test_npc_manager_none_skips(self):
+        """If no NPC manager attached, reset_game() should not crash."""
+        engine = _make_engine()
+        assert engine._npc_manager is None
+        engine.reset_game()

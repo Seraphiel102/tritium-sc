@@ -387,6 +387,19 @@ class NPCManager:
 
     # -- Cleanup ------------------------------------------------------------
 
+    def reset(self) -> None:
+        """Clear all NPC tracking state between games.
+
+        Prevents stale missions, IDs, and name pools from leaking across
+        game resets.  The auto-spawn loop continues running and will
+        repopulate naturally.
+        """
+        self._missions.clear()
+        self._vehicle_types.clear()
+        self._bindings.clear()
+        self._used_names.clear()
+        self._npc_ids.clear()
+
     def remove_unit(self, target_id: str) -> None:
         """Remove all per-unit state for a target.
 

@@ -650,6 +650,8 @@ class SimulationEngine:
             self.vision_system.reset()
             self.lod_system.reset()
             self.replay_recorder.clear()
+            if self._npc_manager is not None:
+                self._npc_manager.reset()
             self.spectator.stop()
             self.hazard_manager.clear()
             # Reset mission-type subsystems
