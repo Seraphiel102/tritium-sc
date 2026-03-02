@@ -1132,6 +1132,26 @@
     height: 100%;
 }
 
+.audio-panel-inner,
+.cameras-panel-inner,
+.escalation-panel-inner,
+.events-panel-inner,
+.minimap-panel-inner,
+.patrol-panel-inner,
+.scenarios-panel-inner,
+.search-panel-inner,
+.sensor-panel-inner,
+.system-panel-inner,
+.tak-panel-inner,
+.videos-panel-inner,
+.zones-panel-inner,
+.unit-inspector-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+}
+
 .panel-detail {
     border-top: 1px solid var(--border);
     padding-top: 6px;
