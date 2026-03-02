@@ -528,14 +528,18 @@ export class WebSocketManager {
 
             case 'wave_start':
             case 'amy_wave_start': {
+                const d = msg.data || msg;
+                // Route through warHandle* for audio hooks
+                if (typeof warHandleWaveStart === 'function') {
+                    warHandleWaveStart(d);
+                }
                 if (typeof warHudShowWaveBanner === 'function') {
-                    const d = msg.data || msg;
                     const briefingData = (d.briefing || d.threat_level || d.intel)
                         ? { briefing: d.briefing, threat_level: d.threat_level, intel: d.intel }
                         : null;
                     warHudShowWaveBanner(d.wave || d.wave_number, d.wave_name, d.hostile_count, briefingData);
                 }
-                EventBus.emit('game:wave_start', msg.data || msg);
+                EventBus.emit('game:wave_start', d);
                 break;
             }
 

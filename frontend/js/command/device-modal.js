@@ -557,7 +557,11 @@ const CameraControl = {
     },
 
     update(container, device) {},
-    destroy(container) {},
+    destroy(container) {
+        // Stop MJPEG stream by clearing the image source
+        const img = container.querySelector('.dc-stream-img');
+        if (img) img.src = '';
+    },
 };
 
 // NPC Intelligence Control (neutral pedestrians, vehicles, animals)

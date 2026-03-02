@@ -1214,6 +1214,22 @@ console.log('\n--- CameraControl ---');
     assert(body.command === 'camera_off', 'Camera OFF sends camera_off command in body');
 })();
 
+(function testCameraDestroyStopsMjpegStream() {
+    // Build a container with a mock .dc-stream-img that CameraControl.destroy can find
+    const imgEl = createMockElement('img');
+    imgEl.className = 'dc-stream-img';
+    imgEl.src = '/api/amy/nodes/cam-destroy-01/video';
+    const container = createMockElement('div');
+    const origQs = container.querySelector.bind(container);
+    container.querySelector = function(sel) {
+        if (sel === '.dc-stream-img') return imgEl;
+        return origQs(sel);
+    };
+    assert(imgEl.src.includes('/api/amy/nodes/'), 'MJPEG src is set before destroy');
+    CameraControl.destroy(container);
+    assert(imgEl.src === '', 'CameraControl.destroy clears MJPEG img src to stop stream');
+})();
+
 // ============================================================
 // 10. MeshRadioControl structure and buttons
 // ============================================================

@@ -1407,6 +1407,7 @@ console.log('\n--- Edge Cases ---');
         warHudShowWaveBanner = function(w, n, h) { _bridge.waveBannerCalled = true; };
         warHudShowWaveComplete = function(w, e, s) { _bridge.waveCompleteCalled = true; };
         // warHandle* wrappers (preferred — include audio hooks)
+        warHandleWaveStart = function(d) { _bridge.handleWaveStartCalled = true; };
         warHandleProjectileFired = function(d) { _bridge.handleProjectileCalled = true; };
         warHandleProjectileHit = function(d) { _bridge.handleHitCalled = true; };
         warHandleTargetEliminated = function(d) { _bridge.handleElimCalled = true; };
@@ -1433,6 +1434,7 @@ console.log('\n--- Edge Cases ---');
     assert(_bridge.announcerCalled, 'warHudShowAmyAnnouncement called for announcer');
 
     createdSockets[0]._simulateMessage({ type: 'wave_start', data: { wave: 1, wave_name: 'TEST', hostile_count: 5 } });
+    assert(_bridge.handleWaveStartCalled, 'warHandleWaveStart called for wave_start (includes audio hooks)');
     assert(_bridge.waveBannerCalled, 'warHudShowWaveBanner called for wave_start');
 
     createdSockets[0]._simulateMessage({ type: 'wave_complete', data: { wave: 1, eliminations: 3, score_bonus: 50 } });
