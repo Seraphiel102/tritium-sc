@@ -293,6 +293,7 @@ export class WebSocketManager {
             }
 
             case 'game_state':
+            case 'game_state_change':
             case 'amy_game_state_change': {
                 const d = msg.data || msg;
                 if (d.state) TritiumStore.set('game.phase', d.state);
@@ -313,6 +314,8 @@ export class WebSocketManager {
                 if (d.state === 'idle') {
                     TritiumStore.resetGameState();
                 } else if (d.state === 'setup') {
+                    // Exit replay mode so live telemetry is not blocked
+                    TritiumStore.set('replay.active', false);
                     // Clear per-game overlays but preserve units
                     TritiumStore.set('hazards', new Map());
                     TritiumStore.set('game.hostileIntel', null);

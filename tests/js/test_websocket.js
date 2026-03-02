@@ -3300,6 +3300,98 @@ console.log('\n--- Audio-relevant EventBus emissions ---');
 })();
 
 // ============================================================
+// Replay guard cleared on setup state
+// ============================================================
+
+(function testSetupStateClearsReplayActive() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    const store = vm.runInContext('TritiumStore', ctx);
+
+    // Enter replay mode
+    store.set('replay.active', true);
+    assertEqual(store.get('replay.active'), true, 'replay.active starts true');
+
+    // Receive game_state_change with state=setup (new game starting)
+    createdSockets[0]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'setup' },
+    });
+
+    assertEqual(store.get('replay.active'), false, 'setup state clears replay.active');
+})();
+
+(function testSetupStateClearsReplayActiveUnprefixed() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    const store = vm.runInContext('TritiumStore', ctx);
+
+    store.set('replay.active', true);
+
+    // Unprefixed game_state_change should also be handled
+    createdSockets[0]._simulateMessage({
+        type: 'game_state_change',
+        data: { state: 'setup' },
+    });
+
+    assertEqual(store.get('replay.active'), false, 'unprefixed game_state_change clears replay on setup');
+})();
+
+(function testReplayActiveNotClearedOnActiveState() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    const store = vm.runInContext('TritiumStore', ctx);
+
+    store.set('replay.active', true);
+
+    // Active state should NOT clear replay -- only idle/setup do
+    createdSockets[0]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'active' },
+    });
+
+    assertEqual(store.get('replay.active'), true, 'active state does not clear replay.active');
+})();
+
+(function testLiveTelemetryResumesAfterSetupClearsReplay() {
+    const ctx = createFreshContext();
+    const ws = vm.runInContext('new WebSocketManager()', ctx);
+    ws.connect();
+    createdSockets[0]._simulateOpen();
+    const store = vm.runInContext('TritiumStore', ctx);
+
+    // Seed a unit, enter replay
+    store.updateUnit('r1', { name: 'Rover', type: 'rover', position: { x: 0, y: 0 } });
+    store.set('replay.active', true);
+
+    // Telemetry blocked during replay
+    createdSockets[0]._simulateMessage({
+        type: 'sim_telemetry',
+        data: { target_id: 'r1', name: 'Rover', asset_type: 'rover', position: { x: 99, y: 99 } },
+    });
+    assertEqual(store.units.get('r1').position.x, 0, 'telemetry blocked during replay');
+
+    // Setup state clears replay
+    createdSockets[0]._simulateMessage({
+        type: 'amy_game_state_change',
+        data: { state: 'setup' },
+    });
+
+    // Now telemetry resumes
+    createdSockets[0]._simulateMessage({
+        type: 'sim_telemetry',
+        data: { target_id: 'r1', name: 'Rover', asset_type: 'rover', position: { x: 50, y: 50 } },
+    });
+    assertEqual(store.units.get('r1').position.x, 50, 'telemetry resumes after setup clears replay');
+})();
+
+// ============================================================
 // Summary
 // ============================================================
 

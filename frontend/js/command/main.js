@@ -1125,7 +1125,12 @@ function initKeyboard() {
                     TritiumStore.set('controlledUnitId', null);
                     EventBus.emit('unit:control-released', { id: controlledId });
                     EventBus.emit('toast:show', { message: 'Unit control released', type: 'info' });
-                }).catch(() => {});
+                }).catch(() => {
+                    // Release locally even on network error to avoid stuck WASD state
+                    TritiumStore.set('controlledUnitId', null);
+                    EventBus.emit('unit:control-released', { id: controlledId });
+                    EventBus.emit('toast:show', { message: 'Control released (server unreachable)', type: 'warning' });
+                });
                 return;
             }
         }
