@@ -379,6 +379,13 @@ def test_generate_doc_screenshots(tritium_server):
         _generate_gallery(shots_info)
         print(f"\nGallery: {RESULTS_DIR / 'gallery.html'}")
 
+        # Regenerate screenshots README.md
+        try:
+            from scripts.generate_screenshot_readme import main as gen_readme
+            gen_readme()
+        except Exception as e:
+            print(f"  Warning: README generation failed: {e}")
+
         # Final summary
         print("\n" + "=" * 60)
         print("  DOC SCREENSHOTS COMPLETE")
