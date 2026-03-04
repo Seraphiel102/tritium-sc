@@ -306,7 +306,7 @@ function makeMockLayoutManager() {
 
 function makeMockMapActions() {
     const state = {
-        showSatellite: true, showRoads: false, showBuildings: true,
+        showSatellite: false, showRoads: false, showBuildings: true,
         showWaterways: false, showParks: false, showGrid: false,
         showUnits: true, showModels3d: false, showLabels: true, showMesh: true, showThoughts: true, showFog: false,
         showTerrain: false, tiltMode: 'flat',
@@ -1325,7 +1325,7 @@ console.log('\n--- Dropdown items structure ---');
     // Third item (index 2): Satellite (checkable, checked=true)
     const satItem = mapDropdown.children[2];
     const satCheck = satItem.children[0];
-    assert(satCheck.textContent === '\u2022', 'Satellite is checked (showSatellite=true)');
+    assert(satCheck.textContent === '', 'Satellite is unchecked (showSatellite=false)');
     const satLabel = satItem.children[1];
     assert(satLabel.textContent === 'Satellite', 'third MAP item is "Satellite"');
 })();
@@ -1497,13 +1497,13 @@ console.log('\n--- Menu item actions ---');
     mapTrigger.click();
     const satItem = mapDropdown.children[2];
     const satCheck = satItem.children[0];
-    assert(satCheck.textContent === '\u2022', 'Satellite starts checked');
+    assert(satCheck.textContent === '', 'Satellite starts unchecked');
 
-    // Click toggles satellite (was true, now false)
+    // Click toggles satellite (was false, now true)
     satItem.click();
     assert(ma._calls.includes('toggleSatellite'), 'clicking Satellite item calls toggleSatellite');
     // Check indicator should update
-    assert(satCheck.textContent === '', 'check indicator updates to empty after unchecking');
+    assert(satCheck.textContent === '\u2022', 'check indicator updates to bullet after checking');
 })();
 
 (function testClickingLayoutItemApplies() {

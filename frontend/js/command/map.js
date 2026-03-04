@@ -130,14 +130,14 @@ const _state = {
     // Satellite tile cache
     satTiles: [],     // { image, bounds: { minX, maxX, minY, maxY } }
     geoLoaded: false,
-    showSatellite: true, // toggled with I key
+    showSatellite: false, // toggled with I key
     geoCenter: null,     // { lat, lng } — cached for dynamic reload
     satTileLevel: -1,    // current SAT_TILE_LEVELS index (for threshold detection)
     satReloadTimer: null, // debounce timer for tile reload
 
     // Road tile overlay
     roadTiles: [],      // { image, bounds: { minX, maxX, minY, maxY } }
-    showRoads: true,    // toggled with G key (default on)
+    showRoads: false,   // toggled with G key (default off)
     roadTileLevel: -1,
     roadReloadTimer: null,
     showGrid: true,     // toggled from menu
@@ -1391,7 +1391,7 @@ function _drawLabels(ctx) {
     const resolved = resolveLabels(entries, cssW, cssH, _state.cam.zoom, selectedId, worldToScreen);
 
     ctx.save();
-    const fontSize = Math.max(9, 11 * Math.min(_state.cam.zoom, 2));
+    const fontSize = Math.max(7, 8 * Math.min(_state.cam.zoom, 2));
     ctx.font = `${fontSize}px ${FONT_FAMILY}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
@@ -1792,9 +1792,9 @@ function _drawUnit(ctx, id, unit) {
     }
 
     // Compute scale from zoom and hover/selection
-    // Use smaller icons: 0.6x base at zoom 1.5, min 0.3, max 1.2
-    let scale = Math.min(_state.cam.zoom, 3) / 2.5;
-    scale = Math.max(0.3, Math.min(1.2, scale));
+    // Compact icons: ~0.4x at zoom 1.5, matching 3D indicator scale
+    let scale = Math.min(_state.cam.zoom, 3) / 4.0;
+    scale = Math.max(0.2, Math.min(0.8, scale));
     if (isSelected) scale *= 1.3;
     else if (isHovered) scale *= 1.15;
 

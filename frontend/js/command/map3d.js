@@ -140,7 +140,7 @@ const _state = {
     satTextureCanvas: null,
     satTexture: null,
     geoCenter: null,
-    showSatellite: true,
+    showSatellite: false,
     showRoads: false,
     showGrid: true,
     satTileLevel: -1,

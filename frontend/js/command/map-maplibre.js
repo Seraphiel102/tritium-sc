@@ -96,9 +96,9 @@ const _state = {
     layerHud: null,
 
     // Layer visibility — map base
-    showSatellite: true,
+    showSatellite: false,
     showBuildings: true,
-    showRoads: true,
+    showRoads: false,
     showWaterways: true,       // waterway layers
     showParks: true,           // parks / green areas
     showTerrain: false,        // 3D terrain mesh (DEM)
