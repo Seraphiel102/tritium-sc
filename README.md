@@ -191,8 +191,8 @@ Place turrets in Setup mode, press B, and defend the neighborhood. Every wave cl
 
 # Individual tiers
 ./test.sh 1              # Syntax check (Python + JS)
-./test.sh 2              # Unit tests (1666 pytest)
-./test.sh 3              # JS tests (281 across 5 files)
+./test.sh 2              # Unit tests (pytest)
+./test.sh 3              # JS tests (75+ test files)
 ./test.sh 9              # Integration tests (23 server E2E)
 ./test.sh 10             # Visual quality tests
 
@@ -235,14 +235,21 @@ No frontend frameworks. No cloud dependencies. Everything runs locally on your h
 ```
 tritium-sc/
 ├── src/
-│   ├── amy/                     # AI Commander (autonomous consciousness)
-│   │   ├── brain/               # Thinking, sensorium, perception, memory
-│   │   ├── actions/             # Motor control, Lua dispatch, announcer
-│   │   ├── comms/               # Event bus, MQTT bridge, listener, speaker
-│   │   ├── tactical/            # Target tracker, escalation, geo transforms
-│   │   ├── inference/           # Model router, fleet discovery
-│   │   ├── simulation/          # 10Hz engine, combat, game mode, unit AI
-│   │   └── nodes/               # BCC950, IP camera, MQTT robot nodes
+│   ├── engine/                  # System infrastructure (reusable, commander-agnostic)
+│   │   ├── simulation/          # 10Hz engine, combat, game mode, unit AI, weapons
+│   │   ├── comms/               # Event bus, MQTT bridge, CoT protocol, listener, speaker
+│   │   ├── tactical/            # Target tracker, escalation, geo, street graph, obstacles
+│   │   ├── inference/           # Model router, Ollama fleet discovery, robot thinker
+│   │   ├── perception/          # Layered perception, vision, fact extraction
+│   │   ├── actions/             # Lua dispatch, action registry, formation commands
+│   │   ├── nodes/               # BCC950, IP camera, MQTT robot sensor nodes
+│   │   ├── units/               # Unit type registry (16 types, auto-discovery)
+│   │   ├── audio/               # Sound effects pipeline, audio library
+│   │   └── synthetic/           # Procedural media generation (CCTV, video)
+│   ├── amy/                     # AI Commander personality plugin
+│   │   ├── brain/               # Thinking, sensorium, memory, agent
+│   │   ├── actions/             # Motor control, war announcer
+│   │   └── comms/               # Transcript logging
 │   └── app/                     # FastAPI backend
 │       ├── routers/             # REST + WebSocket + game API
 │       ├── ai/                  # YOLO detector, ByteTrack, embeddings
@@ -255,7 +262,7 @@ tritium-sc/
 ├── examples/
 │   ├── robot-template/          # Reference MQTT robot brain (Python)
 │   └── ros2-robot/              # ROS2 Humble robot (Nav2 + MQTT)
-└── tests/                       # 2000+ tests across 11 tiers
+└── tests/                       # 4500+ tests across 22 tiers
 ```
 
 See [docs/PLAN.md](docs/PLAN.md) for the full development roadmap.
@@ -264,11 +271,11 @@ See [docs/USER-STORIES.md](docs/USER-STORIES.md) for what the complete experienc
 
 ---
 
-## GRAPHLINGS (COMING SOON)
+## [GRAPHLINGS](https://graphlings.net) (COMING SOON)
 
 > *"Incoming game!"* — ReBoot
 
-The **Graphlings** plugin brings compute-scalable digital life to the AI mesh. Not every NPC needs a brain — most enemies, civilians, and ambient units run on traditional game AI (state machines, behavior trees, pathfinding). But scattered through the world are Graphlings: autonomous agents that know they're actors in a simulation. They observe, reason, and make decisions that traditional AI can't.
+The **[Graphlings](https://graphlings.net)** plugin brings compute-scalable digital life to the AI mesh. Not every NPC needs a brain — most enemies, civilians, and ambient units run on traditional game AI (state machines, behavior trees, pathfinding). But scattered through the world are Graphlings: autonomous agents that know they're actors in a simulation. They observe, reason, and make decisions that traditional AI can't.
 
 Graphlings live in their own universe between missions, developing personalities, backstories, and motivations. When a mission begins, they cross over to play their roles — a defender who remembers last week's breach, an attacker with a grudge, a bystander who notices things. When the mission ends, they return home. The world is a mix: traditional game AI provides the crowd, Graphlings provide the intelligence.
 
