@@ -2718,9 +2718,12 @@ function _onDblClick(e) {
         EventBus.emit('unit:selected', { id: hitId });
         EventBus.emit('panel:request-open', { id: 'unit-inspector' });
         const unit = TritiumStore.units.get(hitId);
-        if (unit && unit.position) {
-            _state.cam.targetX = unit.position.x;
-            _state.cam.targetY = unit.position.y;
+        if (unit) {
+            if (unit.position) {
+                _state.cam.targetX = unit.position.x;
+                _state.cam.targetY = unit.position.y;
+            }
+            DeviceModalManager.open(hitId, _resolveModalType(unit), unit);
         }
     }
 }

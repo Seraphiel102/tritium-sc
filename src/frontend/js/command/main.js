@@ -140,6 +140,14 @@ function init() {
         } else if (phase === 'idle' || phase === 'setup') {
             if (mapState.showFog) toggleFog();
         }
+
+        // Auto-enable fog of war during battle, disable when idle
+        const mapState = getMapState();
+        if (phase === 'countdown' || phase === 'active') {
+            if (!mapState.showFog) toggleFog();
+        } else if (phase === 'idle' || phase === 'setup') {
+            if (mapState.showFog) toggleFog();
+        }
     });
 
     TritiumStore.on('game.wave', (wave) => {

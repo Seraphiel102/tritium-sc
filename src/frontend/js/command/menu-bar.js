@@ -11,6 +11,15 @@
 
 import { EventBus } from './events.js';
 
+/**
+ * Get the currently selected battle scenario name.
+ * Deprecated: always returns null. All missions route through MissionModal.
+ * @returns {null}
+ */
+export function getSelectedScenario() {
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Menu definitions (data-driven)
 // ---------------------------------------------------------------------------
@@ -155,7 +164,7 @@ function _gameMenuItems(mapActions) {
         { label: 'New Mission', shortcut: 'B',
           action: () => { if (mapActions.beginWar) mapActions.beginWar(); } },
         { separator: true },
-        { label: 'Reset Game',
+        { label: 'Reset Game', shortcut: 'R',
           action: () => { if (mapActions.resetGame) mapActions.resetGame(); } },
     ];
 }

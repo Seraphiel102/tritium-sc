@@ -2912,6 +2912,13 @@ function _resolveModalType(unit) {
     return (npcTypes.includes(type) && alliance === 'neutral') ? 'npc' : type;
 }
 
+function _resolveModalType(unit) {
+    const type = unit.asset_type || unit.type || 'generic';
+    const alliance = unit.alliance || 'unknown';
+    const npcTypes = ['person', 'animal', 'vehicle'];
+    return (npcTypes.includes(type) && alliance === 'neutral') ? 'npc' : type;
+}
+
 function _createUnitMarker(id, unit, lngLat) {
     // CRITICAL: MapLibre v4+ adds classes directly to the element passed to
     // Marker() and uses element.style.transform to position it.  If we set
@@ -2965,6 +2972,16 @@ function _createUnitMarker(id, unit, lngLat) {
         if (u && u.position) {
             const flyLngLat = _gameToLngLat(u.position.x, u.position.y);
             if (_state.map) _state.map.flyTo({ center: flyLngLat, zoom: Math.max(_state.map.getZoom(), 18) });
+        }
+    });
+
+    // Double-click handler for device modal
+    outer.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        const u = TritiumStore.units.get(id);
+        if (u) {
+            const modalType = _resolveModalType(u);
+            DeviceModalManager.open(id, modalType, u);
         }
     });
 
