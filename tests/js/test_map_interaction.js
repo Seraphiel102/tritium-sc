@@ -463,8 +463,10 @@ console.log('\n--- Context menu ---');
     // Mouse up at nearly same position = dispatch
     const upE = { clientX: 101, clientY: 101, button: 2, altKey: false, preventDefault() {} };
     _onMouseUp(upE);
-    const dispatchEvents = eventBusEmits.filter(e => e.event === 'unit:dispatched');
-    assert(dispatchEvents.length > 0, 'Right-click (no drag) dispatches selected unit');
+    // Dispatch is now async — event fires after fetch().then(), not synchronously.
+    // Verify fetch was called to the modern dispatch endpoint instead.
+    const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/simulation/dispatch');
+    assert(dispatchFetches.length > 0, 'Right-click (no drag) dispatches selected unit via modern endpoint');
 })();
 
 // ============================================================
@@ -482,19 +484,25 @@ console.log('\n--- Dispatch mode ---');
     _onMouseDown(e);
     assert(_state.dispatchMode === false, 'Dispatch mode cleared after click');
     assert(_state.dispatchUnitId === null, 'Dispatch unit cleared after click');
-    const dispatchEvents = eventBusEmits.filter(e => e.event === 'unit:dispatched');
-    assert(dispatchEvents.length > 0, 'Dispatch mode click emits dispatched event');
+    // Dispatch now uses async confirmation — fetch is called but event fires in .then()
+    const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/simulation/dispatch');
+    assert(dispatchFetches.length > 0, 'Dispatch mode click sends fetch to modern endpoint');
 })();
 
-(function testDispatchModeSendsFetch() {
+(function testDispatchModeSendsFetchWithCorrectBody() {
     setupState();
     addUnit('rover-01', 0, 0, 'friendly', 'rover');
     _state.dispatchMode = true;
     _state.dispatchUnitId = 'rover-01';
     const e = { clientX: 200, clientY: 200, button: 0, altKey: false, preventDefault() {} };
     _onMouseDown(e);
-    const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/command');
-    assert(dispatchFetches.length > 0, 'Dispatch mode sends fetch to /api/amy/command');
+    const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/simulation/dispatch');
+    assert(dispatchFetches.length > 0, 'Dispatch mode sends fetch to /api/amy/simulation/dispatch');
+    if (dispatchFetches.length > 0) {
+        const body = JSON.parse(dispatchFetches[0].opts.body);
+        assert(body.unit_id === 'rover-01', 'Dispatch body includes unit_id');
+        assert(body.target && typeof body.target.x === 'number', 'Dispatch body includes target position');
+    }
 })();
 
 // ============================================================
@@ -681,7 +689,10 @@ console.log('\n--- Dispatch arrows ---');
     // Right-click mouse up at same position
     const e = { clientX: 200, clientY: 200, button: 2, altKey: false, preventDefault() {} };
     _onMouseUp(e);
-    assert(_state.dispatchArrows.length > 0, 'Dispatch creates visual arrow');
+    // Dispatch is now async — arrow is added in .then() after server confirms.
+    // Verify the fetch was called (arrow will appear after microtask resolution).
+    const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/simulation/dispatch');
+    assert(dispatchFetches.length > 0, 'Dispatch sends fetch for async arrow creation');
 })();
 
 // ============================================================
@@ -798,8 +809,10 @@ console.log('\n--- Context action events ---');
     if (typeof handleContextAction === 'function') {
         addUnit('rover-01', 0, 0, 'friendly', 'rover');
         handleContextAction('dispatch', { x: 50, y: 50 }, 'rover-01', null);
-        const dispatched = eventBusEmits.filter(e => e.event === 'unit:dispatched');
-        assert(dispatched.length > 0, 'dispatch action emits unit:dispatched');
+        // Dispatch is now async — event fires in .then() after server confirmation.
+        // Verify fetch was called to the modern dispatch endpoint.
+        const dispatchFetches = fetchCalls.filter(c => c.url === '/api/amy/simulation/dispatch');
+        assert(dispatchFetches.length > 0, 'dispatch action sends fetch to modern dispatch endpoint');
     } else {
         assert(true, '_handleContextAction skipped (not exported)');
     }

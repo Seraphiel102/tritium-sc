@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 class GraphlingsConfig:
     """Configuration for graphling agent deployment in tritium-sc."""
 
-    # Graphling home server (GB10-01 via Tailscale)
-    server_url: str = "http://100.93.184.1:4774"
+    # Graphling home server (set via GRAPHLINGS_SERVER_URL env var or .env)
+    server_url: str = "http://localhost:4774"
     server_timeout: float = 5.0
 
     # Deployment limits
@@ -35,11 +35,17 @@ class GraphlingsConfig:
     default_consciousness_min: int = 2
     default_consciousness_max: int = 5
 
+    # Dry-run mode: generate stub responses without contacting the graphling server
+    dry_run: bool = False
+
     # Named spawn locations
     spawn_points: dict[str, tuple[float, float]] = field(default_factory=lambda: {
         "marketplace": (100.0, 200.0),
         "watchtower": (50.0, 150.0),
         "tavern": (180.0, 220.0),
+        "center": (0.0, 0.0),
+        "north_gate": (0.0, 100.0),
+        "south_gate": (0.0, -100.0),
     })
 
     @classmethod
@@ -61,4 +67,7 @@ class GraphlingsConfig:
         config.perception_radius = float(
             os.environ.get("GRAPHLINGS_PERCEPTION_RADIUS", config.perception_radius)
         )
+        config.dry_run = os.environ.get(
+            "GRAPHLINGS_DRY_RUN", "0"
+        ).lower() in ("1", "true", "yes")
         return config

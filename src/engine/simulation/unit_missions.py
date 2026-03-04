@@ -170,6 +170,43 @@ class UnitMissionSystem:
         self._map_bounds = map_bounds
         self._last_idle_check: float = 0.0
         self._lock = threading.Lock()
+        self._backstory_generator = None  # BackstoryGenerator (optional)
+        self._router = None  # Callable[[start, end, asset_type, alliance], list]
+
+    def set_router(self, route_fn) -> None:
+        """Set the pathfinding router callback.
+
+        route_fn signature: (start, end, unit_type, alliance) -> list[waypoints]
+        """
+        self._router = route_fn
+
+    def _route_mission_waypoints(
+        self, target: SimulationTarget, raw_waypoints: list[tuple[float, float]]
+    ) -> list[tuple[float, float]]:
+        """Route between consecutive mission waypoints through the pathfinder.
+
+        Turns [A, B, C] into route(pos->A) + route(A->B) + route(B->C),
+        concatenating and deduplicating join points.
+        """
+        if not raw_waypoints or self._router is None:
+            return list(raw_waypoints)
+
+        result: list[tuple[float, float]] = []
+        prev = target.position
+        for wp in raw_waypoints:
+            try:
+                segment = self._router(prev, wp, target.asset_type, target.alliance)
+                if segment:
+                    # Skip first point if it duplicates the last in result
+                    start = 1 if result and segment[0] == result[-1] else 0
+                    result.extend(segment[start:])
+                else:
+                    result.append(wp)
+            except Exception:
+                result.append(wp)
+            prev = wp
+
+        return result if result else list(raw_waypoints)
 
     def tick(self, dt: float, targets: dict[str, SimulationTarget]) -> None:
         """Called each engine tick. Checks for idle units and reassigns."""
@@ -193,12 +230,13 @@ class UnitMissionSystem:
                     # Restart patrol loop
                     wps = self._missions[tid].get("waypoints", [])
                     if wps:
-                        t.waypoints = list(wps)
+                        t.waypoints = self._route_mission_waypoints(t, wps)
                         t._waypoint_index = 0
                 else:
                     mission = self.assign_starter_mission(t)
                     if mission and "waypoints" in mission:
-                        t.waypoints = list(mission["waypoints"])
+                        t.waypoints = self._route_mission_waypoints(
+                            t, mission["waypoints"])
                         t._waypoint_index = 0
 
             elif is_idle and t.alliance == "neutral":
@@ -224,17 +262,18 @@ class UnitMissionSystem:
                 "description": f"Hold position at ({target.position[0]:.0f}, {target.position[1]:.0f}). Scan all sectors.",
             }
         elif target.asset_type in ("drone", "scout_drone"):
-            # Flying units: aerial scout or sweep
+            # Flying units: wide aerial sweeps across the city
+            patrol_radius = self._map_bounds * 0.6
             roll = random.random()
             if roll < 0.4:
-                wps = _perimeter_patrol(target.position, radius=60.0)
+                wps = _perimeter_patrol(target.position, radius=patrol_radius, points=8)
                 mission = {
                     "type": "scout",
                     "waypoints": wps,
-                    "description": "Aerial reconnaissance sweep of the perimeter.",
+                    "description": "Aerial reconnaissance sweep of the sector.",
                 }
             elif roll < 0.7:
-                wps = _grid_sweep(target.position, size=50.0, step=20.0)
+                wps = _grid_sweep(target.position, size=patrol_radius, step=patrol_radius / 4)
                 mission = {
                     "type": "sweep",
                     "waypoints": wps,
@@ -242,38 +281,40 @@ class UnitMissionSystem:
                 }
             else:
                 direction = random.uniform(0, 360)
-                wps = _sector_scout(target.position, direction, range_=60.0)
+                wps = _sector_scout(target.position, direction, range_=patrol_radius)
                 mission = {
                     "type": "scout",
                     "waypoints": wps,
                     "description": f"Sector scout, bearing {direction:.0f} degrees.",
                 }
         else:
-            # Ground mobile units: patrol
+            # Ground mobile units: city-wide patrols
             roll = random.random()
-            if roll < 0.5:
+            if roll < 0.4:
                 wps = _perimeter_patrol(
-                    (0, 0), radius=self._map_bounds * 0.3, points=6
+                    (0, 0), radius=self._map_bounds * 0.7, points=8
                 )
                 mission = {
                     "type": "patrol",
                     "waypoints": wps,
-                    "description": "Perimeter patrol. Keep eyes open.",
+                    "description": "City perimeter patrol. Full loop.",
                 }
-            elif roll < 0.8:
-                wps = _random_patrol(bounds=self._map_bounds * 0.4, points=5)
+            elif roll < 0.7:
+                wps = _random_patrol(bounds=self._map_bounds * 0.8, points=6)
                 mission = {
                     "type": "patrol",
                     "waypoints": wps,
-                    "description": "Random area patrol. Cover ground.",
+                    "description": "Random area patrol. Cover the neighborhood.",
                 }
             else:
                 direction = random.uniform(0, 360)
-                wps = _sector_scout(target.position, direction, range_=40.0)
+                wps = _sector_scout(
+                    target.position, direction, range_=self._map_bounds * 0.5
+                )
                 mission = {
                     "type": "escort",
                     "waypoints": wps,
-                    "description": "Forward escort route.",
+                    "description": "Forward recon route.",
                 }
 
         self._missions[target.target_id] = mission
@@ -384,6 +425,14 @@ class UnitMissionSystem:
             context=context or "A residential neighborhood under siege.",
         )
 
+    def set_backstory_generator(self, generator) -> None:
+        """Set the BackstoryGenerator instance for LLM backstory fulfillment.
+
+        When set, request_llm_backstory() delegates to the generator
+        instead of just queuing target IDs with no worker to drain them.
+        """
+        self._backstory_generator = generator
+
     def request_llm_backstory(self, target: SimulationTarget) -> None:
         """Queue a target for LLM backstory generation.
 
@@ -394,6 +443,9 @@ class UnitMissionSystem:
         if target.target_id not in self._backstories:
             self.generate_backstory_scripted(target)
         self._pending_backstories.add(target.target_id)
+        # Delegate to BackstoryGenerator if available
+        if self._backstory_generator is not None:
+            self._backstory_generator.enqueue(target)
 
     def get_backstory(self, target_id: str) -> str | None:
         """Get a unit's backstory."""
@@ -402,6 +454,11 @@ class UnitMissionSystem:
     def get_mission(self, target_id: str) -> dict | None:
         """Get a unit's current mission."""
         return self._missions.get(target_id)
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove mission and backstory state for a single unit."""
+        self._missions.pop(target_id, None)
+        self._backstories.pop(target_id, None)
 
     def reset(self) -> None:
         """Clear all missions and backstories."""

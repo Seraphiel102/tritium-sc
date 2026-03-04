@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 SIGNAL_DISTRESS = "distress"
 SIGNAL_CONTACT = "contact"
 SIGNAL_REGROUP = "regroup"
+SIGNAL_INSTIGATOR_MARKED = "instigator_marked"
+SIGNAL_EMP_JAMMING = "emp_jamming"
 
 # Signal defaults
 _DEFAULT_RANGE = 50.0  # meters
@@ -68,9 +70,10 @@ class Message:
 class UnitComms:
     """Manages inter-unit communication signals."""
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus: object | None = None) -> None:
         self._signals: list[Signal] = []
         self._messages: list[Message] = []
+        self._event_bus = event_bus
 
     def send(self, sender_id: str, content: str, position: tuple[float, float]) -> Message:
         """Send a simple message from a unit.
@@ -131,6 +134,17 @@ class UnitComms:
             ttl=ttl,
         )
         self._signals.append(sig)
+        # Publish to EventBus for frontend consumption
+        if self._event_bus is not None:
+            self._event_bus.publish("unit_signal", {
+                "signal_type": signal_type,
+                "sender_id": sender_id,
+                "sender_alliance": sender_alliance,
+                "position": list(position),
+                "target_position": list(target_position) if target_position else None,
+                "signal_range": signal_range,
+                "ttl": ttl,
+            })
         return sig
 
     def emit_distress(
@@ -194,6 +208,28 @@ class UnitComms:
             if dist <= sig.signal_range:
                 results.append(sig)
         return results
+
+    def emit_signal(
+        self,
+        signal_type: str,
+        sender_id: str,
+        sender_alliance: str,
+        position: tuple[float, float],
+        target_position: tuple[float, float] | None = None,
+        signal_range: float = _DEFAULT_RANGE,
+        ttl: float = _DEFAULT_TTL,
+    ) -> Signal:
+        """Convenience alias for broadcast()."""
+        return self.broadcast(
+            signal_type, sender_id, sender_alliance, position,
+            target_position=target_position,
+            signal_range=signal_range,
+            ttl=ttl,
+        )
+
+    def get_all_signals(self) -> list[Signal]:
+        """Return all non-expired signals."""
+        return [s for s in self._signals if not s.expired]
 
     def tick(self, dt: float, targets: dict[str, SimulationTarget]) -> None:
         """Remove expired signals and messages."""

@@ -21,7 +21,6 @@ import pytest
 pytest.skip(
     "SFX library reorganization not implemented — _EFFECT_CATALOG has 19 effects (not 73), "
     "SoundEffectGenerator lacks 50+ methods (impact_miss, explosion_small, button_click, etc.), "
-    "default AudioLibrary path is 'data/synthetic/audio' not 'sfx', "
     "categories ui/streaks/comms not present",
     allow_module_level=True,
 )

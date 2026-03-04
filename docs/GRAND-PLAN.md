@@ -8,7 +8,7 @@
 
 ## Philosophy
 
-Every feature below is defined by what the **test report** shows when it passes. If there's no test, the feature doesn't exist. Agent teams work autonomously, save status to `docs/overnight-status/`, and commit frequently to dev so progress is never lost.
+Every feature below is defined by what the **test report** shows when it passes. If there's no test, the feature doesn't exist. Agent teams work autonomously and commit frequently to dev so progress is never lost.
 
 ---
 
@@ -121,7 +121,7 @@ Regenerate `neighborhood_default.json` with positions that match real satellite 
 
 Replace geometric shapes with purpose-drawn Canvas 2D icons (not image sprites — procedural drawing for crisp scaling).
 
-**File**: `frontend/js/command/unit-icons.js`
+**File**: `src/frontend/js/command/unit-icons.js`
 
 **Test report shows** (Playwright screenshot + OpenCV):
 | Test | Assertion |
@@ -276,15 +276,7 @@ Each test saves a timestamped screenshot to `tests/.test-results/proof/`. The te
 
 ## WORKSTREAM 6: Test Infrastructure
 
-### 6A. Overnight Status Files
-
-Each agent writes status to `docs/overnight-status/{workstream}-{timestamp}.md` with:
-- What was attempted
-- What passed / failed
-- What's left
-- Commit hashes
-
-### 6B. New Test Tier
+### 6A. New Test Tier
 
 Add `./test.sh 12` (or `--battle-proof`) that runs the full battle proof test from 5D.
 
@@ -301,18 +293,17 @@ Add `./test.sh 12` (or `--battle-proof`) that runs the full battle proof test fr
 
 | Agent | Workstream | Focus | Validates With |
 |-------|-----------|-------|---------------|
-| **Navigator** | 1 (Streets) | Street graph, pathfinding, SimEngine integration | `pytest tests/amy/simulation/` |
-| **Cartographer** | 2 (Scale) | Layout overhaul, position verification | `pytest tests/amy/simulation/` |
+| **Navigator** | 1 (Streets) | Street graph, pathfinding, SimEngine integration | `pytest tests/engine/simulation/` |
+| **Cartographer** | 2 (Scale) | Layout overhaul, position verification | `pytest tests/engine/simulation/` |
 | **Artist** | 3 (Graphics) | Unit icons, combat visuals, fog | `./test.sh 10` + Playwright |
-| **Cameraman** | 4 (Feeds) | Synthetic CCTV, parallel generation | `pytest tests/amy/synthetic/` |
+| **Cameraman** | 4 (Feeds) | Synthetic CCTV, parallel generation | `pytest tests/engine/synthetic/` |
 | **Polisher** | 5 (UI) | Setup mode, chat, audio, proof test | `./test.sh 10` + Playwright |
 
 Each agent:
 1. Writes tests FIRST (TDD)
 2. Implements until tests pass
 3. Commits to dev with descriptive message
-4. Writes status to `docs/overnight-status/`
-5. Moves to next task
+4. Moves to next task
 
 ---
 
@@ -362,17 +353,15 @@ When the operator wakes up and runs `./test.sh fast`, all tiers pass. When they 
 - `src/engine/tactical/street_graph.py` — OSM street graph extraction
 - `src/engine/tactical/obstacles.py` — Building footprint obstacles
 - `src/engine/simulation/pathfinding.py` — A* on street graph
-- `frontend/js/command/unit-icons.js` — Procedural unit icon drawing
-- `tests/amy/simulation/test_pathfinding.py` — Pathfinding tests
-- `tests/amy/simulation/test_street_graph.py` — Street graph tests
-- `tests/amy/simulation/test_scale.py` — Scale verification tests
+- `src/frontend/js/command/unit-icons.js` — Procedural unit icon drawing
+- `tests/engine/simulation/test_pathfinding.py` — Pathfinding tests
+- `tests/engine/simulation/test_street_graph.py` — Street graph tests
+- `tests/engine/simulation/test_scale.py` — Scale verification tests
 - `tests/visual/test_battle_proof.py` — Full battle proof test
-- `docs/overnight-status/*.md` — Agent status files
-
 **Modified files**:
 - `src/engine/simulation/engine.py` — Use pathfinder for unit movement
 - `src/engine/simulation/behaviors.py` — Road-aware hostile approach
 - `src/engine/simulation/target.py` — Smooth heading interpolation
-- `scenarios/neighborhood_default.json` — Road-aligned positions
-- `frontend/js/command/map.js` — Unit icon rendering, fog of war
+- `tests/scenarios/neighborhood_default.json` — Road-aligned positions
+- `src/frontend/js/command/map.js` — Unit icon rendering, fog of war
 - `test.sh` — Add tier 12

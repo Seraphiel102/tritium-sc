@@ -3,15 +3,20 @@
 # Licensed under AGPL-3.0 — see LICENSE for details.
 """A* pathfinder — plan_path() routes units based on type and available data.
 
+Routing priority:
+    1. Street graph A* (when loaded) — road-aware routing via OSM nodes
+    2. Grid A* on TerrainMap (when loaded) — per-unit-type terrain avoidance
+    3. Direct fallback (start -> end) — only when neither is available
+
 Routing rules by unit type:
     - Rover/Tank/APC: snap to nearest road node, A* on street graph, road waypoints
     - Drone/Scout drone: straight line (ignores roads and buildings)
     - Hostile person: A* on roads for approach, then direct for last 30m
     - Turret (all types): no path (stationary)
-    - Unknown: direct fallback (start -> end)
+    - Unknown: grid A* fallback, then direct
 
-If street_graph is None (Overpass unavailable), all ground units fall back to
-direct waypoint paths.
+Grid A* ensures ground vehicles never drive through buildings and heavy
+vehicles stay on roads, even when no StreetGraph is loaded.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from engine.tactical.obstacles import BuildingObstacles
     from engine.tactical.street_graph import StreetGraph
+    from engine.simulation.terrain import TerrainMap
 
 # Unit types that are stationary (no path needed)
 _STATIONARY_TYPES = {"turret", "heavy_turret", "missile_turret"}
@@ -40,9 +46,10 @@ def plan_path(
     start: tuple[float, float],
     end: tuple[float, float],
     unit_type: str,
-    street_graph: Optional[StreetGraph],
-    obstacles: Optional[BuildingObstacles],
+    street_graph: Optional[StreetGraph] = None,
+    obstacles: Optional[BuildingObstacles] = None,
     alliance: str = "friendly",
+    terrain_map: Optional[TerrainMap] = None,
 ) -> Optional[list[tuple[float, float]]]:
     """Plan a path from start to end based on unit type and available data.
 
@@ -53,6 +60,7 @@ def plan_path(
         street_graph: loaded StreetGraph (or None if unavailable)
         obstacles: loaded BuildingObstacles (or None if unavailable)
         alliance: "friendly", "hostile", or "neutral"
+        terrain_map: loaded TerrainMap for grid A* fallback (or None)
 
     Returns:
         List of (x, y) waypoints, or None for stationary units.
@@ -65,15 +73,56 @@ def plan_path(
     if unit_type in _FLYING_TYPES:
         return [start, end]
 
+    # Graphlings: always use grid A* with building avoidance (never street graph)
+    if unit_type == "graphling":
+        return _grid_fallback(start, end, unit_type, alliance, terrain_map, obstacles)
+
     # Hostile persons: road approach then direct last 30m
     if alliance == "hostile" and unit_type == "person":
-        return _hostile_path(start, end, street_graph)
+        path = _hostile_path(start, end, street_graph)
+        if path is not None and len(path) > 2:
+            return path
+        # Street graph didn't help — try grid A*
+        return _grid_fallback(start, end, unit_type, alliance, terrain_map, obstacles)
 
     # Road-following ground units
     if unit_type in _ROAD_TYPES:
-        return _road_path(start, end, street_graph)
+        path = _road_path(start, end, street_graph)
+        if path is not None and len(path) > 2:
+            return path
+        # Street graph didn't help — try grid A*
+        return _grid_fallback(start, end, unit_type, alliance, terrain_map, obstacles)
 
-    # Unknown or other unit types: direct fallback
+    # Unknown or other unit types: grid A* then direct fallback
+    return _grid_fallback(start, end, unit_type, alliance, terrain_map, obstacles)
+
+
+def _grid_fallback(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    unit_type: str,
+    alliance: str,
+    terrain_map: Optional[TerrainMap],
+    obstacles: Optional[BuildingObstacles] = None,
+) -> list[tuple[float, float]]:
+    """Try grid A* on terrain map, fall back to direct path.
+
+    When *obstacles* is provided it is forwarded to ``grid_find_path()``
+    so that the post-smoothing validation can reject paths whose smoothed
+    segments cut through buildings.
+    """
+    if terrain_map is not None:
+        try:
+            from engine.simulation.grid_pathfinder import grid_find_path, profile_for_unit
+            profile_name = profile_for_unit(unit_type, alliance)
+            path = grid_find_path(
+                terrain_map, start, end, profile_name,
+                obstacles=obstacles,
+            )
+            if path is not None and len(path) >= 2:
+                return path
+        except Exception:
+            pass
     return [start, end]
 
 

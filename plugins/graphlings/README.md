@@ -1,10 +1,12 @@
 # Graphlings Plugin for TRITIUM-SC
 
+[Graphlings](https://graphlings.net) — Created by Matthew Valancy, Copyright 2026 Valpatel Software LLC.
+
 Crystal creature AI agents living as NPCs in the TRITIUM-SC simulation world.
 
 ## Quick Start
 
-1. Ensure the Graphling home server is running (default: `http://100.93.184.1:4774`)
+1. Ensure the Graphling home server is running (default: `http://localhost:4774`)
 2. Drop the `graphlings/` folder into `tritium-sc/plugins/`
 3. The plugin auto-discovers via `graphlings_loader.py`
 
@@ -23,7 +25,7 @@ Environment variables (all optional):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GRAPHLINGS_SERVER_URL` | `http://100.93.184.1:4774` | Graphling home server URL |
+| `GRAPHLINGS_SERVER_URL` | `http://localhost:4774` | Graphling home server URL |
 | `GRAPHLINGS_SERVER_TIMEOUT` | `5.0` | HTTP timeout in seconds |
 | `GRAPHLINGS_MAX_AGENTS` | `5` | Max simultaneous graphlings |
 | `GRAPHLINGS_THINK_INTERVAL` | `3.0` | Base think interval (seconds) |

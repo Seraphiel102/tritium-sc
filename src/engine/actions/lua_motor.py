@@ -60,6 +60,17 @@ VALID_ACTIONS: dict[str, tuple[int, int, list[type]]] = {
     "clear_threat":      (1, 1, [str]),
     "battle_cry":        (1, 1, [str]),
     "taunt":             (1, 1, [str]),
+    "formation":         (3, 20, [str, str, str]),
+    "set_formation":     (2, 2, [str, str]),
+    "squad_order":       (2, 2, [str, str]),
+    "squad_dispatch":    (3, 3, [str, float, float]),
+    "rally":             (2, 3, [float, float, str]),
+    "scatter":           (1, 1, [str]),
+    # Device commands (dispatched by devices router)
+    "sensor_enable":     (1, 1, [str]),
+    "sensor_disable":    (1, 1, [str]),
+    "sensor_test":       (1, 1, [str]),
+    "camera_off":        (1, 1, [str]),
 }
 
 VALID_DIRECTIONS = {

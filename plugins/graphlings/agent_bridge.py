@@ -1,11 +1,10 @@
 # Created by Matthew Valancy
 # Copyright 2026 Valpatel Software LLC
 # Licensed under AGPL-3.0 — see LICENSE for details.
-"""AgentBridge — HTTP client to the Graphling home server.
+"""AgentBridge — HTTP client to an external creature server.
 
-Provides deploy/recall/think/heartbeat/experience operations against
-the Graphling server's deployment REST API. All methods are synchronous
-(called from the plugin's background thread) and handle errors gracefully.
+Thin HTTP adapter: sends deploy/recall/think/heartbeat requests to a
+configurable REST server.  No SDK dependency — just raw HTTP calls.
 """
 from __future__ import annotations
 
@@ -13,8 +12,6 @@ import logging
 from typing import Any, Optional
 
 import httpx
-from httpx import ConnectError as _ConnectError
-from httpx import TimeoutException as _TimeoutException
 
 from .config import GraphlingsConfig
 
@@ -22,54 +19,34 @@ log = logging.getLogger(__name__)
 
 
 class AgentBridge:
-    """HTTP client connecting the tritium-sc plugin to the Graphling home server."""
+    """HTTP client connecting the tritium-sc plugin to a creature server."""
 
     def __init__(self, config: GraphlingsConfig) -> None:
         self._base_url = config.server_url.rstrip("/")
         self._timeout = config.server_timeout
+        self._dry_run = config.dry_run
 
     # ── Deploy / Recall ──────────────────────────────────────────
 
     def deploy(self, soul_id: str, config: dict) -> Optional[dict]:
-        """Deploy a graphling to this service.
-
-        Returns the deployment record dict, or None on error.
-        """
-        return self._post(
-            "/deployment/deploy",
-            json={"soul_id": soul_id, "config": config},
-        )
+        """Deploy a creature.  Returns deployment record dict or None."""
+        return self._post(f"/deployment/deploy", {
+            "soul_id": soul_id, "config": config,
+        })
 
     def recall(self, soul_id: str, reason: str = "manual") -> Optional[dict]:
-        """Recall a deployed graphling.
-
-        Returns recall result dict, or None on error.
-        """
-        return self._post(
-            f"/deployment/{soul_id}/recall",
-            json={"reason": reason},
-        )
+        """Recall a deployed creature."""
+        return self._post(f"/deployment/{soul_id}/recall", {"reason": reason})
 
     # ── Batch Deploy / Recall ────────────────────────────────────
 
     def batch_deploy(self, config: dict) -> Optional[dict]:
-        """Deploy a batch of graphlings.
-
-        POST /deployment/deploy-batch
-        Returns the batch result dict, or None on error.
-        """
-        return self._post("/deployment/deploy-batch", json=config)
+        return self._post("/deployment/batch/deploy", config)
 
     def batch_recall(self, service_name: str, reason: str) -> Optional[dict]:
-        """Recall all graphlings for a service.
-
-        POST /deployment/recall-batch
-        Returns recall result dict, or None on error.
-        """
-        return self._post(
-            "/deployment/recall-batch",
-            json={"service_name": service_name, "reason": reason},
-        )
+        return self._post("/deployment/batch/recall", {
+            "service_name": service_name, "reason": reason,
+        })
 
     # ── Think ────────────────────────────────────────────────────
 
@@ -82,11 +59,7 @@ class AgentBridge:
         urgency: float,
         preferred_layer: Optional[int] = None,
     ) -> Optional[dict]:
-        """Ask the graphling to make a decision.
-
-        Returns ThinkResponse dict (thought, action, emotion, layer, model, confidence),
-        or None on timeout/error.
-        """
+        """Ask the creature to think.  Returns response dict or None."""
         body: dict[str, Any] = {
             "perception": perception,
             "current_state": current_state,
@@ -95,159 +68,85 @@ class AgentBridge:
         }
         if preferred_layer is not None:
             body["preferred_layer"] = preferred_layer
-
-        return self._post(f"/deployment/{soul_id}/think", json=body)
+        return self._post(f"/deployment/{soul_id}/think", body)
 
     # ── Heartbeat ────────────────────────────────────────────────
 
     def heartbeat(self, soul_id: str) -> Optional[dict]:
-        """Send heartbeat to keep deployment alive.
-
-        Returns heartbeat response dict, or None on error.
-        """
-        return self._post(f"/deployment/{soul_id}/heartbeat", json={})
+        return self._post(f"/deployment/{soul_id}/heartbeat", {})
 
     # ── Experience ───────────────────────────────────────────────
 
     def record_experiences(self, soul_id: str, experiences: list[dict]) -> int:
-        """Record a batch of experiences.
-
-        Returns the number of experiences recorded (0 on error).
-        """
-        result = self._post(
-            f"/deployment/{soul_id}/experience",
-            json={"experiences": experiences},
-        )
-        if result is None:
-            return 0
-        return result.get("recorded", 0)
+        result = self._post(f"/deployment/{soul_id}/experience", {
+            "experiences": experiences,
+        })
+        return result.get("count", 0) if result else 0
 
     # ── Feedback (RL loop) ────────────────────────────────────────
 
     def feedback(
-        self,
-        soul_id: str,
-        action: str,
-        success: bool,
-        outcome: str = "",
+        self, soul_id: str, action: str, success: bool, outcome: str = "",
     ) -> Optional[dict]:
-        """Report action success/failure to close the RL reinforcement loop.
-
-        The server uses this to update Thompson Sampling arms and adjust
-        future model selection for this graphling.
-
-        Returns server response dict, or None on error.
-        """
-        return self._post(
-            f"/deployment/{soul_id}/feedback",
-            json={"action": action, "success": success, "outcome": outcome},
-        )
-
-    # ── Pending Actions (server autonomy) ──────────────────────
-
-    def get_pending_actions(self, soul_id: str) -> list[dict]:
-        """Poll server-generated autonomous actions.
-
-        The server's tickDeployedAutonomous() generates proactive goals
-        and actions. External apps poll this to discover what the graphling
-        wants to do on its own initiative.
-
-        Returns list of action dicts (empty on error).
-        """
-        result = self._get(f"/deployment/{soul_id}/pending-actions")
-        if result is None:
-            return []
-        return result.get("actions", [])
-
-    # ── World Model ────────────────────────────────────────────
-
-    def report_entity(self, soul_id: str, entity: dict) -> Optional[dict]:
-        """Report a perceived entity to update the graphling's mental model.
-
-        Builds persistent world knowledge that persists across think cycles,
-        allowing the graphling to remember entities it has seen before.
-
-        Returns server response dict, or None on error.
-        """
-        return self._post(f"/deployment/{soul_id}/world/entity", json=entity)
-
-    # ── Mood ───────────────────────────────────────────────────
-
-    def get_mood(self, soul_id: str) -> Optional[dict]:
-        """Get the graphling's current emotional state.
-
-        Returns mood dict (happiness, stress, engagement, confidence),
-        or None on error. Use for adaptive behavior and auto-recall.
-        """
-        return self._get(f"/deployment/{soul_id}/mood")
-
-    # ── Objectives ─────────────────────────────────────────────
-
-    def set_objective(self, soul_id: str, objective: dict) -> Optional[dict]:
-        """Set a goal for the graphling to pursue autonomously.
-
-        Game events can drive objectives (e.g., "protect village" when
-        enemies approach). The server's autonomous tick will work toward it.
-
-        Returns created objective dict, or None on error.
-        """
-        return self._post(f"/deployment/{soul_id}/objectives", json=objective)
+        return self._post(f"/deployment/{soul_id}/feedback", {
+            "action": action, "success": success, "outcome": outcome,
+        })
 
     # ── Status ───────────────────────────────────────────────────
 
     def get_status(self, soul_id: str) -> Optional[dict]:
-        """Get deployment status for a soul.
-
-        Returns deployment record dict, or None if not found/error.
-        """
-        return self._get(f"/deployment/{soul_id}")
+        return self._get(f"/deployment/{soul_id}/status")
 
     def list_active(self) -> list[dict]:
-        """List all active deployments.
-
-        Returns list of deployment records (empty on error).
-        """
         result = self._get("/deployment/active")
-        if result is None:
-            return []
-        return result.get("deployments", [])
+        if isinstance(result, dict):
+            return result.get("deployments", [])
+        return result if isinstance(result, list) else []
 
-    # ── HTTP helpers ─────────────────────────────────────────────
+    def set_objective(
+        self, soul_id: str, description: str, priority: float = 0.5,
+        deadline_seconds: int = 0,
+    ) -> Optional[dict]:
+        return self._post(f"/deployment/{soul_id}/objective", {
+            "description": description,
+            "priority": priority,
+            "deadline_seconds": deadline_seconds,
+        })
 
-    def _post(self, path: str, json: dict) -> Optional[dict]:
-        """POST to the Graphling server. Returns parsed JSON or None."""
-        url = f"{self._base_url}{path}"
+    # ── Internal HTTP helpers ────────────────────────────────────
+
+    def _post(self, path: str, body: dict) -> Optional[dict]:
+        if self._dry_run:
+            log.debug("[DRY RUN] POST %s%s", self._base_url, path)
+            return {"dry_run": True}
         try:
-            resp = httpx.post(url, json=json, timeout=self._timeout)
-            if resp.is_success:
-                return resp.json()
-            log.warning("POST %s returned %d", path, resp.status_code)
-            return None
-        except _TimeoutException:
-            log.warning("POST %s timed out", path)
-            return None
-        except _ConnectError:
-            log.warning("POST %s connection refused", path)
-            return None
-        except Exception as e:
-            log.warning("POST %s failed: %s", path, e)
-            return None
+            r = httpx.post(
+                f"{self._base_url}{path}",
+                json=body,
+                timeout=self._timeout,
+            )
+            if r.status_code < 300:
+                return r.json()
+            log.warning("POST %s → %d", path, r.status_code)
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            log.debug("POST %s failed: %s", path, exc)
+        except Exception as exc:
+            log.error("POST %s error: %s", path, exc)
+        return None
 
-    def _get(self, path: str) -> Optional[dict]:
-        """GET from the Graphling server. Returns parsed JSON or None."""
-        url = f"{self._base_url}{path}"
+    def _get(self, path: str) -> Optional[Any]:
+        if self._dry_run:
+            return {"dry_run": True}
         try:
-            resp = httpx.get(url, timeout=self._timeout)
-            if resp.is_success:
-                return resp.json()
-            log.warning("GET %s returned %d", path, resp.status_code)
-            return None
-        except _TimeoutException:
-            log.warning("GET %s timed out", path)
-            return None
-        except _ConnectError:
-            log.warning("GET %s connection refused", path)
-            return None
-        except Exception as e:
-            log.warning("GET %s failed: %s", path, e)
-            return None
+            r = httpx.get(
+                f"{self._base_url}{path}",
+                timeout=self._timeout,
+            )
+            if r.status_code < 300:
+                return r.json()
+            log.warning("GET %s → %d", path, r.status_code)
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            log.debug("GET %s failed: %s", path, exc)
+        except Exception as exc:
+            log.error("GET %s error: %s", path, exc)
+        return None

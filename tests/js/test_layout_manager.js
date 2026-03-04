@@ -309,7 +309,7 @@ console.log('\n--- Apply Layout ---');
     assert(pm.isOpen('amy'), 'apply commander opens amy');
     assert(pm.isOpen('units'), 'apply commander opens units');
     assert(pm.isOpen('alerts'), 'apply commander opens alerts');
-    assert(!pm.isOpen('game'), 'apply commander does not open game');
+    assert(pm.isOpen('game'), 'apply commander opens game');
     pm.destroyAll();
 })();
 

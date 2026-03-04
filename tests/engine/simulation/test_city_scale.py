@@ -281,7 +281,7 @@ class TestScenarioExecution:
 
     def test_street_combat_scenario_loads_and_runs(self):
         """Load street_combat.json, run 50 ticks, no crash."""
-        scenario = load_battle_scenario("scenarios/battle/street_combat.json")
+        scenario = load_battle_scenario("tests/scenarios/battle/street_combat.json")
 
         assert scenario.scenario_id == "street_combat"
         assert scenario.map_bounds == 100.0  # small neighborhood block
@@ -309,7 +309,7 @@ class TestScenarioExecution:
 
     def test_riot_scenario_200_hostiles(self):
         """Load riot.json, verify it can handle 200 hostiles."""
-        scenario = load_battle_scenario("scenarios/battle/riot.json")
+        scenario = load_battle_scenario("tests/scenarios/battle/riot.json")
 
         assert scenario.scenario_id == "riot"
         assert scenario.map_bounds == 500.0  # city district

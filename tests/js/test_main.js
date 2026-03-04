@@ -475,6 +475,21 @@ console.log('\n--- Panel Toggle Wiring ---');
         'Key 5 toggles mesh panel');
 })();
 
+(function testPanelToggleESensors() {
+    assert(mainSrc.includes("panelManager.toggle('sensors')"),
+        'Key E toggles sensors panel');
+})();
+
+(function testPanelTogglePStats() {
+    assert(mainSrc.includes("panelManager.toggle('battle-stats')"),
+        'Key P toggles battle-stats panel');
+})();
+
+(function testPanelToggleJInspector() {
+    assert(mainSrc.includes("panelManager.toggle('unit-inspector')"),
+        'Key J toggles unit-inspector panel');
+})();
+
 // ============================================================
 // 10. Toast notification system
 // ============================================================
@@ -1000,6 +1015,15 @@ console.log('\n--- Error Handling ---');
         'dispatchUnit catches errors and shows toast');
 })();
 
+(function testDispatchUnitSendsParamsArray() {
+    // dispatchUnit must send { action: 'dispatch', params: [targetId, x, y] }
+    // NOT { action: 'dispatch', target_id: targetId, x, y } (which silently drops args)
+    assert(mainSrc.includes("params: [targetId, x, y]"),
+        'dispatchUnit sends params array [targetId, x, y] to /api/amy/command');
+    assert(!mainSrc.includes("action: 'dispatch', target_id: targetId, x, y"),
+        'dispatchUnit does NOT send target_id/x/y as flat fields (would be ignored by API)');
+})();
+
 (function testNullGuardedDOMAccess() {
     // Many DOM accesses are guarded with "if (el)"
     const guardCount = (mainSrc.match(/if\s*\(\s*el\s*\)/g) || []).length;
@@ -1141,6 +1165,232 @@ console.log('\n--- Menu Bar Wiring ---');
 (function testMenuBarContainerQuery() {
     assert(mainSrc.includes("getElementById('command-bar-container')"),
         'Menu bar container queried by ID');
+})();
+
+// ============================================================
+// 31. Keyboard shortcut correctness
+// ============================================================
+
+console.log('\n--- Keyboard Shortcut Correctness ---');
+
+(function testFKeyOnlyCentersOnAction() {
+    // F key should center on action without silently switching map modes
+    // Find the case 'f'/'F' block and verify no setMapMode call
+    const fBlock = mainSrc.match(/case\s+'[fF]':[\s\S]*?break;/);
+    assert(fBlock !== null, 'F key case block found in keyboard handler');
+    if (fBlock) {
+        assert(fBlock[0].includes('centerOnAction'), 'F key calls centerOnAction');
+        assert(!fBlock[0].includes('setMapMode'), 'F key does NOT call setMapMode (no undocumented side effect)');
+    }
+})();
+
+(function testRKeyTogglesReplay() {
+    // R key should toggle replay panel, not reset camera or game
+    const rBlock = mainSrc.match(/case\s+'[rR]':[\s\S]*?break;/);
+    assert(rBlock !== null, 'R key case block found in keyboard handler');
+    if (rBlock) {
+        assert(rBlock[0].includes('replay'), 'R key toggles replay panel');
+        assert(!rBlock[0].includes('resetCamera'), 'R key does NOT call resetCamera');
+        assert(!rBlock[0].includes('resetGame'), 'R key does NOT call resetGame');
+    }
+})();
+
+// ============================================================
+// 32. Functional toast tests via VM
+// ============================================================
+
+console.log('\n--- showToast functional ---');
+
+function makeToastSandbox() {
+    const toasts = [];
+    const container = {
+        _children: toasts,
+        prepend(el) { toasts.unshift(el); },
+        querySelectorAll(sel) {
+            if (sel === '.toast') return toasts;
+            return [];
+        },
+    };
+
+    return vm.createContext({
+        Math, Date, String, JSON, console, Array, Error, Number, Object, Set, Map,
+        setTimeout: (fn) => { fn._timerSet = true; return 999; },
+        clearTimeout: () => {},
+        document: {
+            getElementById(id) {
+                if (id === 'toast-container') return container;
+                return null;
+            },
+            createElement(tag) {
+                let _innerHTML = '', _textContent = '', _className = '';
+                const classList = new Set();
+                const evts = {};
+                const el = {
+                    get className() { return _className; },
+                    set className(v) {
+                        _className = v;
+                        classList.clear();
+                        v.split(' ').filter(Boolean).forEach(c => classList.add(c));
+                    },
+                    get innerHTML() { return _innerHTML; },
+                    set innerHTML(val) { _innerHTML = val; },
+                    get textContent() { return _textContent; },
+                    set textContent(val) {
+                        _textContent = String(val);
+                        _innerHTML = String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    },
+                    classList: {
+                        add(c) { classList.add(c); _className = [...classList].join(' '); },
+                        remove(c) { classList.delete(c); _className = [...classList].join(' '); },
+                        contains(c) { return classList.has(c); },
+                    },
+                    addEventListener(evt, fn) { evts[evt] = fn; },
+                    querySelector(sel) { return null; },
+                    remove() {
+                        const idx = toasts.indexOf(el);
+                        if (idx >= 0) toasts.splice(idx, 1);
+                    },
+                    _evts: evts,
+                };
+                return el;
+            },
+        },
+        _toasts: toasts,
+    });
+}
+
+// Extract showToast + escapeHtml + constants from main.js
+const toastSrc = `
+const TOAST_MAX = 5;
+const TOAST_DURATION = 6000;
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    toast.innerHTML =
+        '<div class="toast-header">' +
+        '<span class="toast-label mono">' + escapeHtml(type.toUpperCase()) + '</span>' +
+        '<span class="toast-time mono">' + new Date().toLocaleTimeString().substr(0, 5) + '</span>' +
+        '<button class="toast-close" aria-label="Dismiss">&times;</button>' +
+        '</div>' +
+        '<div class="toast-body">' + escapeHtml(message) + '</div>';
+    toast.querySelector('.toast-close')?.addEventListener('click', () => {
+        toast.classList.add('toast-fade');
+        setTimeout(() => toast.remove(), 300);
+    });
+    container.prepend(toast);
+    const toasts = container.querySelectorAll('.toast');
+    if (toasts.length > TOAST_MAX) {
+        toasts[toasts.length - 1].remove();
+    }
+    setTimeout(() => {
+        toast.classList.add('toast-fade');
+        setTimeout(() => toast.remove(), 300);
+    }, TOAST_DURATION);
+}
+`;
+
+(function testShowToastCreatesElement() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Hello world', 'info')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts.length === 1, 'showToast creates one toast element');
+})();
+
+(function testShowToastClassName() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Alert!', 'alert')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts[0].className.includes('toast-alert'), 'Toast has toast-alert class');
+})();
+
+(function testShowToastInfoType() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Hello')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts[0].className.includes('toast-info'), 'Default type is info');
+})();
+
+(function testShowToastContainsMessage() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Dispatch command sent', 'info')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts[0].innerHTML.includes('Dispatch command sent'), 'Toast body contains message text');
+})();
+
+(function testShowToastEscapesHTML() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('<script>alert(1)</script>', 'alert')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(!toasts[0].innerHTML.includes('<script>'), 'Toast escapes script tags');
+    assert(toasts[0].innerHTML.includes('&lt;script&gt;'), 'Toast shows escaped HTML');
+})();
+
+(function testShowToastPrependsNewestFirst() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('First', 'info')", ctx);
+    vm.runInContext("showToast('Second', 'info')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts.length === 2, 'Two toasts created');
+    assert(toasts[0].innerHTML.includes('Second'), 'Newest toast is first');
+    assert(toasts[1].innerHTML.includes('First'), 'Oldest toast is second');
+})();
+
+(function testShowToastTrimsOverflow() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    for (let i = 0; i < 7; i++) {
+        vm.runInContext(`showToast('Toast ${i}', 'info')`, ctx);
+    }
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts.length <= 5, 'Toast overflow trimmed to TOAST_MAX (5)');
+})();
+
+(function testShowToastHasCloseButton() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Test', 'info')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts[0].innerHTML.includes('toast-close'), 'Toast has close button');
+    assert(toasts[0].innerHTML.includes('aria-label="Dismiss"'), 'Close button has aria label');
+})();
+
+(function testShowToastHasTypeLabel() {
+    const ctx = makeToastSandbox();
+    vm.runInContext(toastSrc, ctx);
+    vm.runInContext("showToast('Warning!', 'alert')", ctx);
+    const toasts = vm.runInContext('_toasts', ctx);
+    assert(toasts[0].innerHTML.includes('ALERT'), 'Toast header shows type label uppercased');
+})();
+
+(function testShowToastNoContainerIsNoop() {
+    // When toast-container doesn't exist, showToast should not throw
+    const ctx = vm.createContext({
+        Math, Date, String, JSON, console, Array, Error, Number, Object, Set, Map,
+        setTimeout: () => 999,
+        clearTimeout: () => {},
+        document: {
+            getElementById() { return null; },
+            createElement() { return { className: '', innerHTML: '', querySelector: () => null }; },
+        },
+    });
+    vm.runInContext(toastSrc, ctx);
+    // Should not throw
+    vm.runInContext("showToast('No container', 'info')", ctx);
+    assert(true, 'showToast with missing container does not throw');
 })();
 
 // ============================================================

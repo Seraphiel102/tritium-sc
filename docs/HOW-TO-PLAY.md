@@ -77,7 +77,7 @@ Each target has a **heading line** showing which direction it faces, a **name la
 
 ## What to Do
 
-![Combat](screenshots/game-combat.png)
+![Combat](screenshots/game-combat.jpg)
 *Combat in action — turrets and drones engaging hostile intruders*
 
 ### The Core Loop
@@ -212,7 +212,7 @@ The camera has smooth interpolation (lerp factor 0.1) so movement feels fluid.
 | `Double-Click` | Center + zoom on target |
 | `Minimap Click` | Pan camera to minimap location |
 
-![Help Overlay](screenshots/help-overlay.png)
+![Help Overlay](screenshots/help-overlay.jpg)
 *Press ? to see all keyboard shortcuts*
 
 ### Additional Shortcuts

@@ -76,14 +76,18 @@ const ctx = vm.createContext({
             return mockElements[id];
         },
         createElement(tag) {
-            const el = { _text: '' };
+            const el = { _text: '', _html: '' };
             Object.defineProperty(el, 'textContent', {
                 get() { return el._text; },
-                set(v) { el._text = String(v); },
+                set(v) {
+                    el._text = String(v);
+                    // Mimic real browser: textContent setter escapes HTML in innerHTML
+                    el._html = String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                },
             });
             Object.defineProperty(el, 'innerHTML', {
-                get() { return el._text; },
-                set(v) { el._text = String(v); },
+                get() { return el._html; },
+                set(v) { el._html = String(v); el._text = String(v); },
             });
             return el;
         },
@@ -172,6 +176,18 @@ resetElements();
 w.warHudUpdateGameState({ state: 'idle' });
 const scoreEl2 = mockElements['war-score'];
 assert(scoreEl2 && scoreEl2.style.display === 'none', 'score panel hidden during idle');
+
+// Game-over overlay dismissed on idle/setup
+resetElements();
+// Pre-create the game-over element with display:block to simulate it being shown
+mockElements['war-game-over'] = { style: { display: 'block', opacity: '' }, textContent: '', innerHTML: '', className: '', classList: { _classes: [], add(cls) { this._classes.push(cls); }, remove(cls) { this._classes = this._classes.filter(c => c !== cls); } }, onclick: null, offsetWidth: 100 };
+w.warHudUpdateGameState({ state: 'idle' });
+assert(mockElements['war-game-over'].style.display === 'none', 'game-over overlay hidden on idle state');
+
+resetElements();
+mockElements['war-game-over'] = { style: { display: 'block', opacity: '' }, textContent: '', innerHTML: '', className: '', classList: { _classes: [], add(cls) { this._classes.push(cls); }, remove(cls) { this._classes = this._classes.filter(c => c !== cls); } }, onclick: null, offsetWidth: 100 };
+w.warHudUpdateGameState({ state: 'setup' });
+assert(mockElements['war-game-over'].style.display === 'none', 'game-over overlay hidden on setup state');
 
 // ============================================================
 // warHudShowWaveBanner
@@ -359,6 +375,20 @@ assert(st.eliminations === 0, 'eliminations reset');
 assert(st.wave === 0, 'wave reset');
 assert(st.gameState === 'idle', 'gameState reset to idle');
 assert(st.eliminationFeed.length === 0, 'elimination feed cleared');
+assert(st.totalWaves === 10, 'totalWaves reset to 10');
+
+// Play again after infinite mode should reset totalWaves from -1 to 10
+st.totalWaves = -1; // infinite mode uses -1
+st.gameModeType = 'drone_swarm';
+st.infrastructureHealth = 500;
+st.score = 2000;
+st.wave = 15;
+st.gameState = 'game_over';
+resetElements();
+timeouts = [];
+w.warHudPlayAgain();
+assert(st.totalWaves === 10, 'totalWaves reset from infinite (-1) to 10');
+assert(st.gameModeType === 'battle', 'gameModeType reset to battle after infinite');
 
 // ============================================================
 // warHudShowAmyAnnouncement
@@ -467,22 +497,25 @@ const mockCanvas2 = {
     restore() { this.restored = true; },
 };
 
-const wtsMap = (x, y) => ({ sx: x * 10, sy: y * 10 });
+// Legacy format: worldToScreen returns {sx, sy}
+const wtsLegacy = (x, y) => ({ sx: x * 10, sy: y * 10 });
+// Command Center format: worldToScreen returns {x, y}
+const wtsMapFormat = (x, y) => ({ x: x * 10, y: y * 10 });
 
 // Not active state — no-op
 st.gameState = 'idle';
 mockCanvas2.saved = false;
-w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMap, 10);
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsLegacy, 10);
 assert(mockCanvas2.saved === false, 'no health bars when idle');
 
-// Active state with damaged friendly
+// Active state with damaged friendly (legacy warState path)
 st.gameState = 'active';
 ctx.warState.targets = [
     { alliance: 'friendly', status: 'active', health: 50, max_health: 100, position: { x: 5, y: 5 } },
 ];
 mockCanvas2.saved = false;
-w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMap, 10);
-assert(mockCanvas2.saved === true, 'health bar drawn for damaged friendly');
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsLegacy, 10);
+assert(mockCanvas2.saved === true, 'health bar drawn for damaged friendly (legacy)');
 
 // Full health — skip
 ctx.warState.targets = [
@@ -490,7 +523,7 @@ ctx.warState.targets = [
 ];
 mockCanvas2.saved = false;
 mockCanvas2.restored = false;
-w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMap, 10);
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsLegacy, 10);
 assert(mockCanvas2.saved === false, 'no health bar for full health');
 
 // Hostile — skip
@@ -498,7 +531,7 @@ ctx.warState.targets = [
     { alliance: 'hostile', status: 'active', health: 50, max_health: 100, position: { x: 5, y: 5 } },
 ];
 mockCanvas2.saved = false;
-w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMap, 10);
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsLegacy, 10);
 assert(mockCanvas2.saved === false, 'no health bar for hostile');
 
 // Eliminated — skip
@@ -506,8 +539,415 @@ ctx.warState.targets = [
     { alliance: 'friendly', status: 'eliminated', health: 0, max_health: 100, position: { x: 5, y: 5 } },
 ];
 mockCanvas2.saved = false;
-w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMap, 10);
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsLegacy, 10);
 assert(mockCanvas2.saved === false, 'no health bar for eliminated');
+
+// --- TritiumStore path (Command Center) ---
+
+console.log('\n--- warHudDrawFriendlyHealthBars (TritiumStore path) ---');
+
+// Set up TritiumStore mock in sandbox
+ctx.TritiumStore = {
+    units: new Map(),
+};
+
+// Clear warState targets to ensure we're hitting TritiumStore path
+ctx.warState.targets = [];
+
+// Add a damaged friendly unit to TritiumStore
+ctx.TritiumStore.units.set('turret-01', {
+    alliance: 'friendly', status: 'active',
+    health: 40, maxHealth: 100,
+    position: { x: 10, y: 20 },
+});
+
+st.gameState = 'active';
+mockCanvas2.saved = false;
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMapFormat, 10);
+assert(mockCanvas2.saved === true, 'health bar drawn for damaged friendly (TritiumStore)');
+
+// Command Center worldToScreen returns {x,y} not {sx,sy}
+mockCanvas2.saved = false;
+const fillRectCalls = [];
+const mockCanvas3 = {
+    saved: false, restored: false,
+    fillStyle: '',
+    fillRect(x, y, w, h) { fillRectCalls.push({ x, y, w, h }); },
+    save() { this.saved = true; },
+    restore() { this.restored = true; },
+};
+w.warHudDrawFriendlyHealthBars(mockCanvas3, wtsMapFormat, 10);
+assert(mockCanvas3.saved === true, 'health bar drawn with {x,y} worldToScreen');
+assert(fillRectCalls.length >= 2, 'fillRect called for bg + health fill');
+// First fillRect is background (x-1, y-1, w+2, h+2)
+// worldToScreen(10, 20) => {x: 100, y: 200}
+// barWidth = max(16, min(40, 10*2.5)) = 25
+// bx = 100 - 25/2 = 87.5
+// by = 200 + (-12) = 188
+assert(fillRectCalls[0].x === 87.5 - 1, 'background x correct for {x,y} format');
+assert(fillRectCalls[0].y === 188 - 1, 'background y correct for {x,y} format');
+
+// TritiumStore with maxHealth (camelCase, as stored by websocket handler)
+ctx.TritiumStore.units.clear();
+ctx.TritiumStore.units.set('rover-01', {
+    alliance: 'friendly', status: 'active',
+    health: 75, maxHealth: 100,
+    position: { x: 0, y: 0 },
+});
+mockCanvas2.saved = false;
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMapFormat, 10);
+assert(mockCanvas2.saved === true, 'maxHealth (camelCase) works as max_health');
+
+// Neither TritiumStore nor warState — no-op
+delete ctx.TritiumStore;
+delete ctx.warState;
+mockCanvas2.saved = false;
+w.warHudDrawFriendlyHealthBars(mockCanvas2, wtsMapFormat, 10);
+assert(mockCanvas2.saved === false, 'no health bars when neither store available');
+
+// Restore warState for other tests
+ctx.warState = { audioCtx: null, targets: [], selectedTargets: [], effects: [], dispatchArrows: [], stats: { eliminations: 0 } };
+
+// ============================================================
+// warHudWatchReplay
+// ============================================================
+
+console.log('\n--- warHudWatchReplay ---');
+
+{
+    resetElements();
+    // Setup: panelManager mock
+    ctx.panelManager = { toggled: null, toggle(id) { this.toggled = id; } };
+    ctx.TritiumStore = { _store: {}, set(key, val) { this._store[key] = val; } };
+
+    // Show game over overlay first
+    const goEl = ctx.document.getElementById('war-game-over');
+    goEl.style.display = 'flex';
+
+    w.warHudWatchReplay();
+    assert(goEl.style.display === 'none', 'watchReplay hides game-over overlay');
+    assert(ctx.TritiumStore._store['replay.active'] === true, 'watchReplay sets replay.active in store');
+    assert(ctx.panelManager.toggled === 'replay', 'watchReplay toggles replay panel');
+}
+
+{
+    // Without panelManager
+    resetElements();
+    ctx.panelManager = undefined;
+    ctx.TritiumStore = { _store: {}, set(key, val) { this._store[key] = val; } };
+
+    const goEl = ctx.document.getElementById('war-game-over');
+    goEl.style.display = 'flex';
+    w.warHudWatchReplay();
+    assert(goEl.style.display === 'none', 'watchReplay works without panelManager');
+    assert(ctx.TritiumStore._store['replay.active'] === true, 'store still set without panelManager');
+}
+
+// ============================================================
+// _escHtml (XSS prevention)
+// ============================================================
+
+console.log('\n--- _escHtml / XSS prevention ---');
+
+{
+    // Elimination feed with XSS in names
+    resetElements();
+    w._hudState.eliminationFeed = [];
+
+    w.warHudAddEliminationFeedEntry({
+        interceptor_name: '<script>alert(1)</script>',
+        target_name: '<img onerror=xss>',
+    });
+
+    // _renderEliminationFeed writes to 'war-elimination-feed' or 'war-kill-feed'
+    const feedEl = ctx.document.getElementById('war-elimination-feed');
+    const html = feedEl.innerHTML;
+    assert(!html.includes('<script>'), 'XSS: elimination feed escapes <script> in interceptor name');
+    assert(!html.includes('<img'), 'XSS: elimination feed escapes <img> in target name');
+}
+
+// ============================================================
+// warHudShowGameOver edge cases
+// ============================================================
+
+console.log('\n--- warHudShowGameOver edge cases ---');
+
+{
+    resetElements();
+    // Game over with null modeData
+    w.warHudShowGameOver('VICTORY', 1500, 10, 25, null);
+    const goEl = ctx.document.getElementById('war-game-over');
+    assert(goEl.style.display !== 'none', 'gameOver shows overlay with null modeData');
+}
+
+{
+    resetElements();
+    // Game over with zero score — title is in innerHTML of war-game-over
+    w.warHudShowGameOver('DEFEAT', 0, 0, 0, null);
+    const goEl = ctx.document.getElementById('war-game-over');
+    assert(goEl.innerHTML.includes('DEFEAT'), 'DEFEAT result shown in game-over HTML');
+    assert(goEl.innerHTML.includes('NEIGHBORHOOD OVERRUN'), 'DEFEAT battle title shown');
+}
+
+{
+    resetElements();
+    // Battle defeat with reason=all_friendlies_eliminated shows reason
+    w.warHudShowGameOver('defeat', 0, 5, 3, { reason: 'all_friendlies_eliminated' });
+    const goEl = ctx.document.getElementById('war-game-over');
+    assert(goEl.innerHTML.includes('ALL DEFENDERS ELIMINATED'),
+        'Battle defeat shows reason when all friendlies eliminated');
+}
+
+{
+    resetElements();
+    // Battle defeat without specific reason does NOT show reason text
+    w.warHudShowGameOver('defeat', 0, 5, 3, { reason: '' });
+    const goEl = ctx.document.getElementById('war-game-over');
+    assert(!goEl.innerHTML.includes('ALL DEFENDERS ELIMINATED'),
+        'Battle defeat with no specific reason shows no reason text');
+}
+
+{
+    resetElements();
+    // Game over with modeData containing infrastructure mode
+    w._hudState.gameModeType = 'infrastructure_defense';
+    w.warHudShowGameOver('VICTORY', 2000, 5, 10, {
+        infrastructure_health: 80,
+        infrastructure_max: 100,
+    });
+    const goEl = ctx.document.getElementById('war-game-over');
+    assert(goEl.style.display !== 'none', 'gameOver shows with infrastructure modeData');
+    // Reset
+    w._hudState.gameModeType = 'battle';
+}
+
+// ============================================================
+// warHudPlayAgain state reset completeness
+// ============================================================
+
+console.log('\n--- warHudPlayAgain state reset ---');
+
+{
+    resetElements();
+    // Set dirty state
+    w._hudState.score = 9999;
+    w._hudState.displayScore = 9999;
+    w._hudState.eliminations = 50;
+    w._hudState.wave = 7;
+    w._hudState.gameState = 'game_over';
+    w._hudState.gameModeType = 'civil_unrest';
+    w._hudState.civilianHarmCount = 3;
+    w._hudState.deEscalationScore = 42;
+    w._hudState.bonusObjectives = [{ name: 'test', completed: false }];
+    ctx.warState.stats.eliminations = 50;
+    ctx.warState.stats.breaches = 5;
+    ctx.warState.stats.dispatches = 10;
+
+    w.warHudPlayAgain();
+
+    assert(w._hudState.score === 0, 'playAgain resets score to 0');
+    assert(w._hudState.displayScore === 0, 'playAgain resets displayScore');
+    assert(w._hudState.eliminations === 0, 'playAgain resets eliminations');
+    assert(w._hudState.wave === 0, 'playAgain resets wave');
+    assert(w._hudState.gameState === 'idle', 'playAgain resets gameState to idle');
+    assert(w._hudState.gameModeType === 'battle', 'playAgain resets gameModeType to battle');
+    assert(w._hudState.civilianHarmCount === 0, 'playAgain resets civilian harm');
+    assert(w._hudState.deEscalationScore === 0, 'playAgain resets de-escalation');
+    assert(w._hudState.bonusObjectives.length === 0, 'playAgain clears bonus objectives');
+    assert(ctx.warState.stats.eliminations === 0, 'playAgain resets warState stats eliminations');
+    assert(ctx.warState.stats.breaches === 0, 'playAgain resets warState stats breaches');
+    assert(ctx.warState.stats.dispatches === 0, 'playAgain resets warState stats dispatches');
+    assert(ctx.warState.selectedTargets.length === 0, 'playAgain clears selectedTargets');
+    assert(ctx.warState.effects.length === 0, 'playAgain clears effects');
+    assert(ctx.warState.dispatchArrows.length === 0, 'playAgain clears dispatchArrows');
+}
+
+// ============================================================
+// warHudSetBonusObjectives + warHudCompleteBonusObjective
+// ============================================================
+
+console.log('\n--- warHudSetBonusObjectives ---');
+
+{
+    w.warHudSetBonusObjectives([
+        { name: 'No friendly losses', completed: false },
+        { name: 'Under 3 minutes', completed: false },
+    ]);
+    assert(w._hudState.bonusObjectives.length === 2, 'setBonusObjectives stores 2 objectives');
+    assert(w._hudState.bonusObjectives[0].name === 'No friendly losses', 'first objective name correct');
+    assert(w._hudState.bonusObjectives[0].completed === false, 'first objective not completed');
+}
+
+{
+    w.warHudCompleteBonusObjective('No friendly losses');
+    assert(w._hudState.bonusObjectives[0].completed === true, 'completeBonusObjective marks first as done');
+    assert(w._hudState.bonusObjectives[1].completed === false, 'second objective still not done');
+}
+
+{
+    w.warHudCompleteBonusObjective('nonexistent');
+    assert(w._hudState.bonusObjectives[0].completed === true, 'completing nonexistent does not affect others');
+}
+
+{
+    w.warHudSetBonusObjectives(null);
+    assert(w._hudState.bonusObjectives.length === 0, 'null input clears objectives');
+}
+
+{
+    w.warHudSetBonusObjectives([]);
+    assert(w._hudState.bonusObjectives.length === 0, 'empty array clears objectives');
+}
+
+// ============================================================
+// warHudDrawBonusObjectives canvas rendering
+// ============================================================
+
+console.log('\n--- warHudDrawBonusObjectives ---');
+
+{
+    w._hudState.gameState = 'active';
+    w.warHudSetBonusObjectives([
+        { name: 'Stealth', completed: false, reward: 100 },
+        { name: 'Speed Run', completed: true, reward: 200 },
+    ]);
+    const drawCalls = [];
+    const mockCanvasBO = {
+        saved: false,
+        save() { this.saved = true; },
+        restore() { this.saved = false; },
+        fillRect() { drawCalls.push('fillRect'); },
+        fillText(text) { drawCalls.push('fillText:' + text); },
+        font: '', fillStyle: '', globalAlpha: 1, textAlign: '', textBaseline: '',
+        measureText() { return { width: 50 }; },
+    };
+    w.warHudDrawBonusObjectives(mockCanvasBO, 800, 600);
+    assert(drawCalls.length > 0, 'drawBonusObjectives renders when objectives exist');
+    w._hudState.gameState = 'idle';
+}
+
+{
+    w.warHudSetBonusObjectives([]);
+    const drawCalls = [];
+    const mockCanvasEmpty = {
+        save() {},
+        restore() {},
+        fillRect() { drawCalls.push('fillRect'); },
+        fillText() { drawCalls.push('fillText'); },
+        set font(v) {},
+        set fillStyle(v) {},
+        set globalAlpha(v) {},
+        set textAlign(v) {},
+        set textBaseline(v) {},
+        measureText() { return { width: 50 }; },
+    };
+    w.warHudDrawBonusObjectives(mockCanvasEmpty, 800, 600);
+    assert(drawCalls.length === 0, 'drawBonusObjectives does nothing with empty objectives');
+}
+
+// ============================================================
+// warHudDrawHostileIntel
+// ============================================================
+
+console.log('\n--- warHudDrawHostileIntel ---');
+
+{
+    const drawCalls = [];
+    const mockCanvasIntel = {
+        save() {},
+        restore() {},
+        fillRect() { drawCalls.push('fillRect'); },
+        fillText(text) { drawCalls.push('fillText:' + text); },
+        set font(v) {},
+        set fillStyle(v) {},
+        set globalAlpha(v) {},
+        set textAlign(v) {},
+        set textBaseline(v) {},
+        measureText() { return { width: 50 }; },
+    };
+    w._hudState.gameState = 'active';
+    const intel = {
+        wave_number: 3,
+        hostiles_remaining: 5,
+        hostiles_total: 12,
+        threat_level: 'elevated',
+        force_ratio: 1.5,
+        recommended_action: 'Hold position',
+    };
+    w.warHudDrawHostileIntel(mockCanvasIntel, 800, 600, intel);
+    assert(drawCalls.length > 0, 'drawHostileIntel renders with valid intel data');
+    w._hudState.gameState = 'idle';
+}
+
+{
+    const drawCalls = [];
+    const mockCanvasNull = {
+        save() {},
+        restore() {},
+        fillRect() { drawCalls.push('fillRect'); },
+        fillText() { drawCalls.push('fillText'); },
+        set font(v) {},
+        set fillStyle(v) {},
+        set globalAlpha(v) {},
+        set textAlign(v) {},
+        set textBaseline(v) {},
+        measureText() { return { width: 50 }; },
+    };
+    w.warHudDrawHostileIntel(mockCanvasNull, 800, 600, null);
+    assert(drawCalls.length === 0, 'drawHostileIntel does nothing with null intel');
+}
+
+// ============================================================
+// Watch Replay dismisses game-over-overlay
+// ============================================================
+
+{
+    // Set up game-over overlay with hidden property
+    const goOverlay = mockElements['game-over-overlay'] || {};
+    goOverlay.hidden = false;
+    mockElements['game-over-overlay'] = goOverlay;
+
+    // Set up war-game-over
+    mockElements['war-game-over'] = mockElements['war-game-over'] || {
+        style: { display: 'flex' }, textContent: '', innerHTML: '', className: '',
+        classList: { _classes: [], add() {}, remove() {} }, onclick: null, offsetWidth: 100,
+    };
+    mockElements['war-game-over'].style.display = 'flex';
+
+    w.warHudWatchReplay();
+
+    assert(mockElements['war-game-over'].style.display === 'none',
+        'warHudWatchReplay hides war-game-over HUD');
+    assert(mockElements['game-over-overlay'].hidden === true,
+        'warHudWatchReplay hides game-over-overlay (not just HUD)');
+}
+
+// ============================================================
+// Threat level escaping in wave banner
+// ============================================================
+
+{
+    const code = fs.readFileSync(__dirname + '/../../frontend/js/war-hud.js', 'utf8');
+    // threat_level should be escaped before .toUpperCase()
+    assert(code.includes('_hudEscapeHtml(briefingData.threat_level)'),
+        'Wave banner escapes threat_level before injecting into HTML');
+    // No unescaped threat_level injection
+    assert(!code.includes('${briefingData.threat_level.toUpperCase()}'),
+        'No unescaped threat_level.toUpperCase() in HTML template');
+}
+
+// ============================================================
+// Play Again clears countdown timers
+// ============================================================
+
+{
+    const code = fs.readFileSync(__dirname + '/../../frontend/js/war-hud.js', 'utf8');
+    // warHudPlayAgain should clear both timers
+    assert(code.includes('clearTimeout(_hudState.countdownTimer)'),
+        'warHudPlayAgain clears countdownTimer');
+    assert(code.includes('clearInterval(_hudState.loadingMessageTimer)'),
+        'warHudPlayAgain clears loadingMessageTimer');
+}
 
 // ============================================================
 // Summary

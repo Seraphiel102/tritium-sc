@@ -57,30 +57,41 @@ import random
 import threading
 import time
 import uuid
+
+from loguru import logger
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .ambient import AmbientSpawner
+from .backstory import BackstoryGenerator
 from .behaviors import UnitBehaviors
+from .lod import LODSystem, LODTier
 from .combat import CombatSystem
 from .comms import UnitComms
 from .cover import CoverSystem
+from .crowd_density import CrowdDensityTracker
+from .hazards import HazardManager
 from .hostile_commander import HostileCommander
 from .degradation import DegradationSystem
+from .infrastructure import InfrastructureHealth
 from .unit_missions import UnitMissionSystem
-from .game_mode import GameMode
+from .game_mode import GameMode, InstigatorDetector
 from .morale import MoraleSystem
 from .npc import NPCManager
 from .pursuit import PursuitSystem
 from .replay import ReplayRecorder
 from .sensors import SensorSimulator
+from .spectator import SpectatorMode
 from .squads import SquadManager
 from .stats import StatsTracker
 from .target import SimulationTarget
 from .terrain import TerrainMap
+from .swarm import SwarmBehavior
 from .unit_states import create_fsm_for_type
 from .upgrades import UpgradeSystem
 from .spatial import SpatialGrid
 from .vision import VisionSystem
+from .objectives import ObjectiveTracker
 from .weapons import WeaponSystem
 
 if TYPE_CHECKING:
@@ -107,7 +118,9 @@ class SimulationEngine:
                  max_hostiles: int | None = None) -> None:
         self._event_bus = event_bus
         self._targets: dict[str, SimulationTarget] = {}
-        self._lock = threading.Lock()
+        # RLock (reentrant) because begin_war/reset_game hold the lock and
+        # call subsystems that read back into get_targets() which also locks.
+        self._lock = threading.RLock()
         self._running = False
         self._thread: threading.Thread | None = None
         self._spawner_thread: threading.Thread | None = None
@@ -132,16 +145,20 @@ class SimulationEngine:
                 self._map_bounds = 200.0
         self._map_min = -self._map_bounds
         self._map_max = self._map_bounds
+        self._default_map_bounds = self._map_bounds  # remember config default for reset
 
         # Spatial partitioning grid for O(1) neighbor queries
         self._spatial_grid = SpatialGrid()
+
+        # Level of Detail system -- reduces fidelity for offscreen targets
+        self.lod_system = LODSystem()
 
         # Stats tracker (created first so combat can record to it)
         self.stats_tracker = StatsTracker()
 
         # Combat subsystems
         self.weapon_system = WeaponSystem()
-        self.upgrade_system = UpgradeSystem()
+        self.upgrade_system = UpgradeSystem(event_bus=event_bus)
         self.combat = CombatSystem(event_bus, stats_tracker=self.stats_tracker,
                                    weapon_system=self.weapon_system,
                                    upgrade_system=self.upgrade_system)
@@ -151,19 +168,31 @@ class SimulationEngine:
 
         # Extended subsystems
         self.morale_system = MoraleSystem()
-        self.cover_system = CoverSystem()
+        self.cover_system = CoverSystem(event_bus=event_bus)
         self.degradation_system = DegradationSystem()
         self.pursuit_system = PursuitSystem()
-        self.unit_comms = UnitComms()
+        self.unit_comms = UnitComms(event_bus=event_bus)
         self.behaviors.set_comms(self.unit_comms)
         # stats_tracker already created above (before CombatSystem)
         self.terrain_map = TerrainMap(map_bounds=self._map_bounds)
         self.behaviors.set_terrain_map(self.terrain_map)
+        self.behaviors.set_upgrade_system(self.upgrade_system)
         self.vision_system = VisionSystem(terrain_map=self.terrain_map)
         self.squad_manager = SquadManager()
-        self.hostile_commander = HostileCommander()
+        self.hostile_commander = HostileCommander(event_bus=event_bus)
         self.unit_missions = UnitMissionSystem(map_bounds=self._map_bounds)
         self.replay_recorder = ReplayRecorder(event_bus)
+        self.spectator = SpectatorMode(self.replay_recorder)
+        self.hazard_manager = HazardManager(event_bus)
+
+        # Wire pathfinding router into all subsystems that assign waypoints
+        self.hostile_commander.set_router(self.route_path)
+        self.behaviors.set_router(self.route_path)
+        self.unit_missions.set_router(self.route_path)
+        self.squad_manager.set_router(self.route_path)
+
+        # Backstory generator (created here, started in start())
+        self._backstory_generator: BackstoryGenerator | None = None
 
         # FSM per target (target_id -> StateMachine)
         self._fsms: dict[str, object] = {}
@@ -175,14 +204,38 @@ class SimulationEngine:
         self._street_graph = None
         self._obstacles = None
 
-        # Sensor simulation
+        # Sensor simulation — seed perimeter sensors at entry points
         self.sensor_sim = SensorSimulator(event_bus)
+        _half = self._map_bounds * 0.9
+        _perimeter_sensors = [
+            ("sen-north", "North Gate", "motion", (0.0, _half), 40.0),
+            ("sen-south", "South Gate", "motion", (0.0, -_half), 40.0),
+            ("sen-east", "East Approach", "tripwire", (_half, 0.0), 35.0),
+            ("sen-west", "West Approach", "tripwire", (-_half, 0.0), 35.0),
+            ("sen-ne", "NE Corner", "motion", (_half * 0.7, _half * 0.7), 30.0),
+            ("sen-nw", "NW Corner", "motion", (-_half * 0.7, _half * 0.7), 30.0),
+            ("sen-se", "SE Corner", "door", (_half * 0.7, -_half * 0.7), 30.0),
+            ("sen-sw", "SW Corner", "door", (-_half * 0.7, -_half * 0.7), 30.0),
+        ]
+        for sid, name, stype, pos, radius in _perimeter_sensors:
+            self.sensor_sim.add_sensor(sid, name, stype, pos, radius)
 
         # NPC world population (vehicles + pedestrians)
         self._npc_manager: NPCManager | None = None
 
         # NPC intelligence plugin (brains + thoughts, set externally)
         self._npc_intelligence = None
+
+        # Mission-type subsystems (initialized on game start, cleared on reset)
+        self._crowd_density_tracker: CrowdDensityTracker | None = None
+        self._infrastructure_health: InfrastructureHealth | None = None
+        self._instigator_detector: InstigatorDetector | None = None
+        self._swarm_behavior: SwarmBehavior | None = None
+        self._objective_tracker: ObjectiveTracker | None = None
+        # POI buildings: list of (x, y) positions representing defended
+        # infrastructure points. Used by InfrastructureHealth to determine
+        # proximity-based damage from bomber detonations and attack fire.
+        self._poi_buildings: list[tuple[float, float]] = []
 
         # Plugin manager for ticking plugins that have tick() methods
         self._plugin_manager = None
@@ -221,6 +274,7 @@ class SimulationEngine:
         self._event_bus = event_bus
         self.combat._event_bus = event_bus
         self.game_mode._event_bus = event_bus
+        self.hazard_manager._event_bus = event_bus
 
     def set_street_graph(self, street_graph) -> None:
         """Store a street graph for road-aware pathfinding."""
@@ -256,12 +310,27 @@ class SimulationEngine:
                 )
             else:
                 target.set_collision_check(self._obstacles.point_in_building)
-                # Filter waypoints that land inside buildings
-                if target.waypoints:
-                    target.waypoints = [
-                        wp for wp in target.waypoints
-                        if not self._obstacles.point_in_building(wp[0], wp[1])
-                    ]
+                # Validate path against buildings.
+                # First check if any path segment crosses a building polygon
+                # (catches smoothed shortcuts that cut through buildings).
+                # If so, re-route using full pathfinding which respects buildings.
+                # Otherwise, filter individual waypoints that land inside buildings.
+                if target.waypoints and len(target.waypoints) >= 2:
+                    if self._obstacles.path_crosses_building(target.waypoints):
+                        # Path cuts through a building — re-route
+                        new_path = self.route_path(
+                            target.waypoints[0],
+                            target.waypoints[-1],
+                            target.asset_type,
+                            target.alliance,
+                        )
+                        target.waypoints = new_path
+                    else:
+                        # No segment crossings — just remove waypoints inside buildings
+                        target.waypoints = [
+                            wp for wp in target.waypoints
+                            if not self._obstacles.point_in_building(wp[0], wp[1])
+                        ]
                     target._waypoint_index = 0
 
         # Assign roof altitude for stationary units inside buildings
@@ -279,9 +348,30 @@ class SimulationEngine:
         if fsm is not None:
             target.fsm_state = fsm.current.name
             self._fsms[target.target_id] = fsm
-        # Equip weapon
+        # Equip weapon — prefer inventory active weapon over type default
         if target.is_combatant:
-            self.weapon_system.assign_default_weapon(target.target_id, target.asset_type)
+            synced = False
+            if target.inventory is not None:
+                active_wp = target.inventory.get_active_weapon()
+                if active_wp is not None:
+                    from .weapons import Weapon
+                    self.weapon_system.assign_weapon(
+                        target.target_id,
+                        Weapon(
+                            name=active_wp.name,
+                            damage=active_wp.damage,
+                            weapon_range=active_wp.weapon_range,
+                            cooldown=active_wp.cooldown,
+                            accuracy=active_wp.accuracy,
+                            ammo=active_wp.ammo,
+                            max_ammo=active_wp.max_ammo,
+                            weapon_class=active_wp.weapon_class or "ballistic",
+                            blast_radius=active_wp.blast_radius,
+                        ),
+                    )
+                    synced = True
+            if not synced:
+                self.weapon_system.assign_default_weapon(target.target_id, target.asset_type)
         # Register with stats tracker
         self.stats_tracker.register_unit(
             target.target_id, target.name, target.alliance, target.asset_type
@@ -309,6 +399,24 @@ class SimulationEngine:
         if self._npc_intelligence is not None:
             self._npc_intelligence.detach_brain(target_id)
         self._fsms.pop(target_id, None)
+        # Clean up per-unit state from all subsystems
+        self.weapon_system.remove_unit(target_id)
+        self.morale_system.remove_unit(target_id)
+        self.pursuit_system.remove_unit(target_id)
+        self.upgrade_system.remove_unit(target_id)
+        self.hostile_commander.remove_unit(target_id)
+        self.unit_missions.remove_unit(target_id)
+        self.behaviors.remove_unit(target_id)
+        self.cover_system.remove_unit(target_id)
+        self.vision_system.remove_unit(target_id)
+        self.lod_system.remove_unit(target_id)
+        self.stats_tracker.remove_unit(target_id)
+        self.squad_manager.remove_unit(target_id)
+        if self._npc_manager is not None:
+            self._npc_manager.remove_unit(target_id)
+        if self._instigator_detector is not None:
+            self._instigator_detector.remove_unit(target_id)
+        self.combat.reset_streak(target_id)
         with self._lock:
             return self._targets.pop(target_id, None) is not None
 
@@ -338,6 +446,7 @@ class SimulationEngine:
 
         Retroactively attaches brains to any existing neutral targets that
         were added before the plugin was registered (boot order issue).
+        Also wires the thought registry into the backstory generator if available.
         """
         self._npc_intelligence = plugin
         # Attach brains to existing neutral NPCs
@@ -350,6 +459,11 @@ class SimulationEngine:
                 and plugin.get_brain(t.target_id) is None
             ):
                 plugin.attach_brain(t.target_id, t.asset_type, t.alliance)
+        # Wire thought registry into backstory generator (boot order: plugins load after engine)
+        if self._backstory_generator is not None:
+            tr = getattr(plugin, "thought_registry", None)
+            if tr is not None:
+                self._backstory_generator._thought_registry = tr
 
     def set_plugin_manager(self, mgr) -> None:
         """Set the plugin manager for ticking plugins each frame."""
@@ -359,6 +473,33 @@ class SimulationEngine:
     def spawners_paused(self) -> bool:
         return self._spawners_paused.is_set()
 
+    def set_map_bounds(self, bounds: float) -> None:
+        """Update the active map half-extent (meters).
+
+        Called when a scenario specifies larger bounds than the default.
+        Updates all derived values so hostile spawning, escape detection,
+        and subsystems use the new area.
+        """
+        self._map_bounds = abs(bounds)
+        self._map_min = -self._map_bounds
+        self._map_max = self._map_bounds
+        # Propagate to subsystems that cache bounds
+        if self._ambient_spawner is not None:
+            self._ambient_spawner._map_bounds = self._map_bounds
+            self._ambient_spawner._map_min = self._map_min
+            self._ambient_spawner._map_max = self._map_bounds
+        if hasattr(self, 'unit_missions'):
+            self.unit_missions._map_bounds = self._map_bounds
+        # Behavior coordinator (behavior/ package) caches bounds on sub-behaviors
+        behaviors = getattr(self, 'behaviors', None)
+        if behaviors is not None:
+            hostile_b = getattr(behaviors, '_hostile', None)
+            if hostile_b is not None and hasattr(hostile_b, '_map_bounds'):
+                hostile_b._map_bounds = self._map_bounds
+            rover_b = getattr(behaviors, '_rover', None)
+            if rover_b is not None and hasattr(rover_b, '_map_bounds'):
+                rover_b._map_bounds = self._map_bounds
+
     def pause_spawners(self) -> None:
         """Pause hostile and ambient spawners (tick loop continues)."""
         self._spawners_paused.set()
@@ -366,6 +507,13 @@ class SimulationEngine:
     def resume_spawners(self) -> None:
         """Resume hostile and ambient spawners."""
         self._spawners_paused.clear()
+
+    def resume_ambient(self) -> None:
+        """Re-enable ambient + NPC spawners (after battle ends, for neighborhood mode)."""
+        if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+            self._ambient_spawner.enabled = True
+        if self._npc_manager is not None:
+            self._npc_manager.enabled = True
 
     # -- Game mode interface ------------------------------------------------
 
@@ -375,41 +523,120 @@ class SimulationEngine:
         Uses MissionDirector if a scenario was pre-generated (from the modal),
         otherwise falls back to ScenarioGenerator for backward compatibility.
         Publishes scenario context on the event bus for the frontend.
+
+        Holds ``_lock`` for the entire method so the tick thread cannot read
+        partially-initialised game state (e.g. game_mode.state == "active"
+        while mission-type subsystems are still None).
         """
-        # Check if MissionDirector has a pre-generated scenario
-        md = getattr(self, '_mission_director', None)
-        if md and md.get_current_scenario():
-            scenario = md.get_current_scenario()
-            self._event_bus.publish("scenario_generated", scenario)
-        else:
-            # Fallback: generate scenario inline (backward compatible)
-            from .scenario_gen import ScenarioGenerator
-            if not hasattr(self, '_scenario_gen'):
-                self._scenario_gen = ScenarioGenerator()
-            scenario = self._scenario_gen.generate_scripted(
-                wave=1, total_waves=10, score=0,
+        with self._lock:
+            # Check if MissionDirector has a pre-generated scenario
+            md = getattr(self, '_mission_director', None)
+            if md and md.get_current_scenario():
+                scenario = md.get_current_scenario()
+                self._event_bus.publish("scenario_generated", scenario)
+            else:
+                # Fallback: generate scenario inline (backward compatible)
+                from .scenario_gen import ScenarioGenerator
+                if not hasattr(self, '_scenario_gen'):
+                    self._scenario_gen = ScenarioGenerator()
+                scenario = self._scenario_gen.generate_scripted(
+                    wave=1, total_waves=10, score=0,
+                )
+                self._event_bus.publish("scenario_generated", scenario)
+
+                # Start async LLM upgrade in background
+                def _llm_gen():
+                    try:
+                        llm_scenario = self._scenario_gen.generate_via_llm(wave=1, total_waves=10)
+                        if llm_scenario:
+                            self._event_bus.publish("scenario_generated", llm_scenario)
+                    except Exception:
+                        pass
+                threading.Thread(target=_llm_gen, daemon=True, name="scenario-llm").start()
+
+            self.replay_recorder.clear()
+            self.replay_recorder.start()
+
+            # Wire game mode type into subsystems BEFORE begin_war() starts combat
+            mode_type = self.game_mode.game_mode_type
+            self.behaviors.set_game_mode_type(mode_type)
+            self.hostile_commander.set_game_mode_type(mode_type)
+
+            # Instantiate mission-type subsystems based on game_mode_type
+            if mode_type == "civil_unrest":
+                bounds = (
+                    -self._map_bounds, -self._map_bounds,
+                    self._map_bounds, self._map_bounds,
+                )
+                self._crowd_density_tracker = CrowdDensityTracker(bounds, self._event_bus)
+                self._instigator_detector = InstigatorDetector(
+                    event_bus=self._event_bus,
+                    game_mode=self.game_mode,
+                    crowd_density_tracker=self._crowd_density_tracker,
+                )
+            elif mode_type == "drone_swarm":
+                self._infrastructure_health = InfrastructureHealth(self._event_bus)
+                self.game_mode.infrastructure_health = self._infrastructure_health._health
+                self._swarm_behavior = SwarmBehavior()
+                # Generate POI buildings from friendly stationary units (turrets,
+                # missile_turrets, etc.) or fall back to map-center default.
+                self._poi_buildings = self._compute_poi_buildings()
+
+            # Create ObjectiveTracker from scenario bonus objectives (if any)
+            bonus_objectives = []
+            if scenario and isinstance(scenario, dict):
+                wc = scenario.get("win_conditions", {})
+                bonus_objectives = wc.get("bonus_objectives", [])
+            self._objective_tracker = ObjectiveTracker(
+                bonus_objectives, mode_type, self._event_bus,
             )
-            self._event_bus.publish("scenario_generated", scenario)
+            # Set instigator count for "All Instigators Identified" objective
+            if scenario and isinstance(scenario, dict):
+                instigator_count = scenario.get("instigator_count", 0)
+                if instigator_count:
+                    self._objective_tracker.set_instigator_count(instigator_count)
 
-            # Start async LLM upgrade in background
-            def _llm_gen():
-                try:
-                    llm_scenario = self._scenario_gen.generate_via_llm(wave=1, total_waves=10)
-                    if llm_scenario:
-                        self._event_bus.publish("scenario_generated", llm_scenario)
-                except Exception:
-                    pass
-            threading.Thread(target=_llm_gen, daemon=True, name="scenario-llm").start()
+            # Disable ALL neutral spawners during battle — only combat units
+            if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+                self._ambient_spawner.enabled = False
+            if self._npc_manager is not None:
+                self._npc_manager.enabled = False
+            # Remove existing neutrals so they don't clutter the battlefield
+            neutral_ids = [
+                tid for tid, t in self._targets.items()
+                if t.alliance == "neutral"
+            ]
+            for tid in neutral_ids:
+                del self._targets[tid]
 
-        self.replay_recorder.clear()
-        self.replay_recorder.start()
-        self.game_mode.begin_war()
+            self.game_mode.begin_war()
+
+    def route_path(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        unit_type: str,
+        alliance: str = "friendly",
+    ) -> list[tuple[float, float]]:
+        """Single entry point for all pathfinding.
+
+        Tries street graph -> grid A* -> direct, returning at least [end].
+        """
+        from .pathfinding import plan_path
+        path = plan_path(
+            start, end, unit_type,
+            street_graph=self._street_graph,
+            obstacles=self._obstacles,
+            alliance=alliance,
+            terrain_map=self.terrain_map,
+        )
+        return path if path else [end]
 
     def dispatch_unit(self, target_id: str, destination: tuple[float, float]) -> None:
         """Dispatch a unit to a destination, using pathfinding when available.
 
-        Drones fly direct.  Ground units route via the street graph when one
-        is loaded; otherwise they move in a straight line to the destination.
+        Drones fly direct.  Ground units route via street graph then grid A*;
+        otherwise they move in a straight line to the destination.
         Stationary units (speed == 0) are silently ignored.
         """
         with self._lock:
@@ -419,81 +646,83 @@ class SimulationEngine:
         if target.speed == 0:
             return
 
-        drone_types = {"drone", "scout_drone"}
-        if target.asset_type in drone_types:
-            # Drones fly direct — no pathfinding needed
-            target.waypoints = [target.position, destination]
-        elif self._street_graph is not None:
-            # Ground unit with a street graph — try road-aware pathfinding
-            from engine.simulation.pathfinding import plan_path
-            path = plan_path(
-                target.position,
-                destination,
-                target.asset_type,
-                street_graph=self._street_graph,
-                obstacles=self._obstacles,
-            )
-            if path:
-                target.waypoints = path
-            else:
-                # Pathfinding returned nothing — fall back to direct movement
-                target.waypoints = [destination]
-        else:
-            # No street graph loaded — move directly
-            target.waypoints = [destination]
-
+        path = self.route_path(target.position, destination,
+                               target.asset_type, target.alliance)
+        target.waypoints = path
         target._waypoint_index = 0
         target.status = "active"
 
+        self._event_bus.publish("unit_dispatched", {
+            "unit_id": target_id,
+            "destination": {"x": destination[0], "y": destination[1]},
+        })
+
     def reset_game(self) -> None:
-        """Reset game state. Clear all hostiles, heal friendlies, reset combat."""
-        self.game_mode.reset()
-        self.combat.clear()
-        self.combat.reset_streaks()
-        self.behaviors.clear_dodge_state()
-        # Reset extended subsystems
-        self.morale_system.reset()
-        self.cover_system.reset()
-        self.degradation_system.reset()
-        self.pursuit_system.reset()
-        self.unit_comms.reset()
-        self.stats_tracker.reset()
-        self.terrain_map.reset()
-        self.upgrade_system.reset()
-        self.weapon_system.reset()
-        self.squad_manager.clear()
-        self.hostile_commander.reset()
-        self.unit_missions.reset()
-        self.replay_recorder.clear()
-        self._fsms.clear()
-        self._stall_positions.clear()
-        self._stall_ticks.clear()
+        """Reset game state. Clear all hostiles, heal friendlies, reset combat.
+
+        Holds ``_lock`` for the entire method so the tick thread cannot observe
+        partially-reset state (e.g. game_mode already idle while combat system
+        still holds stale projectiles from the previous round).
+        """
         with self._lock:
-            # Remove all hostile targets
-            to_remove = [
-                tid for tid, t in self._targets.items()
-                if t.alliance == "hostile"
-            ]
-            for tid in to_remove:
-                removed = self._targets.pop(tid, None)
-                if removed is not None:
-                    self._used_names.discard(removed.name)
-            # Also remove placed game units (turrets/drones from previous game)
-            game_units = [
-                tid for tid, t in self._targets.items()
-                if tid.startswith(("turret-", "drone-", "rover-"))
-                and t.alliance == "friendly"
-            ]
-            for tid in game_units:
-                removed = self._targets.pop(tid, None)
-                if removed is not None:
-                    self._used_names.discard(removed.name)
-            # Heal surviving friendly units back to full
-            for t in self._targets.values():
-                if t.alliance == "friendly" and t.is_combatant:
-                    t.health = t.max_health
-                    if t.status == "eliminated":
-                        t.status = "active"
+            self.game_mode.reset()
+            self.combat.clear()
+            self.combat.reset_streaks()
+            self.behaviors.clear_dodge_state()
+            # Reset extended subsystems
+            self.morale_system.reset()
+            self.cover_system.reset()
+            self.degradation_system.reset()
+            self.pursuit_system.reset()
+            self.unit_comms.reset()
+            self.stats_tracker.reset()
+            self.terrain_map.reset()
+            self.upgrade_system.reset()
+            self.weapon_system.reset()
+            self.squad_manager.clear()
+            self.hostile_commander.reset()
+            self.unit_missions.reset()
+            self.vision_system.reset()
+            self.lod_system.reset()
+            self.replay_recorder.clear()
+            if self._npc_manager is not None:
+                self._npc_manager.reset()
+            self.spectator.stop()
+            self.hazard_manager.clear()
+            # Reset mission-type subsystems
+            self._crowd_density_tracker = None
+            self._infrastructure_health = None
+            self._instigator_detector = None
+            self._swarm_behavior = None
+            self._objective_tracker = None
+            self._poi_buildings = []
+            self.behaviors.set_game_mode_type(None)
+            self._fsms.clear()
+            self._stall_positions.clear()
+            self._stall_ticks.clear()
+            # Restore default map bounds (scenario may have expanded them)
+            if hasattr(self, '_default_map_bounds'):
+                self.set_map_bounds(self._default_map_bounds)
+            # Clear lazily-attached MissionDirector (attached by game router)
+            md = getattr(self, '_mission_director', None)
+            if md is not None:
+                md.reset()
+            # Reset backstory generator (clear queue/pending/backstories)
+            if self._backstory_generator is not None:
+                self._backstory_generator.reset()
+            # Disable ALL neutral spawners during reset — begin_war() keeps them off,
+            # resume_ambient() re-enables them for neighborhood mode.
+            if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+                self._ambient_spawner.enabled = False
+                self._ambient_spawner._used_names.clear()
+            if self._npc_manager is not None:
+                self._npc_manager.enabled = False
+            # Remove ALL simulation targets (hostiles, friendly combatants,
+            # scenario defenders, neutrals).  This prevents layout units with
+            # non-standard ID prefixes (heavy_turret-, tank-, apc-, etc.) from
+            # accumulating across scenario resets.
+            self._targets.clear()
+            self._used_names.clear()
 
     def get_game_state(self) -> dict:
         """Return current game state dict."""
@@ -513,7 +742,10 @@ class SimulationEngine:
             target=self._random_hostile_spawner, name="sim-spawner", daemon=True
         )
         self._spawner_thread.start()
+        # Ambient + NPC spawners start DISABLED by default.
+        # They only activate via resume_ambient() or explicit profile load.
         self._ambient_spawner = AmbientSpawner(self)
+        self._ambient_spawner.enabled = False
         self._ambient_spawner.start()
 
         # NPC world population
@@ -530,6 +762,7 @@ class SimulationEngine:
             self._npc_manager = NPCManager(
                 self, max_vehicles=npc_max_v, max_pedestrians=npc_max_p
             )
+            self._npc_manager.enabled = False  # disabled until profile/mission loads
             self._npc_manager.start()
 
         # Start combat event listener
@@ -541,9 +774,55 @@ class SimulationEngine:
         # Start replay event listener (captures combat/wave/game events)
         self.replay_recorder.start_listener()
 
+        # Backstory generator — distributed LLM backstory via Ollama fleet
+        try:
+            from app.config import settings as _settings
+            backstory_on = _settings.backstory_enabled
+            bulk_model = _settings.backstory_bulk_model
+            key_model = _settings.backstory_key_model
+            max_concurrent = _settings.backstory_max_concurrent
+            cache_dir = _settings.backstory_cache_dir
+        except Exception:
+            backstory_on = True
+            bulk_model = "gemma3:1b"
+            key_model = "gemma3:4b"
+            max_concurrent = 3
+            cache_dir = "data/backstories"
+
+        if backstory_on:
+            try:
+                from engine.inference.fleet import OllamaFleet
+                fleet = OllamaFleet(auto_discover=True)
+                self._backstory_generator = BackstoryGenerator(
+                    fleet=fleet,
+                    event_bus=self._event_bus,
+                    cache_dir=Path(cache_dir),
+                    max_concurrent=max_concurrent,
+                    bulk_model=bulk_model,
+                    key_character_model=key_model,
+                )
+                # Wire targets dict so backstory can update unit names
+                self._backstory_generator._targets = self._targets
+                # Wire into unit missions so enqueue() is called on add_target
+                self.unit_missions.set_backstory_generator(self._backstory_generator)
+                # Wire thought registry if NPC intelligence is available
+                if self._npc_intelligence is not None:
+                    tr = getattr(self._npc_intelligence, "thought_registry", None)
+                    if tr is not None:
+                        self._backstory_generator._thought_registry = tr
+                self._backstory_generator.start()
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Backstory generator failed to start", exc_info=True
+                )
+
     def stop(self) -> None:
         self._running = False
         self.replay_recorder.stop_listener()
+        if self._backstory_generator is not None:
+            self._backstory_generator.stop()
+            self._backstory_generator = None
         if self._ambient_spawner is not None:
             self._ambient_spawner.stop()
             self._ambient_spawner = None
@@ -568,11 +847,26 @@ class SimulationEngine:
     def _tick_loop(self) -> None:
         while self._running:
             time.sleep(0.1)
-            self._do_tick(0.1)
+            try:
+                self._do_tick(0.1)
+            except Exception:
+                logger.exception("Unhandled exception in simulation tick loop")
+                time.sleep(0.5)
 
     def _do_tick(self, dt: float) -> None:
         """Execute one simulation tick.  Called from the tick loop thread, or
-        directly in tests to exercise the engine without starting threads."""
+        directly in tests to exercise the engine without starting threads.
+
+        LOD integration:
+          The tick loop uses the LOD system to reduce fidelity for offscreen
+          targets.  Each target's LOD tier determines:
+            - Whether target.tick(dt) runs this frame (movement + battery)
+            - Whether behavior AI runs this frame
+            - How aggressively telemetry is throttled
+
+          Combatants always tick at MEDIUM or higher to keep combat responsive.
+          Only neutral NPCs far from the viewport drop to LOW (1Hz movement only).
+        """
         with self._lock:
             targets = list(self._targets.values())
             targets_dict = dict(self._targets)
@@ -582,8 +876,22 @@ class SimulationEngine:
         self.behaviors.set_spatial_grid(self._spatial_grid)
         self._tick_counter += 1
 
+        # Compute LOD tiers for all targets based on viewport distance
+        lod_tiers = self.lod_system.compute_tiers(targets_dict)
+
+        # Tick each target's movement/battery — LOD-gated
         for target in targets:
-            target.tick(dt)
+            if self.lod_system.should_tick(target.target_id, self._tick_counter):
+                target.tick(dt)
+            elif lod_tiers.get(target.target_id) == LODTier.LOW:
+                # LOW tier: still tick movement on their 1Hz frame,
+                # but on off-frames do nothing (no battery drain for neutrals
+                # matters at 0.0 drain rate)
+                pass
+            elif lod_tiers.get(target.target_id) == LODTier.MEDIUM:
+                # MEDIUM off-frame: tick movement only (simplified dt)
+                # to keep positions smooth for nearby-offscreen units
+                target.tick(dt)
 
         # Game mode active — run combat subsystems
         game_active = self.game_mode.state == "active"
@@ -596,20 +904,86 @@ class SimulationEngine:
                 if t.alliance == "hostile":
                     t.visible = tid in vision_state.friendly_visible
                     t.detected_by = list(vision_state.visible_to.get(tid, set()))
+                    t.radio_detected = tid in vision_state.radio_detected
+                    t.radio_signal_strength = vision_state.radio_signal_strength.get(tid, 0.0)
             self.combat.tick(dt, targets_dict, cover_system=self.cover_system)
-            self.behaviors.tick(dt, targets_dict, vision_state=vision_state)
+
+            # Swarm boids: apply flocking forces BEFORE normal behavior tick
+            # so that boids-modified positions/headings feed into targeting.
+            # Include "idle" drones since boids is their primary movement
+            # system -- they become idle when they have no waypoints, but
+            # the boids forces keep them moving.
+            if self._swarm_behavior is not None:
+                swarm_drones = {
+                    tid: t for tid, t in targets_dict.items()
+                    if t.asset_type == "swarm_drone"
+                    and t.alliance == "hostile"
+                    and t.status in ("active", "idle")
+                }
+                # Re-activate idle swarm drones so they stay in the
+                # combat loop (boids gives them continuous movement)
+                for sd in swarm_drones.values():
+                    if sd.status == "idle":
+                        sd.status = "active"
+                friendly_targets = {
+                    tid: t for tid, t in targets_dict.items()
+                    if t.alliance == "friendly"
+                    and t.status in ("active", "idle", "stationary")
+                }
+                self._swarm_behavior.tick(dt, swarm_drones, friendly_targets)
+
+            # Behaviors: only run for targets whose LOD tier allows it this frame.
+            # Build a filtered dict of targets that should run behaviors.
+            if self.lod_system.has_viewport:
+                behavior_targets = {
+                    tid: t for tid, t in targets_dict.items()
+                    if self.lod_system.should_run_behaviors(tid, self._tick_counter)
+                }
+            else:
+                behavior_targets = targets_dict
+            self.behaviors.tick(dt, behavior_targets, vision_state=vision_state)
             self.squad_manager.tick(dt, targets_dict)
             self.squad_manager.tick_orders(dt, targets_dict)
             self.hostile_commander.tick(dt, targets_dict)
+
+            # Mission-type subsystem ticks
+            if self._crowd_density_tracker is not None:
+                self._crowd_density_tracker.tick(targets_dict, dt)
+                # Check POI defeat condition for civil unrest
+                if self._crowd_density_tracker.check_poi_defeat(timeout=60.0):
+                    self.game_mode.state = "defeat"
+                    self._event_bus.publish("game_over", self.game_mode._build_game_over_data(
+                        "defeat", reason="infrastructure_overwhelmed",
+                        waves_completed=self.game_mode.wave - 1,
+                    ))
+            if self._instigator_detector is not None:
+                self._instigator_detector.tick(
+                    dt, targets_dict, self.game_mode.game_mode_type,
+                )
+            if self._infrastructure_health is not None:
+                # Sync InfrastructureHealth state to GameMode for API/frontend
+                infra_state = self._infrastructure_health.get_state()
+                self.game_mode.infrastructure_health = infra_state["health"]
+                if self._infrastructure_health.is_destroyed():
+                    if self.game_mode.state == "active":
+                        self.game_mode.on_infrastructure_damaged(0.0)
         else:
             # Legacy interception check (non-game-mode)
             if self.game_mode.state == "setup":
                 self._check_interceptions(targets)
 
+        # Tick sensor network (always, regardless of game state)
+        if self.sensor_sim.sensors:
+            self.sensor_sim.tick(dt, targets)
+
+        # Tick hazard manager (always, regardless of game state)
+        self.hazard_manager.tick(dt)
+
         # Tick extended subsystems (always, regardless of game state)
         self.morale_system.tick(dt, targets_dict)
         self._sync_morale(targets_dict)
         self.cover_system.tick(dt, targets_dict)
+        self.cover_system.publish_cover_state()
         self.degradation_system.tick(dt, targets_dict)
         self._sync_degradation(targets)
         self.pursuit_system.tick(dt, targets_dict)
@@ -617,6 +991,11 @@ class SimulationEngine:
         self.stats_tracker.tick(dt, targets_dict)
         self.upgrade_system.tick(dt, targets_dict)
         self.weapon_system.tick(dt)
+        self._sync_weapon_ammo(targets_dict)
+
+        # Tick objective tracker (bonus objective completion)
+        if self._objective_tracker is not None:
+            self._objective_tracker.tick(dt)
 
         # Tick unit missions (idle unit assignment, patrol loops)
         self.unit_missions.tick(dt, targets_dict)
@@ -654,13 +1033,21 @@ class SimulationEngine:
         if self._tick_counter % 5 == 0 and self.replay_recorder.is_recording:
             self.replay_recorder.record_snapshot(targets)
 
+        # Advance spectator playback (post-game replay).  Without this,
+        # SpectatorMode.tick() was never called from the engine loop and
+        # replay playback never advanced.  The spectator's internal
+        # accumulator handles the 2Hz frame rate correctly -- at 10Hz
+        # engine ticks with dt=0.1, it takes 5 ticks to accumulate one
+        # frame advance (0.5s at 2Hz).  tick() is a no-op when paused.
+        self.spectator.tick(dt)
+
         # Tick FSMs with enriched context and sync state back to targets
         self._tick_fsms(dt, targets_dict)
 
         # Batch telemetry: collect all target dicts AFTER all subsystems have
         # ticked, so the batch reflects combat damage, eliminations, FSM state
         # changes, etc. from this tick — not from the previous tick.
-        # Idle units (no state change for 5+ ticks) are throttled to 2Hz.
+        # LOD-aware throttling: far-away units publish telemetry less often.
         batch: list[dict] = []
         for target in targets:
             snap = (
@@ -679,11 +1066,35 @@ class SimulationEngine:
                 self._idle_ticks[tid] = 0
                 self._last_snapshot[tid] = snap
 
-            # Throttle: idle for 5+ ticks → only publish every 5th tick
+            # LOD-aware telemetry throttling
             idle_count = self._idle_ticks.get(tid, 0)
-            if idle_count >= 5 and self._tick_counter % 5 != 0:
-                continue
-            batch.append(target.to_dict())
+            if self.lod_system.has_viewport:
+                if not self.lod_system.should_publish_telemetry(
+                    tid, self._tick_counter, idle_count
+                ):
+                    continue
+            else:
+                # Legacy throttle: idle for 5+ ticks -> only publish every 5th tick
+                if idle_count >= 5 and self._tick_counter % 5 != 0:
+                    continue
+            tdict = target.to_dict()
+            unit_stats = self.stats_tracker.get_unit_stats(target.target_id)
+            if unit_stats is not None:
+                tdict["stats"] = {
+                    "shots_fired": unit_stats.shots_fired,
+                    "shots_hit": unit_stats.shots_hit,
+                    "damage_dealt": round(unit_stats.damage_dealt, 1),
+                    "damage_taken": round(unit_stats.damage_taken, 1),
+                    "kills": unit_stats.kills,
+                    "deaths": unit_stats.deaths,
+                    "assists": unit_stats.assists,
+                    "distance_traveled": round(unit_stats.distance_traveled, 1),
+                    "max_speed": round(unit_stats.max_speed_reached, 1),
+                    "time_alive": round(unit_stats.time_alive, 1),
+                    "time_in_combat": round(unit_stats.time_in_combat, 1),
+                    "accuracy": round(unit_stats.accuracy, 3),
+                }
+            batch.append(tdict)
 
         self._event_bus.publish("sim_telemetry_batch", batch)
 
@@ -939,6 +1350,33 @@ class SimulationEngine:
                 continue
             apply_degradation(t)
 
+    def _sync_weapon_ammo(self, targets_dict: dict[str, SimulationTarget]) -> None:
+        """Sync weapon system ammo back to target.ammo_count after reloads.
+
+        When WeaponSystem.tick() refills a weapon's ammo (after reload timer),
+        the target.ammo_count field must also be restored so that
+        combat.fire()'s ammo_count check allows the unit to fire again.
+        Also syncs inventory weapon ammo to stay consistent.
+        """
+        for tid, t in targets_dict.items():
+            if not t.is_combatant:
+                continue
+            weapon = self.weapon_system.get_weapon(tid)
+            if weapon is None:
+                continue
+            # If weapon system has ammo but target.ammo_count is 0 (or was
+            # depleted), sync them.  ammo_count == -1 means unlimited.
+            if t.ammo_count == 0 and weapon.ammo > 0:
+                t.ammo_count = weapon.ammo
+            # Sync max_ammo so the frontend can compute ammo percentage
+            if weapon.max_ammo > 0 and t.ammo_max != weapon.max_ammo:
+                t.ammo_max = weapon.max_ammo
+            # Also sync inventory weapon ammo to weapon system ammo
+            if t.inventory is not None:
+                inv_weapon = t.inventory.get_active_weapon()
+                if inv_weapon is not None and inv_weapon.ammo == 0 and weapon.ammo > 0:
+                    inv_weapon.ammo = weapon.ammo
+
     def _on_combat_elimination(
         self, eliminated_id: str, targets_dict: dict[str, SimulationTarget]
     ) -> None:
@@ -975,6 +1413,8 @@ class SimulationEngine:
                     target_id = data.get("target_id")
                     if target_id:
                         self.game_mode.on_target_eliminated(target_id)
+                        # Clear eliminated unit's streak counter
+                        self.combat.reset_streak(target_id)
                         # Morale effects from elimination
                         with self._lock:
                             targets_dict = dict(self._targets)
@@ -987,9 +1427,49 @@ class SimulationEngine:
                     if target_id and damage > 0:
                         self.morale_system.on_damage_taken(target_id, damage)
 
+                    # Infrastructure damage from attack fire near POI
+                    if (self._infrastructure_health is not None
+                            and self._poi_buildings
+                            and damage > 0):
+                        pos = data.get("position")
+                        if pos is not None:
+                            hit_pos = (pos.get("x", 0.0), pos.get("y", 0.0))
+                            self._infrastructure_health.apply_attack_fire(
+                                position=hit_pos,
+                                damage=damage,
+                                poi_buildings=self._poi_buildings,
+                            )
+
+                elif msg_type == "bomber_detonation":
+                    # Infrastructure damage from bomber detonation near POI
+                    if (self._infrastructure_health is not None
+                            and self._poi_buildings):
+                        pos = data.get("position")
+                        bomb_damage = data.get("damage", 0)
+                        if pos is not None and bomb_damage > 0:
+                            det_pos = (pos.get("x", 0.0), pos.get("y", 0.0))
+                            self._infrastructure_health.apply_bomber_detonation(
+                                position=det_pos,
+                                damage=bomb_damage,
+                                poi_buildings=self._poi_buildings,
+                            )
+
                 elif msg_type == "game_over":
                     # Stop replay recording when game ends
                     self.replay_recorder.stop()
+                    # Evaluate end-of-game bonus objectives
+                    if self._objective_tracker is not None:
+                        infra_hp = 0.0
+                        if self._infrastructure_health is not None:
+                            infra_hp = self._infrastructure_health.get_state().get("health", 0.0)
+                        # Compute total elapsed time from game start
+                        elapsed = 0.0
+                        if hasattr(self.game_mode, '_game_start_time') and self.game_mode._game_start_time > 0:
+                            elapsed = time.time() - self.game_mode._game_start_time
+                        self._objective_tracker.check_all(
+                            elapsed_time=elapsed,
+                            infrastructure_health=infra_hp,
+                        )
 
             except Exception:
                 pass  # timeout or shutdown
@@ -1000,12 +1480,13 @@ class SimulationEngine:
         self,
         name: str | None = None,
         position: tuple[float, float] | None = None,
+        direction: str = "random",
     ) -> SimulationTarget:
         """Create a hostile person target, optionally at a specific position."""
         if position is None:
             # Use closer spawn during wave combat for faster engagement
             combat = self.game_mode.state == "active"
-            position = self._random_edge_position(combat=combat)
+            position = self._random_edge_position(combat=combat, direction=direction)
 
         if name is None:
             base_name = random.choice(_HOSTILE_NAMES)
@@ -1042,6 +1523,8 @@ class SimulationEngine:
         position: tuple[float, float] | None = None,
         speed: float | None = None,
         health: float | None = None,
+        drone_variant: str | None = None,
+        direction: str = "random",
     ) -> SimulationTarget:
         """Create a hostile target of any type (person, hostile_vehicle, hostile_leader).
 
@@ -1050,7 +1533,7 @@ class SimulationEngine:
         """
         if position is None:
             combat = self.game_mode.state == "active"
-            position = self._random_edge_position(combat=combat)
+            position = self._random_edge_position(combat=combat, direction=direction)
 
         # Name generation
         if name is None:
@@ -1083,6 +1566,7 @@ class SimulationEngine:
             position=position,
             speed=target_speed,
             waypoints=waypoints,
+            drone_variant=drone_variant,
         )
         target.apply_combat_profile()
 
@@ -1098,59 +1582,114 @@ class SimulationEngine:
         self.add_target(target)
         return target
 
-    def _random_edge_position(self, combat: bool = False) -> tuple[float, float]:
-        """Return a random position on one of the four map edges.
+    def _random_edge_position(
+        self, combat: bool = False, direction: str = "random",
+    ) -> tuple[float, float]:
+        """Return a random position on the map perimeter.
 
-        When *combat* is True, spawns at 35% of map bounds (~70m on a
-        200m map) so wave hostiles reach engagement range in ~15-20s
-        instead of 60+s from the full edge.
+        When *combat* is True, spawns at 70-95% of map bounds so
+        hostiles use the full city.  The *direction* parameter controls
+        which sector of the perimeter hostiles spawn from:
+
+          - ``"random"`` -- full 360-degree perimeter (default)
+          - ``"north"``/``"south"``/``"east"``/``"west"`` -- 90-degree arc
+          - ``"pincer"`` -- two opposite 90-degree arcs (east + west)
+          - ``"surround"`` -- four 45-degree arcs, one per quadrant
         """
-        frac = 0.35 if combat else 1.0
-        edge_max = self._map_max * frac
-        edge_min = self._map_min * frac
-        edge = random.randint(0, 3)
-        coord = random.uniform(edge_min, edge_max)
-        if edge == 0:  # north
-            return (coord, edge_max)
-        elif edge == 1:  # south
-            return (coord, edge_min)
-        elif edge == 2:  # east
-            return (edge_max, coord)
-        else:  # west
-            return (edge_min, coord)
+        import math
+
+        if not combat:
+            # Non-combat: original 4-edge logic at full bounds
+            edge = random.randint(0, 3)
+            coord = random.uniform(self._map_min, self._map_max)
+            if edge == 0:
+                return (coord, self._map_max)
+            elif edge == 1:
+                return (coord, self._map_min)
+            elif edge == 2:
+                return (self._map_max, coord)
+            else:
+                return (self._map_min, coord)
+
+        # Combat: spawn at 70-95% of bounds so hostiles use full city
+        frac = random.uniform(0.70, 0.95)
+        radius = self._map_max * frac
+
+        # Direction-constrained angle
+        _DIR_ARCS = {
+            "north": (math.pi / 4, 3 * math.pi / 4),
+            "south": (5 * math.pi / 4, 7 * math.pi / 4),
+            "east": (-math.pi / 4, math.pi / 4),
+            "west": (3 * math.pi / 4, 5 * math.pi / 4),
+        }
+
+        if direction in _DIR_ARCS:
+            lo, hi = _DIR_ARCS[direction]
+            angle = random.uniform(lo, hi)
+        elif direction == "pincer":
+            # Two opposite 90-degree arcs (east + west)
+            if random.random() < 0.5:
+                angle = random.uniform(-math.pi / 4, math.pi / 4)
+            else:
+                angle = random.uniform(3 * math.pi / 4, 5 * math.pi / 4)
+        elif direction == "surround":
+            # One 45-degree arc per quadrant, pick a random quadrant
+            quad = random.randint(0, 3)
+            center = quad * math.pi / 2
+            angle = random.uniform(center - math.pi / 8, center + math.pi / 8)
+        else:
+            # "random" or unknown -- full perimeter
+            angle = random.uniform(0, 2 * math.pi)
+
+        x = radius * math.cos(angle)
+        y = radius * math.sin(angle)
+        return (x, y)
+
+    def _compute_poi_buildings(self) -> list[tuple[float, float]]:
+        """Compute POI building positions from friendly stationary units.
+
+        In drone_swarm mode, defended infrastructure is represented by the
+        positions of friendly stationary units (turrets, missile turrets, etc.).
+        If no stationary friendlies exist, falls back to map center (0, 0).
+
+        Returns:
+            List of (x, y) positions for InfrastructureHealth proximity checks.
+        """
+        poi: list[tuple[float, float]] = []
+        with self._lock:
+            for t in self._targets.values():
+                if (t.alliance == "friendly"
+                        and t.status in ("stationary", "active", "idle")
+                        and t.speed == 0):
+                    poi.append(t.position)
+        if not poi:
+            poi.append((0.0, 0.0))
+        return poi
 
     def _generate_hostile_waypoints(
         self, position: tuple[float, float]
     ) -> list[tuple[float, float]]:
         """Generate waypoints for a hostile spawn.
 
-        Uses street graph pathfinding when available, otherwise falls back
-        to legacy jitter-based waypoint generation.
+        Uses route_path() (street graph -> grid A* -> direct) for both the
+        approach to objective and the escape to the map edge.
         """
         objective = (
-            random.uniform(-self._map_bounds * 0.04, self._map_bounds * 0.04),
-            random.uniform(-self._map_bounds * 0.04, self._map_bounds * 0.04),
+            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
+            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
         )
 
-        if self._street_graph is not None:
-            try:
-                from .pathfinding import plan_path
-                path = plan_path(
-                    position, objective, "person",
-                    street_graph=self._street_graph,
-                    obstacles=self._obstacles,
-                    alliance="hostile",
-                )
-                if path and len(path) >= 2:
-                    escape_edge = self._random_edge_position()
-                    return list(path) + [escape_edge]
-            except Exception:
-                pass  # Fall through to legacy
+        # Route from spawn to objective
+        approach = self.route_path(position, objective, "person", "hostile")
 
-        # Legacy waypoints: direct to objective then escape.
-        # Fewer intermediate waypoints = fewer building collisions.
+        # Route from objective to escape edge
         escape_edge = self._random_edge_position()
-        return [objective, escape_edge]
+        escape = self.route_path(objective, escape_edge, "person", "hostile")
+
+        # Combine: approach path + escape path (skip duplicate objective point)
+        if escape and len(escape) > 1:
+            return list(approach) + list(escape)[1:]
+        return list(approach) + [escape_edge]
 
     def _count_active_hostiles(self) -> int:
         """Count hostiles that are still a threat (active, not neutralized/escaped/destroyed)."""

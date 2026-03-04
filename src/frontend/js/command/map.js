@@ -1,0 +1,3567 @@
+// Created by Matthew Valancy
+// Copyright 2026 Valpatel Software LLC
+// Licensed under AGPL-3.0 — see LICENSE for details.
+/**
+ * TRITIUM Command Center -- Tactical Map (Canvas 2D)
+ *
+ * Standalone tactical map renderer for the Command Center layout.
+ * Reads unit data from TritiumStore.units, responds to EventBus events.
+ * Renders to #tactical-canvas (main map) and #minimap-canvas (overview).
+ *
+ * Exports: initMap(), destroyMap()
+ *
+ * Coordinate system:
+ *   Game world: -2500 to +2500 on both axes, 1 unit = 1 meter (5km x 5km)
+ *   Screen Y is inverted: +Y world = up on screen
+ *   Camera: { x, y, zoom, targetX, targetY, targetZoom } with smooth lerp
+ */
+
+import { TritiumStore } from './store.js';
+import { EventBus } from './events.js';
+import { resolveLabels } from './label-collision.js';
+import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator } from './unit-icons.js';
+import { DeviceModalManager } from './device-modal.js';
+
+// ============================================================
+// Constants
+// ============================================================
+
+const MAP_MIN = -2500;
+const MAP_MAX = 2500;
+const MAP_RANGE = MAP_MAX - MAP_MIN; // 5000
+const BG_COLOR = '#060609';
+const GRID_COLOR = 'rgba(0, 240, 255, 0.04)';
+const BOUNDARY_COLOR = 'rgba(0, 240, 255, 0.15)';
+const ZOOM_MIN = 0.02;
+const ZOOM_MAX = 30.0;
+const LERP_SPEED_CAM = 8;
+const LERP_SPEED_ZOOM = 6;
+const FPS_UPDATE_INTERVAL = 500;
+const DISPATCH_ARROW_LIFETIME = 3000; // ms
+const FONT_FAMILY = '"JetBrains Mono", monospace';
+
+// Adaptive grid thresholds: [maxZoom, gridStep]
+const GRID_LEVELS = [
+    [0.1,  500],   // city-scale: 500m grid
+    [0.5,  100],   // neighborhood: 100m grid
+    [2.0,   20],   // tactical: 20m grid
+    [Infinity, 5], // close-up: 5m grid
+];
+
+// Dynamic satellite tile zoom levels: [maxCamZoom, tileZoom, radiusMeters]
+const SAT_TILE_LEVELS = [
+    [0.15, 14, 8000],   // extremely zoomed out
+    [0.5,  15, 3000],   // very zoomed out
+    [2.0,  16, 1200],   // zoomed out
+    [5.0,  17,  500],   // medium
+    [12.0, 18,  250],   // zoomed in
+    [Infinity, 19, 200], // close-up (default view)
+];
+
+const ALLIANCE_COLORS = {
+    friendly: '#05ffa1',
+    hostile:  '#ff2a6d',
+    neutral:  '#00a0ff',
+    unknown:  '#fcee0a',
+};
+
+const FSM_BADGE_COLORS = {
+    idle: '#888888',
+    scanning: '#4a9eff',
+    tracking: '#00f0ff',
+    engaging: '#ff2a6d',
+    cooldown: '#668899',
+    patrolling: '#05ffa1',
+    pursuing: '#ff8800',
+    retreating: '#fcee0a',
+    rtb: '#4a8866',
+    scouting: '#88ddaa',
+    orbiting: '#66ccee',
+    spawning: '#cccccc',
+    advancing: '#22dd66',
+    flanking: '#ff6633',
+    fleeing: '#ffff00',
+};
+
+// ============================================================
+// Module state (private)
+// ============================================================
+
+const _state = {
+    // Canvas elements
+    canvas: null,
+    ctx: null,
+    minimapCanvas: null,
+    minimapCtx: null,
+
+    // Device pixel ratio for HiDPI scaling
+    dpr: 1,
+
+    // Camera (with smooth target)
+    // Initial zoom fits ~200m radius visible (neighborhood view)
+    cam: { x: 0, y: 0, zoom: 15.0, targetX: 0, targetY: 0, targetZoom: 15.0 },
+
+    // Render loop
+    animFrame: null,
+    lastFrameTime: 0,
+    dt: 0.016,
+
+    // FPS tracking
+    frameTimes: [],
+    lastFpsUpdate: 0,
+    currentFps: 0,
+
+    // Mouse state
+    lastMouse: { x: 0, y: 0 },
+    isPanning: false,
+    dragStart: null,
+    hoveredUnit: null,
+
+    // Dispatch mode
+    dispatchMode: false,
+    dispatchUnitId: null,
+
+    // Dispatch arrows (visual feedback, fade over time)
+    dispatchArrows: [], // { fromX, fromY, toX, toY, time }
+
+    // Auto-fit camera (first time units appear)
+    hasAutoFit: false,
+
+    // Satellite tile cache
+    satTiles: [],     // { image, bounds: { minX, maxX, minY, maxY } }
+    geoLoaded: false,
+    showSatellite: false, // toggled with I key
+    geoCenter: null,     // { lat, lng } — cached for dynamic reload
+    satTileLevel: -1,    // current SAT_TILE_LEVELS index (for threshold detection)
+    satReloadTimer: null, // debounce timer for tile reload
+
+    // Road tile overlay
+    roadTiles: [],      // { image, bounds: { minX, maxX, minY, maxY } }
+    showRoads: false,   // toggled with G key (default off)
+    roadTileLevel: -1,
+    roadReloadTimer: null,
+    showGrid: true,     // toggled from menu
+
+    // Overlay data (building outlines + road polylines from OSM)
+    overlayBuildings: [],  // [{ polygon: [[x,y], ...], height }]
+    overlayRoads: [],      // [{ points: [[x,y], ...], class }]
+    showBuildings: true,   // toggled with K key
+
+    // Zones (from escalation)
+    zones: [],
+
+    // Operational bounds cache (for minimap dynamic scaling)
+    opBounds: null,       // { minX, maxX, minY, maxY }
+    opBoundsUnitCount: 0, // unit count when last computed
+
+    // Smooth heading cache
+    smoothHeadings: new Map(),
+
+    // Fog of war
+    fogEnabled: true,
+
+    // Mesh radio overlay
+    showMesh: true,
+
+    // NPC thought bubbles
+    showThoughts: true,
+    _visibleThoughtIds: new Set(),  // unit IDs with visible thought bubbles
+    _maxThoughtBubbles: 5,          // max non-critical visible at once
+
+    // Screen shake tracking
+    _shakeActive: false,
+
+    // Context menu
+    contextMenu: null,
+    contextMenuWorld: null,
+
+    // Cleanup handles
+    unsubs: [],
+    boundHandlers: new Map(),
+    resizeObserver: null,
+    initialized: false,
+};
+
+// ============================================================
+// Coordinate transforms
+// ============================================================
+
+/**
+ * Convert world coordinates to screen (CSS pixel) coordinates.
+ * The canvas ctx has a DPI scale transform applied, so drawing happens
+ * in CSS pixel space — no need to multiply by dpr here.
+ */
+function worldToScreen(wx, wy) {
+    const { cam, canvas, dpr } = _state;
+    // Use CSS pixel dimensions (canvas buffer / dpr)
+    const cssW = canvas.width / dpr;
+    const cssH = canvas.height / dpr;
+    const sx = (wx - cam.x) * cam.zoom + cssW / 2;
+    const sy = -(wy - cam.y) * cam.zoom + cssH / 2;
+    return { x: sx, y: sy };
+}
+
+/**
+ * Convert screen (CSS pixel) coordinates to world coordinates.
+ */
+function screenToWorld(sx, sy) {
+    const { cam, canvas, dpr } = _state;
+    const cssW = canvas.width / dpr;
+    const cssH = canvas.height / dpr;
+    const wx = (sx - cssW / 2) / cam.zoom + cam.x;
+    const wy = -((sy - cssH / 2) / cam.zoom) + cam.y;
+    return { x: wx, y: wy };
+}
+
+// ============================================================
+// Lerp utility
+// ============================================================
+
+/**
+ * Smooth exponential approach: current toward target at a given speed.
+ * Frame-rate independent via dt.
+ */
+function fadeToward(current, target, speed, dt) {
+    const t = 1 - Math.exp(-speed * dt);
+    return current + (target - current) * t;
+}
+
+/**
+ * Shortest-arc angle lerp (degrees).
+ */
+function lerpAngle(from, to, speed, dt) {
+    let diff = to - from;
+    // Normalize to [-180, 180]
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+    const t = 1 - Math.exp(-speed * dt);
+    return from + diff * t;
+}
+
+// ============================================================
+// Init / Destroy
+// ============================================================
+
+/**
+ * Initialize the tactical map renderer.
+ * Call once after the DOM is ready.
+ */
+export function initMap() {
+    if (_state.initialized) return;
+
+    _state.canvas = document.getElementById('tactical-canvas');
+    _state.minimapCanvas = document.getElementById('minimap-canvas');
+    if (!_state.canvas) {
+        console.error('[MAP] #tactical-canvas not found');
+        return;
+    }
+
+    _state.ctx = _state.canvas.getContext('2d');
+    if (_state.minimapCanvas) {
+        _state.minimapCtx = _state.minimapCanvas.getContext('2d');
+    }
+
+    // Sync camera to store
+    const vp = TritiumStore.get('map.viewport');
+    if (vp) {
+        _state.cam.x = vp.x || 0;
+        _state.cam.y = vp.y || 0;
+        _state.cam.zoom = vp.zoom || 1.0;
+        _state.cam.targetX = _state.cam.x;
+        _state.cam.targetY = _state.cam.y;
+        _state.cam.targetZoom = _state.cam.zoom;
+    }
+
+    // Initial resize
+    _resizeCanvas();
+
+    // ResizeObserver on parent for auto-resize
+    const parent = _state.canvas.parentElement;
+    if (parent && typeof ResizeObserver !== 'undefined') {
+        _state.resizeObserver = new ResizeObserver(() => _resizeCanvas());
+        _state.resizeObserver.observe(parent);
+    }
+
+    // Bind input events
+    _bindCanvasEvents();
+    _bindMinimapEvents();
+
+    // Subscribe to EventBus
+    _state.unsubs.push(
+        EventBus.on('units:updated', _onUnitsUpdated),
+        EventBus.on('map:mode', _onMapMode),
+        EventBus.on('unit:dispatch-mode', _onDispatchMode),
+        EventBus.on('unit:dispatched', _onDispatched),
+        EventBus.on('mesh:center-on-node', _onMeshCenterOnNode),
+        EventBus.on('minimap:pan', _onMinimapPan),
+        EventBus.on('map:flyToMission', _onPanToMission),
+        EventBus.on('device:open-modal', _onDeviceOpenModal),
+    );
+
+    // Subscribe to store for selectedUnitId changes (highlight sync)
+    _state.unsubs.push(
+        TritiumStore.on('map.selectedUnitId', _onSelectedUnitChanged),
+    );
+
+    // Start/stop hostile objective polling when game state changes
+    _state.unsubs.push(
+        TritiumStore.on('game.phase', (phase) => {
+            if (phase === 'active') _startHostileObjectivePoll();
+            else _stopHostileObjectivePoll();
+        }),
+    );
+
+    // Load geo reference + satellite tiles
+    _loadGeoReference();
+
+    // Fetch initial zones
+    _fetchZones();
+
+    // Start render loop
+    _state.lastFrameTime = performance.now();
+    _renderLoop();
+
+    _state.initialized = true;
+    console.log('%c[MAP] Tactical map initialized', 'color: #00f0ff; font-weight: bold;');
+}
+
+/**
+ * Tear down the map renderer and release all resources.
+ */
+export function destroyMap() {
+    // Stop render loop
+    if (_state.animFrame) {
+        cancelAnimationFrame(_state.animFrame);
+        _state.animFrame = null;
+    }
+
+    // Unsubscribe events
+    for (const unsub of _state.unsubs) unsub();
+    _state.unsubs.length = 0;
+
+    // Unbind DOM events
+    _unbindCanvasEvents();
+    _unbindMinimapEvents();
+
+    // Stop hostile objective polling
+    _stopHostileObjectivePoll();
+
+    // Stop ResizeObserver
+    if (_state.resizeObserver) {
+        _state.resizeObserver.disconnect();
+        _state.resizeObserver = null;
+    }
+
+    _state.initialized = false;
+    console.log('%c[MAP] Tactical map destroyed', 'color: #ff2a6d;');
+}
+
+// ============================================================
+// Canvas resize
+// ============================================================
+
+function _resizeCanvas() {
+    const canvas = _state.canvas;
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    if (!parent) return;
+    const dpr = window.devicePixelRatio || 1;
+    _state.dpr = dpr;
+    const w = parent.clientWidth;
+    const h = parent.clientHeight;
+    const bufW = Math.round(w * dpr);
+    const bufH = Math.round(h * dpr);
+    if (canvas.width !== bufW || canvas.height !== bufH) {
+        canvas.width = bufW;
+        canvas.height = bufH;
+        // CSS size matches parent (layout pixels)
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+    }
+    // Apply DPI scale transform so all drawing is in CSS pixel space
+    const ctx = _state.ctx;
+    if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+}
+
+// ============================================================
+// Render loop
+// ============================================================
+
+function _renderLoop() {
+    _update();
+    _draw();
+    _drawMinimap();
+    _updateFps();
+    _state.animFrame = requestAnimationFrame(_renderLoop);
+}
+
+// ============================================================
+// Update (camera lerp, prune arrows)
+// ============================================================
+
+function _update() {
+    const now = performance.now();
+    const dt = Math.min((now - _state.lastFrameTime) / 1000, 0.05);
+    _state.lastFrameTime = now;
+    _state.dt = dt;
+
+    // Camera lerp
+    const cam = _state.cam;
+    cam.x = fadeToward(cam.x, cam.targetX, LERP_SPEED_CAM, dt);
+    cam.y = fadeToward(cam.y, cam.targetY, LERP_SPEED_CAM, dt);
+    cam.zoom = fadeToward(cam.zoom, cam.targetZoom, LERP_SPEED_ZOOM, dt);
+
+    // Edge scrolling
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+    const mx = _state.lastMouse.x;
+    const my = _state.lastMouse.y;
+    const edgeW = 20;
+    const edgeSpeed = 15 * dt / Math.max(cam.zoom, 0.3);
+    if (mx < edgeW && mx > 0) cam.targetX -= edgeSpeed;
+    if (mx > cssW - edgeW && mx < cssW) cam.targetX += edgeSpeed;
+    if (my < edgeW && my > 0) cam.targetY += edgeSpeed;
+    if (my > cssH - edgeW && my < cssH) cam.targetY -= edgeSpeed;
+
+    // Sync to store
+    TritiumStore.map.viewport.x = cam.x;
+    TritiumStore.map.viewport.y = cam.y;
+    TritiumStore.map.viewport.zoom = cam.zoom;
+
+    // Prune expired dispatch arrows
+    const cutoff = Date.now() - DISPATCH_ARROW_LIFETIME;
+    _state.dispatchArrows = _state.dispatchArrows.filter(a => a.time > cutoff);
+
+    // Update combat systems (feature-detected from war-combat.js)
+    if (typeof warCombatUpdateProjectiles === 'function') {
+        warCombatUpdateProjectiles(dt);
+    }
+    if (typeof warCombatUpdateEffects === 'function') {
+        warCombatUpdateEffects(dt);
+    }
+
+    // Dynamic satellite tile reload on zoom threshold change
+    _checkSatelliteTileReload();
+
+    // Dynamic road tile reload
+    _checkRoadTileReload();
+}
+
+// ============================================================
+// Main draw
+// ============================================================
+
+function _draw() {
+    const { ctx, canvas, dpr } = _state;
+    if (!ctx || !canvas || canvas.width === 0 || canvas.height === 0) return;
+
+    // CSS pixel dimensions (drawing space after DPI transform)
+    const cssW = canvas.width / dpr;
+    const cssH = canvas.height / dpr;
+
+    // Clear (in CSS pixel space since transform is applied)
+    ctx.fillStyle = BG_COLOR;
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    // Apply screen shake offset (from war-combat.js elimination effects)
+    if (typeof warCombatGetScreenShake === 'function') {
+        const shake = warCombatGetScreenShake();
+        if (shake.x !== 0 || shake.y !== 0) {
+            ctx.save();
+            ctx.translate(shake.x, shake.y);
+            _state._shakeActive = true;
+        } else {
+            _state._shakeActive = false;
+        }
+    }
+
+    // Layer 1: Satellite tiles (under everything, 70% opacity)
+    if (_state.showSatellite) {
+        _drawSatelliteTiles(ctx);
+    }
+
+    // Layer 1.5: Road overlay (transparent tiles on top of satellite)
+    if (_state.showRoads) {
+        _drawRoadTiles(ctx);
+    }
+
+    // Layer 1.7: Building outlines (OSM building footprints)
+    if (_state.showBuildings) {
+        _drawBuildingOutlines(ctx);
+    }
+
+    // Layer 1.8: Road polylines (OSM street graph)
+    if (_state.showRoads && _state.overlayRoads.length > 0) {
+        _drawRoadPolylines(ctx);
+    }
+
+    // Layer 2: Grid (adaptive spacing based on zoom)
+    if (_state.showGrid) _drawGrid(ctx);
+
+    // Layer 3: Map boundary
+    _drawMapBoundary(ctx);
+
+    // Layer 4: Zones
+    _drawZones(ctx);
+
+    // Layer 4.3: Environmental hazards (fire, flood, roadblock)
+    _drawHazards(ctx);
+
+    // Layer 4.4: Crowd density heatmap (civil_unrest mode only)
+    _drawCrowdDensity(ctx);
+
+    // Layer 4.45: Cover points (translucent shield markers)
+    _drawCoverPoints(ctx);
+
+    // Layer 4.5: Fog of war (darkens areas far from friendly units)
+    if (typeof fogDraw === 'function' && _state.fogEnabled) {
+        const fogTargets = _buildTargetsObject();
+        // fogDraw expects raw canvas dimensions, but our ctx has a DPI transform
+        // Create a wrapper canvas object with CSS pixel dims for fogDraw
+        const fogCanvas = { width: cssW, height: cssH };
+        fogDraw(ctx, fogCanvas, worldToScreen, fogTargets, _state.cam, TritiumStore.get('map.mode'));
+    }
+
+    // Layer 4.7: Mesh radio overlay (protocol-specific icons + dotted links)
+    if (typeof meshDrawNodes === 'function' && _state.showMesh) {
+        const meshTargets = _buildMeshTargets();
+        meshDrawNodes(ctx, worldToScreen, meshTargets, _state.showMesh);
+    }
+
+    // Layer 5: Targets (shapes only — labels handled separately)
+    _drawTargets(ctx);
+
+    // Layer 5.05: Squad formation lines (thin lines connecting squad members)
+    _drawSquadLines(ctx);
+
+    // Layer 5.1: Unit labels (collision-resolved)
+    _drawLabels(ctx);
+
+    // Layer 5.15: NPC thought bubbles
+    if (_state.showThoughts) _drawThoughtBubbles(ctx);
+
+    // Layer 5.2: Hovered unit tooltip
+    _drawTooltip(ctx);
+
+    // Layer 5.5: FOV cones (if war-fx.js loaded)
+    if (typeof warFxDrawVisionCones === 'function') {
+        const targetsObj = _buildTargetsObject();
+        warFxDrawVisionCones(ctx, worldToScreen, targetsObj, _state.cam.zoom);
+    }
+
+    // Layer 6: Combat projectiles (feature-detected from war-combat.js)
+    if (typeof warCombatDrawProjectiles === 'function') {
+        warCombatDrawProjectiles(ctx, worldToScreen);
+    }
+
+    // Layer 7: Combat effects (particles, rings, screen flash)
+    if (typeof warCombatDrawEffects === 'function') {
+        warCombatDrawEffects(ctx, worldToScreen, cssW, cssH);
+    }
+
+    // Layer 7.5: Trails
+    const targetsObj = _buildTargetsObject();
+    if (typeof warFxUpdateTrails === 'function') warFxUpdateTrails(targetsObj, _state.dt);
+    if (typeof warFxDrawTrails === 'function') warFxDrawTrails(ctx, worldToScreen);
+
+    // Layer 8: Selection indicator
+    _drawSelectionIndicator(ctx);
+
+    // Layer 9: Dispatch arrows
+    _drawDispatchArrows(ctx);
+
+    // Undo screen shake translate before fixed HUD elements
+    if (_state._shakeActive) {
+        ctx.restore();
+        _state._shakeActive = false;
+    }
+
+    // Layer 9.5: Canvas HUD overlays (fixed-position, above world)
+    if (typeof warHudDrawCanvasCountdown === 'function') {
+        warHudDrawCanvasCountdown(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawFriendlyHealthBars === 'function') {
+        warHudDrawFriendlyHealthBars(ctx, worldToScreen, _state.cam.zoom);
+    }
+    if (typeof warHudDrawModeHud === 'function') {
+        warHudDrawModeHud(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawBonusObjectives === 'function') {
+        warHudDrawBonusObjectives(ctx, cssW, cssH);
+    }
+    if (typeof warHudDrawHostileIntel === 'function') {
+        const intel = TritiumStore.get('game.hostileIntel');
+        warHudDrawHostileIntel(ctx, cssW, cssH, intel);
+    }
+
+    // Layer 9.6: Hostile objective lines (dashed lines from hostiles to targets)
+    _drawHostileObjectives(ctx);
+
+    // Layer 9.7: Unit communication signals (distress/contact/regroup rings)
+    _drawUnitSignals(ctx);
+
+    // Layer 10: Scanlines
+    if (typeof warFxDrawScanlines === 'function') warFxDrawScanlines(ctx, cssW, cssH);
+
+    // Layer 10.5: Scale bar
+    _drawScaleBar(ctx);
+
+    // Layer 11: "NO LOCATION SET" fallback overlay
+    if (_state.noLocationSet && !_state.geoCenter) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.15)';
+        ctx.font = '24px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('NO LOCATION SET', cssW / 2, cssH / 2 - 16);
+        ctx.font = '13px "JetBrains Mono", monospace';
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.10)';
+        ctx.fillText('Set MAP_CENTER_LAT / MAP_CENTER_LNG or use /api/geo/reference', cssW / 2, cssH / 2 + 14);
+        ctx.restore();
+    }
+
+    // Update mouse coords display
+    _updateCoordsDisplay();
+}
+
+// ============================================================
+// Build targets object for war-fx.js integration
+// ============================================================
+
+/**
+ * Convert TritiumStore.units Map to a plain object keyed by ID,
+ * in the format war-fx.js expects (t.x, t.y, t.position.x, t.position.y).
+ */
+function _buildTargetsObject() {
+    const obj = {};
+    for (const [id, unit] of TritiumStore.units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined) continue;
+        obj[id] = {
+            x: pos.x,
+            y: pos.y,
+            position: { x: pos.x, y: pos.y },
+            asset_type: unit.type || '',
+            alliance: unit.alliance || 'unknown',
+            heading: unit.heading,
+            status: unit.status || 'active',
+            weapon_range: unit.weapon_range,
+            weapon_cooldown: unit.weapon_cooldown,
+            fov_angle: unit.fov_angle,
+            fov_range: unit.fov_range,
+        };
+    }
+    return obj;
+}
+
+/**
+ * Build array of mesh_radio targets for the mesh draw layer.
+ * Filters TritiumStore.units to only mesh_radio asset types.
+ */
+function _buildMeshTargets() {
+    const result = [];
+    for (const [id, unit] of TritiumStore.units) {
+        if ((unit.type || unit.asset_type) !== 'mesh_radio') continue;
+        const pos = unit.position;
+        if (!pos || pos.x === undefined) continue;
+        result.push({
+            target_id: id,
+            x: pos.x,
+            y: pos.y,
+            asset_type: 'mesh_radio',
+            metadata: unit.metadata || {},
+        });
+    }
+    return result;
+}
+
+// ============================================================
+// Layer 1: Satellite tiles
+// ============================================================
+
+function _drawSatelliteTiles(ctx) {
+    const tiles = _state.satTiles;
+    if (!tiles || tiles.length === 0) return;
+
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+    ctx.globalAlpha = 1.0;
+
+    for (const tile of tiles) {
+        const b = tile.bounds;
+        const tl = worldToScreen(b.minX, b.maxY); // NW corner
+        const br = worldToScreen(b.maxX, b.minY); // SE corner
+        const sw = br.x - tl.x;
+        const sh = br.y - tl.y;
+
+        if (sw < 1 || sh < 1) continue;
+        // Cull off-screen tiles (CSS pixel space)
+        if (br.x < 0 || tl.x > cssW) continue;
+        if (br.y < 0 || tl.y > cssH) continue;
+
+        ctx.drawImage(tile.image, tl.x, tl.y, sw, sh);
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 1.7: Building outlines (OSM footprints from overlay API)
+// ============================================================
+
+function _drawBuildingOutlines(ctx) {
+    const buildings = _state.overlayBuildings;
+    if (!buildings || buildings.length === 0) return;
+
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+    ctx.fillStyle = 'rgba(0, 240, 255, 0.06)';
+    ctx.lineWidth = 1;
+
+    for (const bldg of buildings) {
+        const poly = bldg.polygon;
+        if (!poly || poly.length < 3) continue;
+
+        // Quick bounds check: skip if all points are off-screen
+        const first = worldToScreen(poly[0][0], poly[0][1]);
+        let minSx = first.x, maxSx = first.x, minSy = first.y, maxSy = first.y;
+        for (let i = 1; i < poly.length; i++) {
+            const sp = worldToScreen(poly[i][0], poly[i][1]);
+            if (sp.x < minSx) minSx = sp.x;
+            if (sp.x > maxSx) maxSx = sp.x;
+            if (sp.y < minSy) minSy = sp.y;
+            if (sp.y > maxSy) maxSy = sp.y;
+        }
+        if (maxSx < 0 || minSx > cssW || maxSy < 0 || minSy > cssH) continue;
+
+        // Draw polygon
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < poly.length; i++) {
+            const sp = worldToScreen(poly[i][0], poly[i][1]);
+            ctx.lineTo(sp.x, sp.y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 1.8: Road polylines (OSM street graph from overlay API)
+// ============================================================
+
+const _ROAD_STYLES = {
+    motorway:    { color: 'rgba(255, 200, 50, 0.5)',  width: 3 },
+    trunk:       { color: 'rgba(255, 200, 50, 0.4)',  width: 2.5 },
+    primary:     { color: 'rgba(255, 180, 50, 0.35)', width: 2 },
+    secondary:   { color: 'rgba(200, 200, 100, 0.3)', width: 1.5 },
+    tertiary:    { color: 'rgba(180, 180, 120, 0.25)',width: 1.2 },
+    residential: { color: 'rgba(150, 150, 150, 0.2)', width: 1 },
+    service:     { color: 'rgba(120, 120, 120, 0.15)',width: 0.8 },
+};
+
+function _drawRoadPolylines(ctx) {
+    const roads = _state.overlayRoads;
+    if (!roads || roads.length === 0) return;
+
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const road of roads) {
+        const pts = road.points;
+        if (!pts || pts.length < 2) continue;
+
+        // Quick cull
+        const s0 = worldToScreen(pts[0][0], pts[0][1]);
+        const s1 = worldToScreen(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+        if (s0.x < -50 && s1.x < -50) continue;
+        if (s0.x > cssW + 50 && s1.x > cssW + 50) continue;
+        if (s0.y < -50 && s1.y < -50) continue;
+        if (s0.y > cssH + 50 && s1.y > cssH + 50) continue;
+
+        const style = _ROAD_STYLES[road.class] || _ROAD_STYLES.residential;
+        ctx.strokeStyle = style.color;
+        ctx.lineWidth = style.width;
+
+        ctx.beginPath();
+        ctx.moveTo(s0.x, s0.y);
+        for (let i = 1; i < pts.length; i++) {
+            const sp = worldToScreen(pts[i][0], pts[i][1]);
+            ctx.lineTo(sp.x, sp.y);
+        }
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 2: Adaptive grid (spacing depends on zoom level)
+// ============================================================
+
+function _drawGrid(ctx) {
+    const zoom = _state.cam.zoom;
+
+    // Pick grid step based on zoom level
+    let gridStep = 5;
+    for (const [maxZoom, step] of GRID_LEVELS) {
+        if (zoom < maxZoom) {
+            gridStep = step;
+            break;
+        }
+    }
+
+    // Only draw lines visible on screen (avoid drawing thousands of lines)
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+    const topLeft = screenToWorld(0, 0);
+    const bottomRight = screenToWorld(cssW, cssH);
+    const visMinX = Math.max(MAP_MIN, Math.floor(topLeft.x / gridStep) * gridStep - gridStep);
+    const visMaxX = Math.min(MAP_MAX, Math.ceil(bottomRight.x / gridStep) * gridStep + gridStep);
+    const visMinY = Math.max(MAP_MIN, Math.floor(bottomRight.y / gridStep) * gridStep - gridStep);
+    const visMaxY = Math.min(MAP_MAX, Math.ceil(topLeft.y / gridStep) * gridStep + gridStep);
+
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.lineWidth = 1;
+
+    // Vertical lines
+    for (let wx = visMinX; wx <= visMaxX; wx += gridStep) {
+        const p1 = worldToScreen(wx, visMinY);
+        const p2 = worldToScreen(wx, visMaxY);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+    }
+
+    // Horizontal lines
+    for (let wy = visMinY; wy <= visMaxY; wy += gridStep) {
+        const p1 = worldToScreen(visMinX, wy);
+        const p2 = worldToScreen(visMaxX, wy);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+    }
+
+    // Grid scale label (bottom-left corner)
+    if (zoom > 0.04) {
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.2)';
+        ctx.font = `10px ${FONT_FAMILY}`;
+        ctx.textAlign = 'left';
+        ctx.fillText(`${gridStep}m grid`, 8, cssH - 8);
+    }
+}
+
+// ============================================================
+// Layer 3: Map boundary
+// ============================================================
+
+function _drawMapBoundary(ctx) {
+    const tl = worldToScreen(MAP_MIN, MAP_MAX);
+    const br = worldToScreen(MAP_MAX, MAP_MIN);
+    const w = br.x - tl.x;
+    const h = br.y - tl.y;
+
+    ctx.strokeStyle = BOUNDARY_COLOR;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(tl.x, tl.y, w, h);
+}
+
+// ============================================================
+// Layer 4: Zones
+// ============================================================
+
+function _drawZones(ctx) {
+    for (const zone of _state.zones) {
+        const pos = zone.position || {};
+        const wx = pos.x || 0;
+        const wy = pos.z !== undefined ? pos.z : (pos.y || 0);
+        const radius = (zone.properties && zone.properties.radius) || 10;
+        const sp = worldToScreen(wx, wy);
+        const sr = radius * _state.cam.zoom;
+        const isRestricted = (zone.type || '').includes('restricted');
+        const fillColor = isRestricted ? 'rgba(255, 42, 109, 0.12)' : 'rgba(0, 240, 255, 0.06)';
+        const borderColor = isRestricted ? 'rgba(255, 42, 109, 0.35)' : 'rgba(0, 240, 255, 0.18)';
+
+        // Fill
+        ctx.fillStyle = fillColor;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Border
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = isRestricted ? 2 : 1;
+        if (!isRestricted) ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!isRestricted) ctx.setLineDash([]);
+
+        // Label
+        const name = zone.name || zone.type || '';
+        if (name && _state.cam.zoom > 0.15) {
+            ctx.fillStyle = isRestricted ? 'rgba(255, 42, 109, 0.5)' : 'rgba(0, 240, 255, 0.3)';
+            ctx.font = `${Math.max(8, 10 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(name.toUpperCase(), sp.x, sp.y + sr + 14);
+        }
+    }
+}
+
+// ============================================================
+// Layer 4.3: Environmental Hazards
+// ============================================================
+
+function _drawHazards(ctx) {
+    const hazards = TritiumStore.get('hazards');
+    if (!hazards || !(hazards instanceof Map) || hazards.size === 0) return;
+
+    const now = Date.now();
+
+    for (const [id, h] of hazards) {
+        const pos = h.position;
+        if (!pos) continue;
+        // Accept both {x, y} objects and [x, y] arrays
+        const px = Array.isArray(pos) ? pos[0] : (pos.x !== undefined ? pos.x : undefined);
+        const py = Array.isArray(pos) ? pos[1] : (pos.y !== undefined ? pos.y : undefined);
+        if (px === undefined || py === undefined) continue;
+
+        // Calculate remaining time fraction (1.0 = just spawned, 0.0 = expired)
+        const totalMs = (h.duration || 60) * 1000;
+        const elapsed = now - (h.spawned_at || now);
+        const remaining = Math.max(0, Math.min(1, 1 - elapsed / totalMs));
+        if (remaining <= 0) continue; // fully expired, skip
+
+        // World to screen transform
+        const sp = worldToScreen(px, py);
+        const sr = (h.radius || 10) * _state.cam.zoom;
+
+        // Color per hazard type
+        let color;
+        switch (h.hazard_type) {
+            case 'fire':      color = '#ff4400'; break;
+            case 'flood':     color = '#0088ff'; break;
+            case 'roadblock': color = '#ffcc00'; break;
+            default:          color = '#ffffff'; break;
+        }
+
+        // Base opacity fades with remaining time
+        const baseAlpha = h.hazard_type === undefined ? 0.20 : 0.30;
+        const fillAlpha = baseAlpha * remaining;
+
+        // Filled circle
+        ctx.save();
+        ctx.globalAlpha = fillAlpha;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pulsing neon border ring
+        const pulse = 0.55 + 0.15 * Math.sin(now / 400);
+        ctx.globalAlpha = pulse * remaining;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, sr, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Label centered on circle
+        if (_state.cam.zoom > 0.15) {
+            const label = (h.hazard_type || 'HAZARD').toUpperCase();
+            ctx.globalAlpha = 0.7 * remaining;
+            ctx.fillStyle = color;
+            ctx.font = `${Math.max(8, 10 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(label, sp.x, sp.y + 4);
+        }
+
+        ctx.restore();
+    }
+}
+
+// ============================================================
+// Layer 9.6: Hostile Objective Lines (active game only)
+// ============================================================
+
+/**
+ * Draw dashed lines from hostile units to their assigned objective targets.
+ * Only renders when the game is active. Reads objective data from
+ * TritiumStore 'game.hostileObjectives' (polled from /api/game/hostile-intel).
+ *
+ * Color per objective type:
+ *   assault -> #ff2a6d (red/magenta)
+ *   flank   -> #ff8800 (orange)
+ *   advance -> #fcee0a (yellow)
+ *   retreat -> #888888 (grey)
+ */
+
+/**
+ * Draw unit communication signal rings on the map.
+ * Signals fade out as they age toward their TTL.
+ * Colors: distress=red, contact=orange, regroup=cyan, retreat=grey.
+ */
+function _drawUnitSignals(ctx) {
+    let signals = TritiumStore.get('game.signals');
+    if (!Array.isArray(signals) || signals.length === 0) return;
+
+    const now = Date.now();
+    // Remove expired signals and update store
+    signals = signals.filter(s => now - s.received_at < (s.ttl || 10) * 1000);
+    TritiumStore.set('game.signals', signals);
+
+    if (signals.length === 0) return;
+
+    const SIGNAL_COLORS = {
+        distress: '#ff2a6d',
+        contact: '#ff8800',
+        regroup: '#00f0ff',
+        retreat: '#888888',
+        instigator_marked: '#ff2a6d',
+        emp_jamming: '#fcee0a',
+    };
+
+    ctx.save();
+    for (const sig of signals) {
+        const pos = sig.position;
+        if (!pos) continue;
+        const px = Array.isArray(pos) ? pos[0] : pos.x;
+        const py = Array.isArray(pos) ? pos[1] : pos.y;
+        if (px === undefined || py === undefined) continue;
+
+        const sp = worldToScreen(px, py);
+        const color = SIGNAL_COLORS[sig.signal_type] || '#ffffff';
+        const elapsed = (now - sig.received_at) / 1000;
+        const ttl = sig.ttl || 10;
+        const frac = Math.max(0, 1 - elapsed / ttl);
+
+        // Expanding ring effect
+        const expansion = 1 - frac;  // 0 -> 1 as signal ages
+        const radiusWorld = (sig.signal_range || 50) * expansion;
+        const radiusPx = radiusWorld * (_state.cam.zoom / 100) * (_state.canvas.width / _state.dpr / 800);
+
+        if (radiusPx < 2) continue;
+
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = frac * 0.6;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label at center
+        if (frac > 0.3) {
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = color;
+            ctx.globalAlpha = frac * 0.8;
+            ctx.fillText(sig.signal_type.toUpperCase(), sp.x, sp.y - radiusPx - 6);
+        }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+}
+function _drawHostileObjectives(ctx) {
+    const phase = TritiumStore.get('game.phase');
+    if (phase !== 'active') return;
+
+    const objectives = TritiumStore.get('game.hostileObjectives');
+    if (!objectives || typeof objectives !== 'object') return;
+
+    const units = TritiumStore.units;
+
+    ctx.save();
+
+    for (const [uid, obj] of Object.entries(objectives)) {
+        // Look up unit position from store
+        const unit = units.get(uid);
+        if (!unit || !unit.position) continue;
+
+        // Validate target_position
+        const tp = obj.target_position;
+        if (!tp || !Array.isArray(tp) || tp.length < 2) continue;
+
+        // Color per objective type
+        let color;
+        switch (obj.type) {
+            case 'assault': color = '#ff2a6d'; break;
+            case 'flank':   color = '#ff8800'; break;
+            case 'advance': color = '#fcee0a'; break;
+            case 'retreat': color = '#888888'; break;
+            default:        color = '#ff2a6d'; break;
+        }
+
+        const from = worldToScreen(unit.position.x, unit.position.y);
+        const to = worldToScreen(tp[0], tp[1]);
+
+        // Dashed line at ~30% opacity
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Small arrowhead at target end
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const headLen = 8;
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(to.x, to.y);
+        ctx.lineTo(to.x - headLen * Math.cos(angle - 0.4), to.y - headLen * Math.sin(angle - 0.4));
+        ctx.lineTo(to.x - headLen * Math.cos(angle + 0.4), to.y - headLen * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+
+// ============================================================
+// Hostile Objective Polling (5s interval during active game)
+// ============================================================
+
+let _hostileObjPollTimer = null;
+
+/**
+ * Start polling /api/game/hostile-intel every 5 seconds.
+ * Stores the objectives in TritiumStore 'game.hostileObjectives'.
+ */
+function _startHostileObjectivePoll() {
+    if (_hostileObjPollTimer) return; // already running
+    _hostileObjPollTimer = setInterval(async () => {
+        const phase = TritiumStore.get('game.phase');
+        if (phase !== 'active') {
+            _stopHostileObjectivePoll();
+            return;
+        }
+        try {
+            const resp = await fetch('/api/game/hostile-intel');
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.objectives) {
+                    TritiumStore.set('game.hostileObjectives', data.objectives);
+                }
+            }
+        } catch (e) {
+            // Silently ignore fetch errors (server may be down)
+        }
+    }, 5000);
+}
+
+function _stopHostileObjectivePoll() {
+    if (_hostileObjPollTimer) {
+        clearInterval(_hostileObjPollTimer);
+        _hostileObjPollTimer = null;
+    }
+    TritiumStore.set('game.hostileObjectives', null);
+}
+
+
+// ============================================================
+// Layer 4.4: Crowd Density Heatmap (civil_unrest mode only)
+// ============================================================
+
+/**
+ * Draw a crowd density heatmap overlay on the tactical map.
+ * Only active when game_mode_type is 'civil_unrest'.
+ *
+ * Reads grid data from TritiumStore 'game.crowdDensity':
+ *   { grid: [[str,...]], cell_size, bounds: [xMin,yMin,xMax,yMax],
+ *     max_density, critical_count }
+ *
+ * Density levels:
+ *   sparse   -> invisible (skip)
+ *   moderate -> pale yellow at ~20% opacity
+ *   dense    -> orange at ~40% opacity
+ *   critical -> pulsing red at ~60% opacity (sin-wave pulse)
+ */
+function _drawCrowdDensity(ctx) {
+    // Gate: only render in civil_unrest mode
+    const modeType = TritiumStore.get('game.modeType');
+    if (modeType !== 'civil_unrest') return;
+
+    const data = TritiumStore.get('game.crowdDensity');
+    if (!data || !data.grid) return;
+
+    const grid = data.grid;
+    if (!Array.isArray(grid) || grid.length === 0) return;
+
+    const cellSize = data.cell_size || 10;
+    const bounds = data.bounds || [0, 0, 0, 0];
+    const xMin = bounds[0];
+    const yMin = bounds[1];
+
+    const now = performance.now();
+    const vpW = _state.canvas.width / _state.dpr;
+    const vpH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+
+    // Draw each grid cell
+    for (let row = 0; row < grid.length; row++) {
+        const cols = grid[row];
+        if (!Array.isArray(cols)) continue;
+        for (let col = 0; col < cols.length; col++) {
+            const level = cols[col];
+
+            // Sparse cells are invisible -- skip
+            if (level === 'sparse' || !level) continue;
+
+            // World coordinates for this cell (bottom-left corner)
+            const wx = xMin + col * cellSize;
+            const wy = yMin + row * cellSize;
+
+            // Convert cell corners to screen space
+            const topLeft = worldToScreen(wx, wy + cellSize);
+            const bottomRight = worldToScreen(wx + cellSize, wy);
+            const sw = bottomRight.x - topLeft.x;
+            const sh = bottomRight.y - topLeft.y;
+
+            // Skip cells outside viewport
+            if (bottomRight.x < 0 || topLeft.x > vpW) continue;
+            if (bottomRight.y < 0 || topLeft.y > vpH) continue;
+
+            // Set color and opacity based on density level
+            switch (level) {
+                case 'moderate':
+                    ctx.fillStyle = 'rgba(252, 238, 10, 0.20)';
+                    ctx.globalAlpha = 1;
+                    break;
+                case 'dense':
+                    ctx.fillStyle = 'rgba(255, 140, 0, 0.40)';
+                    ctx.globalAlpha = 1;
+                    break;
+                case 'critical': {
+                    // Pulsing red: sin-wave oscillates alpha between 0.4 and 0.7
+                    const pulse = 0.55 + 0.15 * Math.sin(now / 300);
+                    ctx.fillStyle = 'rgba(255, 42, 50, 0.60)';
+                    ctx.globalAlpha = pulse;
+                    break;
+                }
+                default:
+                    continue;
+            }
+
+            ctx.fillRect(topLeft.x, topLeft.y, sw, sh);
+        }
+    }
+
+    ctx.restore();
+
+    // HUD pill: show max_density and critical_count in top-right area
+    const maxDensity = data.max_density || '';
+    const criticalCount = data.critical_count || 0;
+    if (maxDensity) {
+        ctx.save();
+        const cssW = _state.canvas.width / _state.dpr;
+        const label = `CROWD: ${maxDensity.toUpperCase()}`;
+        const countLabel = criticalCount > 0 ? `  ${criticalCount} CRITICAL` : '';
+        const fullText = label + countLabel;
+
+        ctx.font = `11px ${FONT_FAMILY}`;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+
+        // Background pill
+        const textWidth = ctx.measureText(fullText).width;
+        const pillX = cssW - 12 - textWidth - 10;
+        const pillY = 54;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(pillX, pillY, textWidth + 20, 20);
+
+        // Density-colored border accent
+        let accentColor = '#05ffa1';
+        if (maxDensity === 'critical') accentColor = '#ff2a6d';
+        else if (maxDensity === 'dense') accentColor = '#ff8800';
+        else if (maxDensity === 'moderate') accentColor = '#fcee0a';
+
+        ctx.fillStyle = accentColor;
+        ctx.fillRect(pillX, pillY, 3, 20);
+
+        // Text
+        ctx.fillStyle = '#cccccc';
+        ctx.fillText(fullText, cssW - 12, pillY + 4);
+
+        ctx.restore();
+    }
+}
+
+// ============================================================
+// Layer 5: Targets
+// ============================================================
+
+function _drawTargets(ctx) {
+    const units = TritiumStore.units;
+    const fogEnabled = _state.fogEnabled;
+    for (const [id, unit] of units) {
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        // Fog of war: hide hostile/unknown units not seen by any friendly
+        if (fogEnabled && alliance === 'hostile') {
+            if (!unit.visible) {
+                // Not visually detected — check radio
+                if (unit.radio_detected) {
+                    _drawRadioGhost(ctx, unit);
+                }
+                continue; // skip full unit render
+            }
+        }
+        _drawUnit(ctx, id, unit);
+    }
+}
+
+// ============================================================
+// Layer 5.1: Labels (collision-resolved via label-collision.js)
+// ============================================================
+
+function _drawLabels(ctx) {
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    const selectedId = TritiumStore.get('map.selectedUnitId');
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    // Collect label entries from all units
+    const entries = [];
+    const fogEnabled = _state.fogEnabled;
+    for (const [id, unit] of units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        // Fog of war: skip labels for invisible hostile units
+        if (fogEnabled && alliance === 'hostile' && !unit.visible) {
+            continue; // radio ghost labels are drawn by _drawRadioGhost
+        }
+        const fsm = unit.fsm_state || '';
+        const status = (unit.status || 'active').toLowerCase();
+        const badgeColor = FSM_BADGE_COLORS[fsm] || FSM_BADGE_COLORS[status] || null;
+        const fsmState = fsm ? ` [${fsm.toUpperCase()}]` : '';
+        const elims = unit.eliminations ? ` ${unit.eliminations}K` : '';
+        const badgeText = fsm || status;
+        // Show a short UUID prefix for all units with real IDs
+        let shortId = '';
+        if (unit.identity && unit.identity.short_id) {
+            shortId = unit.identity.short_id;
+        } else if (typeof id === 'string') {
+            // Extract short prefix from target_id UUID (e.g. "rover-a3f1b2c4" -> "A3F1B2")
+            const clean = id.replace(/^[a-z_]+-/, '');  // strip type prefix
+            if (clean.length >= 6) {
+                shortId = clean.substring(0, 6).toUpperCase();
+            }
+        }
+        const labelText = shortId ? `${shortId} ${unit.name || id}` : (unit.name || id);
+        entries.push({
+            id,
+            text: labelText,
+            badge: fsmState + elims,
+            badgeColor,
+            badgeText,
+            worldX: pos.x,
+            worldY: pos.y,
+            alliance,
+            status,
+            isSelected: id === selectedId,
+        });
+    }
+
+    const resolved = resolveLabels(entries, cssW, cssH, _state.cam.zoom, selectedId, worldToScreen);
+
+    ctx.save();
+    const fontSize = Math.max(7, 8 * Math.min(_state.cam.zoom, 2));
+    ctx.font = `${fontSize}px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    for (const r of resolved) {
+        // Leader line (thin white line from label to unit when displaced)
+        if (r.displaced) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(r.labelX + r.bgWidth / 2, r.labelY + r.bgHeight / 2);
+            ctx.lineTo(r.anchorX, r.anchorY);
+            ctx.stroke();
+        }
+
+        // Background box
+        ctx.fillStyle = 'rgba(6, 6, 9, 0.7)';
+        ctx.fillRect(r.labelX, r.labelY, r.bgWidth, r.bgHeight);
+
+        // Text
+        const isNeutralized = r.status === 'neutralized' || r.status === 'eliminated' || r.status === 'destroyed';
+        ctx.fillStyle = isNeutralized ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.85)';
+        ctx.fillText(r.text, r.labelX + 3, r.labelY + 3);
+
+        // FSM badge
+        if (r.badge) {
+            const textW = ctx.measureText(r.text).width;
+            ctx.fillStyle = r.badgeColor || 'rgba(255, 255, 255, 0.5)';
+            ctx.font = `${Math.max(7, fontSize - 2)}px ${FONT_FAMILY}`;
+            ctx.fillText(r.badge, r.labelX + 3 + textW + 4, r.labelY + 3);
+            ctx.font = `${fontSize}px ${FONT_FAMILY}`;
+        }
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Thought bubble helpers (exported for testing)
+// ============================================================
+
+/**
+ * Word-wrap text to fit within maxWidth pixels.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} text
+ * @param {number} maxWidth
+ * @returns {string[]} array of lines
+ */
+function _wrapText(ctx, text, maxWidth) {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = '';
+
+    for (const word of words) {
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && currentLine) {
+            lines.push(currentLine);
+            currentLine = word;
+        } else {
+            currentLine = testLine;
+        }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines;
+}
+
+/**
+ * Map emotion name to a border color.
+ * @param {string} emotion
+ * @returns {string} CSS color
+ */
+function _emotionColor(emotion) {
+    const colors = {
+        curious: '#00f0ff',
+        afraid: '#fcee0a',
+        angry: '#ff2a6d',
+        happy: '#05ffa1',
+        neutral: '#888888',
+    };
+    return colors[emotion] || '#888888';
+}
+
+/**
+ * Draw NPC thought bubbles above units that have active thoughts.
+ * Only shows critical/high importance thoughts and the selected unit's thought.
+ * Caps visible non-critical bubbles to _state._maxThoughtBubbles.
+ */
+function _drawThoughtBubbles(ctx) {
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    const now = Date.now();
+    const fontSize = Math.max(11, 13 * Math.min(_state.cam.zoom, 2.5));
+    const lineHeight = fontSize + 4;
+    const padding = 10;
+    const maxTextWidth = 200;
+    const tailHeight = 10;
+    const fadeInDuration = 300;
+    const fadeOutStart = 1000; // start fading 1s before expiry
+
+    // Clean expired entries from the visible set
+    for (const uid of _state._visibleThoughtIds) {
+        const u = units.get(uid);
+        if (!u || !u.thoughtText || !u.thoughtExpires || u.thoughtExpires <= now) {
+            _state._visibleThoughtIds.delete(uid);
+        }
+    }
+
+    ctx.save();
+    ctx.font = `${fontSize}px ${FONT_FAMILY}`;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+
+    // Count non-critical visible bubbles (excluding selected and critical)
+    const selectedUnitId = TritiumStore.get('map.selectedUnitId');
+    let nonCriticalCount = 0;
+    for (const uid of _state._visibleThoughtIds) {
+        if (uid === selectedUnitId) continue;
+        const u = units.get(uid);
+        if (u && u.thoughtImportance === 'critical') continue;
+        nonCriticalCount++;
+    }
+
+    for (const [id, unit] of units) {
+        if (!unit.thoughtText || !unit.thoughtExpires) continue;
+        if (unit.thoughtExpires <= now) continue;
+
+        // Visibility filter: critical + selected always show, others capped
+        const isCritical = unit.thoughtImportance === 'critical';
+        const isSelected = selectedUnitId === id;
+        if (!isCritical && !isSelected) {
+            if (_state._visibleThoughtIds.has(id)) {
+                // Already visible, keep it
+            } else if (nonCriticalCount >= _state._maxThoughtBubbles) {
+                continue; // Cap reached, skip
+            } else {
+                nonCriticalCount++;
+            }
+        }
+        _state._visibleThoughtIds.add(id);
+
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        const screen = worldToScreen(pos.x, pos.y);
+        const text = unit.thoughtText;
+        const emotion = unit.thoughtEmotion || 'neutral';
+        const borderColor = _emotionColor(emotion);
+
+        // Compute opacity for fade-in / fade-out
+        const created = unit.thoughtExpires - ((unit.thoughtDuration || 5) * 1000);
+        const age = now - created;
+        const timeLeft = unit.thoughtExpires - now;
+        let alpha = 1.0;
+        if (age < fadeInDuration) {
+            alpha = age / fadeInDuration;
+        }
+        if (timeLeft < fadeOutStart) {
+            alpha = Math.min(alpha, timeLeft / fadeOutStart);
+        }
+        alpha = Math.max(0, Math.min(1, alpha));
+        if (alpha <= 0) continue;
+
+        // Word-wrap
+        const lines = _wrapText(ctx, text, maxTextWidth);
+        const textW = Math.min(
+            maxTextWidth,
+            Math.max(...lines.map(l => ctx.measureText(l).width))
+        );
+        const bubbleW = textW + padding * 2;
+        const bubbleH = lines.length * lineHeight + padding * 2;
+
+        // Position: centered above unit
+        const bx = screen.x - bubbleW / 2;
+        const by = screen.y - bubbleH - tailHeight - 28; // 28px above unit icon
+        const radius = 4;
+
+        ctx.globalAlpha = alpha;
+
+        // Glow effect behind bubble
+        ctx.shadowColor = borderColor;
+        ctx.shadowBlur = 12;
+
+        // Bubble background
+        ctx.fillStyle = 'rgba(18, 22, 36, 0.92)';
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + bubbleW - radius, by);
+        ctx.arcTo(bx + bubbleW, by, bx + bubbleW, by + radius, radius);
+        ctx.lineTo(bx + bubbleW, by + bubbleH - radius);
+        ctx.arcTo(bx + bubbleW, by + bubbleH, bx + bubbleW - radius, by + bubbleH, radius);
+        ctx.lineTo(bx + radius, by + bubbleH);
+        ctx.arcTo(bx, by + bubbleH, bx, by + bubbleH - radius, radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.arcTo(bx, by, bx + radius, by, radius);
+        ctx.closePath();
+        ctx.fill();
+
+        // Tail (triangle pointing down to unit)
+        ctx.beginPath();
+        ctx.moveTo(screen.x - 5, by + bubbleH);
+        ctx.lineTo(screen.x, by + bubbleH + tailHeight);
+        ctx.lineTo(screen.x + 5, by + bubbleH);
+        ctx.closePath();
+        ctx.fill();
+
+        // Reset shadow so border/text don't double-glow
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+
+        // Border
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 2.5;
+        // Re-draw bubble path for stroke
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + bubbleW - radius, by);
+        ctx.arcTo(bx + bubbleW, by, bx + bubbleW, by + radius, radius);
+        ctx.lineTo(bx + bubbleW, by + bubbleH - radius);
+        ctx.arcTo(bx + bubbleW, by + bubbleH, bx + bubbleW - radius, by + bubbleH, radius);
+        ctx.lineTo(bx + radius, by + bubbleH);
+        ctx.arcTo(bx, by + bubbleH, bx, by + bubbleH - radius, radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.arcTo(bx, by, bx + radius, by, radius);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Tail border
+        ctx.beginPath();
+        ctx.moveTo(screen.x - 5, by + bubbleH);
+        ctx.lineTo(screen.x, by + bubbleH + tailHeight);
+        ctx.lineTo(screen.x + 5, by + bubbleH);
+        ctx.stroke();
+
+        // Text
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        for (let i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], bx + padding, by + padding + i * lineHeight);
+        }
+    }
+
+    ctx.globalAlpha = 1.0;
+    ctx.restore();
+}
+
+function _drawTooltip(ctx) {
+    if (!_state.hoveredUnit) return;
+    const u = TritiumStore.units.get(_state.hoveredUnit);
+    if (!u || !u.position) return;
+
+    const mouse = _state.lastMouse || worldToScreen(u.position.x, u.position.y);
+    const fsm = u.fsm_state || u.fsmState || '';
+    const tooltipColor = FSM_BADGE_COLORS[fsm] || '#ccc';
+    const fsmLabel = fsm ? fsm.toUpperCase() : '';
+    const elims = u.eliminations ? ` ${u.eliminations}K` : '';
+
+    // Build tooltip lines
+    const lines = [];
+    lines.push((u.name || _state.hoveredUnit) + (fsmLabel ? ' ' + fsmLabel + elims : elims));
+    if (u.type) lines.push(u.type.toUpperCase());
+    if (u.health !== undefined && u.maxHealth) {
+        lines.push('HP: ' + Math.round(u.health) + '/' + u.maxHealth);
+    }
+    if (u.altitude > 0) lines.push('ALT: ' + Math.round(u.altitude) + 'm');
+
+    ctx.save();
+    ctx.font = `11px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    // Measure widths
+    const lineH = 15;
+    const padX = 6;
+    const padY = 4;
+    let maxW = 0;
+    for (const line of lines) {
+        const w = ctx.measureText(line).width;
+        if (w > maxW) maxW = w;
+    }
+    const boxW = maxW + padX * 2;
+    const boxH = lines.length * lineH + padY * 2;
+
+    // Position: offset from mouse, clamped to canvas bounds
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+    let tx = mouse.x + 14;
+    let ty = mouse.y - boxH - 8;
+    if (tx + boxW > cssW - 4) tx = mouse.x - boxW - 8;
+    if (ty < 4) ty = mouse.y + 14;
+    if (ty + boxH > cssH - 4) ty = cssH - boxH - 4;
+
+    // Background
+    ctx.fillStyle = 'rgba(6, 6, 9, 0.9)';
+    ctx.fillRect(tx, ty, boxW, boxH);
+    ctx.strokeStyle = tooltipColor;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx, ty, boxW, boxH);
+
+    // Text lines
+    for (let i = 0; i < lines.length; i++) {
+        ctx.fillStyle = i === 0 ? tooltipColor : '#aaa';
+        ctx.fillText(lines[i], tx + padX, ty + padY + i * lineH);
+    }
+
+    ctx.restore();
+}
+
+function _drawStatusBadge(ctx, unit, sp) {
+    const fsm = unit.fsm_state || '';
+    const status = (unit.status || 'active').toLowerCase();
+    const badgeText = fsm || status;
+    if (!badgeText || badgeText === 'active') return;
+
+    const badgeColor = FSM_BADGE_COLORS[fsm] || '#888';
+    ctx.save();
+    ctx.font = `8px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = badgeColor;
+    ctx.fillText(badgeText.toUpperCase(), sp.x, sp.y - 18);
+    ctx.restore();
+}
+
+/**
+ * Draw a radio-only ghost blip for a hostile detected via BLE/WiFi/cell
+ * but not visually confirmed.  Renders as a pulsing hollow ring with a "?"
+ * marker and optional MAC address label.
+ */
+function _drawRadioGhost(ctx, unit) {
+    const pos = unit.position;
+    if (!pos || pos.x === undefined || pos.y === undefined) return;
+    const sp = worldToScreen(pos.x, pos.y);
+
+    ctx.save();
+    const strength = unit.radio_signal_strength || 0.3;
+    const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 400);
+    const alpha = 0.3 + 0.4 * strength * pulse;
+    const radius = 8 + 4 * (1 - strength); // weaker = larger uncertainty ring
+
+    // Outer uncertainty ring
+    ctx.strokeStyle = `rgba(255, 42, 109, ${alpha})`; // magenta ghost
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Inner dot
+    ctx.fillStyle = `rgba(255, 42, 109, ${alpha * 0.8})`;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // "?" marker
+    ctx.fillStyle = `rgba(255, 42, 109, ${Math.min(1, alpha + 0.2)})`;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', sp.x, sp.y);
+
+    // MAC address label (if available from identity)
+    const identity = unit.identity;
+    if (identity) {
+        const mac = identity.bluetooth_mac || identity.wifi_mac || identity.cell_id || '';
+        if (mac) {
+            const shortMac = mac.length > 8 ? mac.slice(-8) : mac;
+            ctx.fillStyle = `rgba(255, 42, 109, ${alpha * 0.6})`;
+            ctx.font = '8px monospace';
+            ctx.fillText(shortMac, sp.x, sp.y + radius + 8);
+        }
+    }
+
+    ctx.restore();
+}
+
+function _drawUnit(ctx, id, unit) {
+    const pos = unit.position;
+    if (!pos || pos.x === undefined || pos.y === undefined) return;
+
+    const sp = worldToScreen(pos.x, pos.y);
+    const alliance = (unit.alliance || 'unknown').toLowerCase();
+    const type = (unit.type || '').toLowerCase();
+    const status = (unit.status || 'active').toLowerCase();
+    const isNeutralized = status === 'neutralized' || status === 'eliminated' || status === 'destroyed';
+    const isSelected = TritiumStore.get('map.selectedUnitId') === id;
+    const isHovered = _state.hoveredUnit === id;
+
+    // Smooth heading interpolation
+    const heading = unit.heading;
+    let smoothedHeading = heading;
+    if (heading !== undefined && heading !== null) {
+        const prevHeading = _state.smoothHeadings.get(id);
+        if (prevHeading !== undefined) {
+            smoothedHeading = lerpAngle(prevHeading, heading, 10, _state.dt);
+        }
+        _state.smoothHeadings.set(id, smoothedHeading);
+    }
+
+    // Compute scale from zoom and hover/selection
+    // Compact icons: ~0.4x at zoom 1.5, matching 3D indicator scale
+    let scale = Math.min(_state.cam.zoom, 3) / 4.0;
+    scale = Math.max(0.2, Math.min(0.8, scale));
+    if (isSelected) scale *= 1.3;
+    else if (isHovered) scale *= 1.15;
+
+    // Map type name to unit-icons type
+    let iconType = type;
+    if (type.includes('turret') || type.includes('sentry')) iconType = 'turret';
+    else if (type.includes('drone')) iconType = 'drone';
+    else if (type.includes('rover') || type.includes('interceptor') || type.includes('patrol')) iconType = 'rover';
+    else if (type.includes('tank') || type.includes('truck') || type.includes('vehicle')) iconType = 'tank';
+    else if (type.includes('camera') || type.includes('sensor')) iconType = 'sensor';
+    else if (type === 'person' && alliance === 'hostile') iconType = 'hostile_person';
+    else if (type === 'person' && alliance === 'neutral') iconType = 'neutral_person';
+    else if (type === 'hostile_kid') iconType = 'hostile_person';
+    else if (type === 'mesh_radio' || type === 'meshtastic') iconType = 'sensor';
+
+    // Compute health ratio (0.0 = dead, 1.0 = full)
+    let health = 1.0;
+    if (isNeutralized) {
+        health = 0;
+    } else if (unit.health !== undefined && unit.maxHealth) {
+        health = Math.max(0, Math.min(1, unit.health / unit.maxHealth));
+    }
+
+    // Draw using procedural unit icons
+    drawUnitIcon(ctx, iconType, alliance, smoothedHeading, sp.x, sp.y, scale, isSelected, health, isHovered);
+
+    // Crowd role indicator (civil_unrest mode — instigator/rioter visual differentiation)
+    if (unit.crowdRole && unit.crowdRole !== 'civilian') {
+        drawCrowdRoleIndicator(ctx, sp.x, sp.y, scale, unit.crowdRole, unit.instigatorState);
+    }
+
+    // FSM status badge above unit
+    _drawStatusBadge(ctx, unit, sp);
+
+    // Morale indicator for combatant units
+    if (unit.is_combatant) {
+        _drawMoraleIndicator(ctx, unit, sp, scale);
+    }
+
+    // Labels are drawn by _drawLabels() using label-collision.js
+}
+
+// ============================================================
+// Target shapes
+// ============================================================
+
+function _drawRoundedRect(ctx, cx, cy, size, color) {
+    const w = size * 1.6;
+    const h = size * 1.2;
+    const r = size * 0.3;
+    const x = cx - w / 2;
+    const y = cy - h / 2;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function _drawDiamond(ctx, cx, cy, size, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - size);
+    ctx.lineTo(cx + size, cy);
+    ctx.lineTo(cx, cy + size);
+    ctx.lineTo(cx - size, cy);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function _drawTriangle(ctx, cx, cy, size, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - size);
+    ctx.lineTo(cx + size, cy + size * 0.7);
+    ctx.lineTo(cx - size, cy + size * 0.7);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function _drawCircle(ctx, cx, cy, size, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function _drawCircleWithX(ctx, cx, cy, size, color) {
+    // Circle
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size, 0, Math.PI * 2);
+    ctx.fill();
+
+    // X mark inside
+    const xOff = size * 0.5;
+    ctx.strokeStyle = BG_COLOR;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - xOff, cy - xOff);
+    ctx.lineTo(cx + xOff, cy + xOff);
+    ctx.moveTo(cx + xOff, cy - xOff);
+    ctx.lineTo(cx - xOff, cy + xOff);
+    ctx.stroke();
+}
+
+// ============================================================
+// Health bar
+// ============================================================
+
+function _drawHealthBar(ctx, cx, cy, unitSize, health, maxHealth) {
+    const pct = Math.max(0, Math.min(1, health / maxHealth));
+    const barW = unitSize * 3;
+    const barH = 3;
+    const bx = cx - barW / 2;
+    const by = cy - unitSize - 8;
+
+    // Background
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.fillRect(bx, by, barW, barH);
+
+    // Health fill: green -> yellow -> red
+    let r, g;
+    if (pct > 0.5) {
+        // Green to yellow
+        const t = (pct - 0.5) * 2; // 1..0
+        r = Math.round(255 * (1 - t));
+        g = 255;
+    } else {
+        // Yellow to red
+        const t = pct * 2; // 0..1
+        r = 255;
+        g = Math.round(255 * t);
+    }
+    ctx.fillStyle = `rgb(${r}, ${g}, 0)`;
+    ctx.fillRect(bx, by, barW * pct, barH);
+}
+
+// ============================================================
+// Morale indicator (drawn per-unit in _drawUnit)
+// ============================================================
+
+function _drawMoraleIndicator(ctx, unit, sp, scale) {
+    const morale = unit.morale;
+    if (morale === undefined || morale === null) return;
+
+    // Normal morale (0.3-0.9): no special indicator
+    if (morale >= 0.3 && morale <= 0.9) return;
+
+    ctx.save();
+    const r = 12 * scale;
+
+    if (morale < 0.1) {
+        // BROKEN: pulsing red ring
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() * 0.006));
+        ctx.strokeStyle = `rgba(255, 42, 109, ${pulse})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        // "BROKEN" text
+        ctx.font = `bold 7px ${FONT_FAMILY}`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = `rgba(255, 42, 109, ${pulse})`;
+        ctx.fillText('BROKEN', sp.x, sp.y + r + 14);
+    } else if (morale < 0.3) {
+        // SUPPRESSED: yellow dashed outline
+        ctx.strokeStyle = 'rgba(252, 238, 10, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    } else if (morale > 0.9) {
+        // EMBOLDENED: green glow
+        ctx.shadowColor = '#05ffa1';
+        ctx.shadowBlur = 8 * scale;
+        ctx.strokeStyle = 'rgba(5, 255, 161, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r + 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Cover points overlay (Layer 4.45)
+// ============================================================
+
+function _drawCoverPoints(ctx) {
+    const points = TritiumStore.get('game.coverPoints');
+    if (!Array.isArray(points) || points.length === 0) return;
+
+    ctx.save();
+    for (const cp of points) {
+        if (!cp.position || !Array.isArray(cp.position)) continue;
+        const sp = worldToScreen(cp.position[0], cp.position[1]);
+        const radiusPx = (cp.radius || 2) * _state.cam.zoom;
+
+        // Translucent radius circle
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(74, 158, 255, 0.08)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Shield icon at center (small chevron/V shape)
+        const sz = Math.max(4, 6 * Math.min(_state.cam.zoom, 2));
+        ctx.beginPath();
+        ctx.moveTo(sp.x - sz, sp.y - sz * 0.6);
+        ctx.lineTo(sp.x, sp.y + sz * 0.6);
+        ctx.lineTo(sp.x + sz, sp.y - sz * 0.6);
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// ============================================================
+// Squad formation lines (Layer 5.05)
+// ============================================================
+
+const SQUAD_COLORS = [
+    'rgba(0, 240, 255, 0.35)',   // cyan
+    'rgba(255, 136, 0, 0.35)',   // orange
+    'rgba(5, 255, 161, 0.35)',   // green
+    'rgba(252, 238, 10, 0.35)',  // yellow
+    'rgba(170, 100, 255, 0.35)', // purple
+    'rgba(255, 42, 109, 0.35)',  // magenta
+    'rgba(100, 200, 255, 0.35)', // light blue
+    'rgba(255, 200, 100, 0.35)', // gold
+];
+
+function _drawSquadLines(ctx) {
+    // Group units by squadId
+    const squads = new Map();
+    for (const [id, unit] of TritiumStore.units) {
+        const sid = unit.squadId || unit.squad_id;
+        if (!sid) continue;
+        const status = (unit.status || 'active').toLowerCase();
+        if (status === 'eliminated' || status === 'destroyed') continue;
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        if (!squads.has(sid)) squads.set(sid, []);
+        squads.get(sid).push({ x: pos.x, y: pos.y });
+    }
+
+    if (squads.size === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1;
+    let colorIdx = 0;
+
+    for (const [sid, members] of squads) {
+        if (members.length < 2) continue;
+        ctx.strokeStyle = SQUAD_COLORS[colorIdx % SQUAD_COLORS.length];
+        colorIdx++;
+
+        // Draw lines from each member to the centroid
+        let cx = 0, cy = 0;
+        for (const m of members) { cx += m.x; cy += m.y; }
+        cx /= members.length;
+        cy /= members.length;
+        const centroid = worldToScreen(cx, cy);
+
+        for (const m of members) {
+            const sp = worldToScreen(m.x, m.y);
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            ctx.lineTo(centroid.x, centroid.y);
+            ctx.stroke();
+        }
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 6: Selection indicator
+// ============================================================
+
+function _drawSelectionIndicator(ctx) {
+    const selectedId = TritiumStore.get('map.selectedUnitId');
+    if (!selectedId) return;
+
+    const unit = TritiumStore.units.get(selectedId);
+    if (!unit || !unit.position) return;
+
+    const sp = worldToScreen(unit.position.x, unit.position.y);
+    const radius = 10 * Math.min(_state.cam.zoom, 3);
+
+    // Animated selection ring
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#00f0ff';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, radius + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Pulsing outer ring
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.15 + pulse * 0.2})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, radius + 8 + pulse * 3, 0, Math.PI * 2);
+    ctx.stroke();
+}
+
+// ============================================================
+// Layer 7: Dispatch arrows
+// ============================================================
+
+function _drawDispatchArrows(ctx) {
+    const now = Date.now();
+
+    for (const arrow of _state.dispatchArrows) {
+        const age = now - arrow.time;
+        const alpha = Math.max(0, 1 - age / DISPATCH_ARROW_LIFETIME);
+        const from = worldToScreen(arrow.fromX, arrow.fromY);
+        const to = worldToScreen(arrow.toX, arrow.toY);
+
+        // Dashed line
+        ctx.strokeStyle = `rgba(0, 240, 255, ${alpha})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Arrowhead
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const headLen = 12;
+        ctx.fillStyle = `rgba(0, 240, 255, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(to.x, to.y);
+        ctx.lineTo(to.x - headLen * Math.cos(angle - 0.4), to.y - headLen * Math.sin(angle - 0.4));
+        ctx.lineTo(to.x - headLen * Math.cos(angle + 0.4), to.y - headLen * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fill();
+
+        // "DISPATCHING" label at midpoint
+        if (alpha > 0.3) {
+            const mx = (from.x + to.x) / 2;
+            const my = (from.y + to.y) / 2;
+            ctx.font = '10px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillStyle = `rgba(0, 240, 255, ${alpha * 0.8})`;
+            ctx.fillText('DISPATCHING', mx, my - 4);
+        }
+    }
+}
+
+// ============================================================
+// Operational bounds (dynamic, based on unit positions)
+// ============================================================
+
+/**
+ * Compute the operational bounding box from unit positions.
+ * Adds 50% padding on each side, enforces minimum extent of +/-200m.
+ * Caches result and recomputes when unit count changes.
+ */
+function _getOperationalBounds() {
+    const units = TritiumStore.units;
+    if (_state.opBounds && _state.opBoundsUnitCount === units.size) {
+        return _state.opBounds;
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [, unit] of units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        if (pos.x < minX) minX = pos.x;
+        if (pos.x > maxX) maxX = pos.x;
+        if (pos.y < minY) minY = pos.y;
+        if (pos.y > maxY) maxY = pos.y;
+    }
+
+    if (!isFinite(minX)) {
+        // No units — use default 200m extent
+        _state.opBounds = { minX: -200, maxX: 200, minY: -200, maxY: 200 };
+        _state.opBoundsUnitCount = units.size;
+        return _state.opBounds;
+    }
+
+    // Add 50% padding
+    const spanX = (maxX - minX) || 10;
+    const spanY = (maxY - minY) || 10;
+    const padX = spanX * 0.5;
+    const padY = spanY * 0.5;
+    let bMinX = minX - padX;
+    let bMaxX = maxX + padX;
+    let bMinY = minY - padY;
+    let bMaxY = maxY + padY;
+
+    // Enforce minimum extent of +/-200m
+    const MIN_EXTENT = 200;
+    const cx = (bMinX + bMaxX) / 2;
+    const cy = (bMinY + bMaxY) / 2;
+    if (bMaxX - bMinX < MIN_EXTENT * 2) {
+        bMinX = cx - MIN_EXTENT;
+        bMaxX = cx + MIN_EXTENT;
+    }
+    if (bMaxY - bMinY < MIN_EXTENT * 2) {
+        bMinY = cy - MIN_EXTENT;
+        bMaxY = cy + MIN_EXTENT;
+    }
+
+    _state.opBounds = { minX: bMinX, maxX: bMaxX, minY: bMinY, maxY: bMaxY };
+    _state.opBoundsUnitCount = units.size;
+    return _state.opBounds;
+}
+
+// ============================================================
+// Scale bar
+// ============================================================
+
+/**
+ * Draw a scale bar in the bottom-left corner of the canvas.
+ * Picks a "nice" distance that fits ~100-200px on screen at current zoom.
+ */
+function _drawScaleBar(ctx) {
+    const zoom = _state.cam.zoom;
+    if (zoom < 0.01) return; // Too zoomed out for a useful scale bar
+
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+    const targetPixels = 150; // Desired bar width in pixels
+
+    // How many meters does targetPixels represent?
+    const metersAtTarget = targetPixels / zoom;
+
+    // Pick a "nice" distance
+    const niceDistances = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+    let niceDist = niceDistances[niceDistances.length - 1];
+    for (const d of niceDistances) {
+        if (d >= metersAtTarget * 0.4 && d <= metersAtTarget * 1.5) {
+            niceDist = d;
+            break;
+        }
+    }
+
+    const barPx = niceDist * zoom;
+    const x = 20;
+    const y = cssH - 30;
+    const tickH = 6;
+
+    // Label
+    let label;
+    if (niceDist >= 1000) {
+        label = `${niceDist / 1000}km`;
+    } else {
+        label = `${niceDist}m`;
+    }
+
+    ctx.save();
+
+    // Line
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + barPx, y);
+    ctx.stroke();
+
+    // End ticks
+    ctx.beginPath();
+    ctx.moveTo(x, y - tickH);
+    ctx.lineTo(x, y + tickH);
+    ctx.moveTo(x + barPx, y - tickH);
+    ctx.lineTo(x + barPx, y + tickH);
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = `10px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, x + barPx / 2, y + tickH + 2);
+
+    ctx.restore();
+}
+
+// ============================================================
+// Minimap
+// ============================================================
+
+function _drawMinimap() {
+    // Dynamically find minimap canvas (may come from panel system)
+    let mmCanvas = _state.minimapCanvas;
+    let ctx = _state.minimapCtx;
+
+    // If cached ref is gone or detached, re-lookup by id
+    if (!mmCanvas || !mmCanvas.isConnected) {
+        mmCanvas = document.getElementById('minimap-canvas');
+        _state.minimapCanvas = mmCanvas;
+        _state.minimapCtx = mmCanvas ? mmCanvas.getContext('2d') : null;
+        ctx = _state.minimapCtx;
+    }
+
+    if (!ctx) {
+        _drawMinimapOnMain();
+        return;
+    }
+    const mmRect = mmCanvas?.getBoundingClientRect();
+    if (!mmRect || mmRect.width === 0 || mmRect.height === 0) {
+        _drawMinimapOnMain();
+        return;
+    }
+    // Resize canvas buffer to match layout if panel was resized
+    const layoutW = Math.max(1, Math.floor(mmRect.width));
+    const layoutH = Math.max(1, Math.floor(mmRect.height));
+    if (mmCanvas.width !== layoutW || mmCanvas.height !== layoutH) {
+        mmCanvas.width = layoutW;
+        mmCanvas.height = layoutH;
+    }
+    const mmW = mmCanvas.width;
+    const mmH = mmCanvas.height;
+
+    // Clear
+    ctx.fillStyle = 'rgba(10, 10, 20, 0.92)';
+    ctx.fillRect(0, 0, mmW, mmH);
+
+    // Border
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, mmW, mmH);
+
+    // Dynamic bounds from unit positions
+    const ob = _getOperationalBounds();
+    const obRangeX = ob.maxX - ob.minX;
+    const obRangeY = ob.maxY - ob.minY;
+
+    // World-to-minimap helper (uses operational bounds)
+    function wToMM(wx, wy) {
+        const mx = ((wx - ob.minX) / obRangeX) * mmW;
+        const my = ((ob.maxY - wy) / obRangeY) * mmH; // Y flipped
+        return { x: mx, y: my };
+    }
+
+    // Zones
+    for (const zone of _state.zones) {
+        const zpos = zone.position || {};
+        const zx = zpos.x || 0;
+        const zy = zpos.z !== undefined ? zpos.z : (zpos.y || 0);
+        const zr = ((zone.properties && zone.properties.radius) || 10) / obRangeX * mmW;
+        const zmp = wToMM(zx, zy);
+        const isRestricted = (zone.type || '').includes('restricted');
+        ctx.fillStyle = isRestricted ? 'rgba(255, 42, 109, 0.15)' : 'rgba(0, 240, 255, 0.08)';
+        ctx.beginPath();
+        ctx.arc(zmp.x, zmp.y, zr, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Units as colored dots
+    const units = TritiumStore.units;
+    for (const [id, unit] of units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined) continue;
+        const mp = wToMM(pos.x, pos.y);
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        const color = ALLIANCE_COLORS[alliance] || ALLIANCE_COLORS.unknown;
+        const status = (unit.status || 'active').toLowerCase();
+        const isNeutralized = status === 'neutralized' || status === 'eliminated';
+
+        ctx.fillStyle = color;
+        ctx.globalAlpha = isNeutralized ? 0.3 : 1.0;
+        ctx.beginPath();
+        ctx.arc(mp.x, mp.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+
+    // Camera viewport rectangle
+    const cam = _state.cam;
+    const mainCanvas = _state.canvas;
+    if (mainCanvas && mainCanvas.width > 0) {
+        const cssW = mainCanvas.width / _state.dpr;
+        const cssH = mainCanvas.height / _state.dpr;
+        const halfW = (cssW / 2) / cam.zoom;
+        const halfH = (cssH / 2) / cam.zoom;
+        const vpTL = wToMM(cam.x - halfW, cam.y + halfH);
+        const vpBR = wToMM(cam.x + halfW, cam.y - halfH);
+        const vpW = vpBR.x - vpTL.x;
+        const vpH = vpBR.y - vpTL.y;
+
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(vpTL.x, vpTL.y, vpW, vpH);
+    }
+}
+
+/**
+ * Draw a minimap on the main canvas (bottom-right corner) when the
+ * dedicated minimap canvas element is hidden or unavailable.
+ */
+function _drawMinimapOnMain() {
+    const ctx = _state.ctx;
+    if (!ctx) return;
+    const mainCssW = _state.canvas.width / _state.dpr;
+    const mainCssH = _state.canvas.height / _state.dpr;
+    const mmW = 200;
+    const mmH = 150;
+    const margin = 10;
+    const ox = mainCssW - mmW - margin;
+    const oy = mainCssH - mmH - margin;
+
+    // Background
+    ctx.fillStyle = 'rgba(10, 10, 20, 0.92)';
+    ctx.fillRect(ox, oy, mmW, mmH);
+
+    // Border
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ox, oy, mmW, mmH);
+
+    // Dynamic bounds from unit positions
+    const ob = _getOperationalBounds();
+    const obRangeX = ob.maxX - ob.minX;
+    const obRangeY = ob.maxY - ob.minY;
+
+    function wToMM(wx, wy) {
+        const mx = ((wx - ob.minX) / obRangeX) * mmW + ox;
+        const my = ((ob.maxY - wy) / obRangeY) * mmH + oy;
+        return { x: mx, y: my };
+    }
+
+    // Zones
+    for (const zone of _state.zones) {
+        const zpos = zone.position || {};
+        const zx = zpos.x || 0;
+        const zy = zpos.z !== undefined ? zpos.z : (zpos.y || 0);
+        const zr = ((zone.properties && zone.properties.radius) || 10) / obRangeX * mmW;
+        const zmp = wToMM(zx, zy);
+        const isRestricted = (zone.type || '').includes('restricted');
+        ctx.fillStyle = isRestricted ? 'rgba(255, 42, 109, 0.15)' : 'rgba(0, 240, 255, 0.08)';
+        ctx.beginPath();
+        ctx.arc(zmp.x, zmp.y, zr, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Units
+    for (const [, unit] of TritiumStore.units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined) continue;
+        const mp = wToMM(pos.x, pos.y);
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        const color = ALLIANCE_COLORS[alliance] || ALLIANCE_COLORS.unknown;
+        const status = (unit.status || 'active').toLowerCase();
+        const isNeutralized = status === 'neutralized' || status === 'eliminated';
+
+        ctx.fillStyle = color;
+        ctx.globalAlpha = isNeutralized ? 0.3 : 1.0;
+        ctx.beginPath();
+        ctx.arc(mp.x, mp.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+
+    // Camera viewport rectangle
+    const cam = _state.cam;
+    const halfW = (mainCssW / 2) / cam.zoom;
+    const halfH = (mainCssH / 2) / cam.zoom;
+    const vpTL = wToMM(cam.x - halfW, cam.y + halfH);
+    const vpBR = wToMM(cam.x + halfW, cam.y - halfH);
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(vpTL.x, vpTL.y, vpBR.x - vpTL.x, vpBR.y - vpTL.y);
+}
+
+// ============================================================
+// FPS counter
+// ============================================================
+
+function _updateFps() {
+    const now = performance.now();
+    _state.frameTimes.push(now);
+
+    // Keep only last 60 frame times
+    while (_state.frameTimes.length > 60) {
+        _state.frameTimes.shift();
+    }
+
+    // Update display every FPS_UPDATE_INTERVAL ms
+    if (now - _state.lastFpsUpdate < FPS_UPDATE_INTERVAL) return;
+    _state.lastFpsUpdate = now;
+
+    if (_state.frameTimes.length >= 2) {
+        const elapsed = _state.frameTimes[_state.frameTimes.length - 1] - _state.frameTimes[0];
+        const frames = _state.frameTimes.length - 1;
+        _state.currentFps = Math.round((frames / elapsed) * 1000);
+    }
+
+    const fpsEl = document.getElementById('map-fps');
+    if (fpsEl) {
+        fpsEl.textContent = `${_state.currentFps} FPS`;
+    }
+    const statusEl = document.getElementById('status-fps');
+    if (statusEl) statusEl.textContent = `${_state.currentFps} FPS`;
+}
+
+// ============================================================
+// Coords display
+// ============================================================
+
+function _updateCoordsDisplay() {
+    const coordsEl = document.getElementById('map-coords');
+    if (!coordsEl) return;
+
+    const wp = screenToWorld(_state.lastMouse.x, _state.lastMouse.y);
+    const xSpan = coordsEl.querySelector('[data-coord="x"]');
+    const ySpan = coordsEl.querySelector('[data-coord="y"]');
+    if (xSpan) xSpan.textContent = `X: ${wp.x.toFixed(1)}`;
+    if (ySpan) ySpan.textContent = `Y: ${wp.y.toFixed(1)}`;
+}
+
+// ============================================================
+// Mouse event handlers (main canvas)
+// ============================================================
+
+function _bindCanvasEvents() {
+    const canvas = _state.canvas;
+    if (!canvas) return;
+
+    const handlers = {
+        mousedown: _onMouseDown,
+        mousemove: _onMouseMove,
+        mouseup: _onMouseUp,
+        dblclick: _onDblClick,
+        wheel: _onWheel,
+        contextmenu: _onContextMenu,
+    };
+
+    for (const [event, handler] of Object.entries(handlers)) {
+        const opts = event === 'wheel' ? { passive: false } : undefined;
+        canvas.addEventListener(event, handler, opts);
+        _state.boundHandlers.set(`canvas:${event}`, { element: canvas, event, handler, opts });
+    }
+}
+
+function _unbindCanvasEvents() {
+    for (const [key, entry] of _state.boundHandlers) {
+        if (!key.startsWith('canvas:')) continue;
+        entry.element.removeEventListener(entry.event, entry.handler, entry.opts);
+    }
+    // Clear canvas entries
+    for (const key of [..._state.boundHandlers.keys()]) {
+        if (key.startsWith('canvas:')) _state.boundHandlers.delete(key);
+    }
+}
+
+function _onMouseDown(e) {
+    _hideContextMenu();
+    const rect = _state.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    _state.lastMouse = { x: sx, y: sy };
+
+    // Middle-click or Alt+left = pan
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+        _state.isPanning = true;
+        _state.dragStart = {
+            x: sx,
+            y: sy,
+            camX: _state.cam.targetX,
+            camY: _state.cam.targetY,
+        };
+        e.preventDefault();
+        return;
+    }
+
+    // Right-click = pan or dispatch (handled in mouseup)
+    if (e.button === 2) {
+        _state.isPanning = true;
+        _state.dragStart = {
+            x: sx,
+            y: sy,
+            camX: _state.cam.targetX,
+            camY: _state.cam.targetY,
+        };
+        e.preventDefault();
+        return;
+    }
+
+    // Left click
+    if (e.button === 0) {
+        // Dispatch mode: click to send selected unit somewhere
+        if (_state.dispatchMode && _state.dispatchUnitId) {
+            const wp = screenToWorld(sx, sy);
+            _doDispatch(_state.dispatchUnitId, wp.x, wp.y);
+            _state.dispatchMode = false;
+            _state.dispatchUnitId = null;
+            _state.canvas.style.cursor = 'crosshair';
+            return;
+        }
+
+        // Hit test units
+        const hitId = _hitTestUnit(sx, sy);
+        if (hitId) {
+            TritiumStore.set('map.selectedUnitId', hitId);
+            EventBus.emit('unit:selected', { id: hitId });
+            EventBus.emit('panel:request-open', { id: 'unit-inspector' });
+        } else {
+            TritiumStore.set('map.selectedUnitId', null);
+            EventBus.emit('unit:deselected', {});
+        }
+    }
+}
+
+function _onMouseMove(e) {
+    const rect = _state.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    _state.lastMouse = { x: sx, y: sy };
+
+    // Panning
+    if (_state.isPanning && _state.dragStart) {
+        const dx = (sx - _state.dragStart.x) / _state.cam.zoom;
+        const dy = (sy - _state.dragStart.y) / _state.cam.zoom;
+        _state.cam.targetX = _state.dragStart.camX - dx;
+        _state.cam.targetY = _state.dragStart.camY + dy; // Y inverted
+        return;
+    }
+
+    // Hover detection
+    const hitId = _hitTestUnit(sx, sy);
+    _state.hoveredUnit = hitId;
+
+    // Cursor
+    if (_state.dispatchMode) {
+        _state.canvas.style.cursor = 'crosshair';
+    } else if (hitId) {
+        _state.canvas.style.cursor = 'pointer';
+    } else {
+        _state.canvas.style.cursor = 'crosshair';
+    }
+}
+
+function _onMouseUp(e) {
+    const rect = _state.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    if (_state.isPanning) {
+        // If right-click and barely moved, show context menu
+        if (e.button === 2 && _state.dragStart) {
+            const dx = Math.abs(sx - _state.dragStart.x);
+            const dy = Math.abs(sy - _state.dragStart.y);
+            if (dx < 5 && dy < 5) {
+                const wp = screenToWorld(sx, sy);
+                const selectedId = TritiumStore.get('map.selectedUnitId');
+                if (selectedId) {
+                    // Quick dispatch for selected unit (existing behavior)
+                    _doDispatch(selectedId, wp.x, wp.y);
+                }
+                // Also show context menu for additional options
+                _showContextMenu(e.clientX, e.clientY, wp);
+            }
+        }
+        _state.isPanning = false;
+        _state.dragStart = null;
+        return;
+    }
+}
+
+function _onWheel(e) {
+    e.preventDefault();
+
+    const rect = _state.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    const factor = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, _state.cam.targetZoom * factor));
+
+    // Cursor-centered zoom: keep world point under cursor stable
+    const wp = screenToWorld(sx, sy);
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+    _state.cam.targetX = wp.x - (sx - cssW / 2) / newZoom;
+    _state.cam.targetY = wp.y + (sy - cssH / 2) / newZoom;
+    _state.cam.targetZoom = newZoom;
+}
+
+function _resolveModalType(unit) {
+    const type = unit.asset_type || unit.type || 'generic';
+    const alliance = unit.alliance || 'unknown';
+    const npcTypes = ['person', 'animal', 'vehicle'];
+    return (npcTypes.includes(type) && alliance === 'neutral') ? 'npc' : type;
+}
+
+function _onDblClick(e) {
+    const rect = _state.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    const hitId = _hitTestUnit(sx, sy);
+    if (hitId) {
+        TritiumStore.set('map.selectedUnitId', hitId);
+        EventBus.emit('unit:selected', { id: hitId });
+        EventBus.emit('panel:request-open', { id: 'unit-inspector' });
+        const unit = TritiumStore.units.get(hitId);
+        if (unit) {
+            if (unit.position) {
+                _state.cam.targetX = unit.position.x;
+                _state.cam.targetY = unit.position.y;
+            }
+            DeviceModalManager.open(hitId, _resolveModalType(unit), unit);
+        }
+    }
+}
+
+function _onContextMenu(e) {
+    e.preventDefault();
+}
+
+// ============================================================
+// Minimap mouse events
+// ============================================================
+
+function _bindMinimapEvents() {
+    const mm = _state.minimapCanvas;
+    if (!mm) return;
+
+    const handler = _onMinimapClick;
+    mm.addEventListener('mousedown', handler);
+    mm.addEventListener('mousemove', (e) => {
+        if (e.buttons & 1) handler(e); // Drag on minimap
+    });
+    _state.boundHandlers.set('minimap:mousedown', { element: mm, event: 'mousedown', handler });
+}
+
+function _unbindMinimapEvents() {
+    for (const [key, entry] of _state.boundHandlers) {
+        if (!key.startsWith('minimap:')) continue;
+        entry.element.removeEventListener(entry.event, entry.handler);
+    }
+    for (const key of [..._state.boundHandlers.keys()]) {
+        if (key.startsWith('minimap:')) _state.boundHandlers.delete(key);
+    }
+}
+
+function _onMinimapClick(e) {
+    const mm = _state.minimapCanvas;
+    const rect = mm.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    // Convert minimap coords to world coords (using operational bounds)
+    const ob = _getOperationalBounds();
+    const obRangeX = ob.maxX - ob.minX;
+    const obRangeY = ob.maxY - ob.minY;
+    const wx = ob.minX + (mx / mm.width) * obRangeX;
+    const wy = ob.maxY - (my / mm.height) * obRangeY; // Y flipped
+
+    _state.cam.targetX = wx;
+    _state.cam.targetY = wy;
+}
+
+// ============================================================
+// Hit testing
+// ============================================================
+
+function _hitTestUnit(sx, sy) {
+    const hitRadius = 14;
+    let closest = null;
+    let closestDist = Infinity;
+    const fogEnabled = _state.fogEnabled;
+
+    const units = TritiumStore.units;
+    for (const [id, unit] of units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined) continue;
+        // Fog of war: cannot select invisible hostile units
+        if (fogEnabled) {
+            const alliance = (unit.alliance || '').toLowerCase();
+            if (alliance === 'hostile' && !unit.visible) continue;
+        }
+        const sp = worldToScreen(pos.x, pos.y);
+        const dx = sp.x - sx;
+        const dy = sp.y - sy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < hitRadius && dist < closestDist) {
+            closestDist = dist;
+            closest = id;
+        }
+    }
+    return closest;
+}
+
+/**
+ * Hit-test a building polygon. Uses ray-casting point-in-polygon.
+ * Works in world coordinates (overlay buildings use world coords).
+ * @param {number} wx - world X
+ * @param {number} wy - world Y
+ * @returns {object|null} - building object with polygon + tags, or null
+ */
+function _hitTestBuilding(wx, wy) {
+    const buildings = _state.overlayBuildings;
+    if (!buildings || !buildings.length) return null;
+
+    for (const b of buildings) {
+        const poly = b.polygon;
+        if (!poly || poly.length < 3) continue;
+        // Ray-casting algorithm
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = poly[i][0], yi = poly[i][1];
+            const xj = poly[j][0], yj = poly[j][1];
+            if (((yi > wy) !== (yj > wy)) &&
+                (wx < (xj - xi) * (wy - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        if (inside) return b;
+    }
+    return null;
+}
+
+/**
+ * Show a context menu at the given screen position.
+ * @param {number} sx - screen X
+ * @param {number} sy - screen Y
+ * @param {object} worldPos - {x, y} world coordinates
+ */
+function _showContextMenu(sx, sy, worldPos) {
+    _hideContextMenu();
+    const selectedId = TritiumStore.get('map.selectedUnitId');
+    const building = _hitTestBuilding(worldPos.x, worldPos.y);
+
+    const menu = document.createElement('div');
+    menu.className = 'map-context-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = sx + 'px';
+    menu.style.top = sy + 'px';
+    menu.style.zIndex = '9999';
+
+    const items = [];
+    if (selectedId) {
+        items.push({ label: 'DISPATCH HERE', action: 'dispatch', icon: '>' });
+        items.push({ label: 'SET WAYPOINT', action: 'waypoint', icon: '+' });
+    }
+    items.push({ label: 'DROP MARKER', action: 'marker', icon: 'x' });
+    items.push({ label: 'MEASURE DISTANCE', action: 'measure', icon: '~' });
+    if (building) {
+        const addr = building.tags && building.tags['addr:street']
+            ? building.tags['addr:street']
+            : 'Building';
+        items.push({ label: 'INFO: ' + addr, action: 'building_info', icon: '?' });
+    }
+
+    for (const item of items) {
+        const el = document.createElement('div');
+        el.className = 'map-ctx-item';
+        el.textContent = item.icon + ' ' + item.label;
+        el.dataset.action = item.action;
+        menu.appendChild(el);
+    }
+
+    _state.contextMenu = menu;
+    _state.contextMenuWorld = worldPos;
+
+    // Attach click handler
+    menu.addEventListener('click', (e) => {
+        const target = e.target.closest('.map-ctx-item');
+        if (!target) return;
+        const action = target.dataset.action;
+        _handleContextAction(action, worldPos, selectedId, building);
+        _hideContextMenu();
+    });
+
+    // Attach to canvas parent or document body
+    const parent = _state.canvas.parentNode || document.body;
+    if (parent && parent.appendChild) parent.appendChild(menu);
+}
+
+function _hideContextMenu() {
+    if (_state.contextMenu) {
+        _state.contextMenu.remove();
+        _state.contextMenu = null;
+    }
+}
+
+function _handleContextAction(action, worldPos, selectedId, building) {
+    switch (action) {
+        case 'dispatch':
+            if (selectedId) _doDispatch(selectedId, worldPos.x, worldPos.y);
+            break;
+        case 'waypoint':
+            EventBus.emit('map:waypoint', { x: worldPos.x, y: worldPos.y, unitId: selectedId });
+            break;
+        case 'marker':
+            EventBus.emit('map:marker', { x: worldPos.x, y: worldPos.y });
+            break;
+        case 'measure':
+            EventBus.emit('map:measure_start', { x: worldPos.x, y: worldPos.y });
+            break;
+        case 'building_info':
+            if (building) {
+                EventBus.emit('building:info', {
+                    tags: building.tags || {},
+                    polygon: building.polygon,
+                });
+            }
+            break;
+    }
+}
+
+// ============================================================
+// Dispatch
+// ============================================================
+
+function _doDispatch(unitId, wx, wy) {
+    const unit = TritiumStore.units.get(unitId);
+
+    // Send dispatch command to backend FIRST, then show feedback on success
+    fetch('/api/amy/simulation/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unit_id: unitId, target: { x: wx, y: wy } }),
+    }).then(resp => {
+        if (resp.ok) {
+            // Show visual dispatch arrow only on confirmed success
+            if (unit && unit.position) {
+                _state.dispatchArrows.push({
+                    fromX: unit.position.x,
+                    fromY: unit.position.y,
+                    toX: wx,
+                    toY: wy,
+                    time: Date.now(),
+                });
+            }
+            EventBus.emit('unit:dispatched', { id: unitId, target: { x: wx, y: wy } });
+            EventBus.emit('toast:show', { message: 'Dispatch command sent', type: 'info' });
+        } else {
+            resp.json().then(data => {
+                const reason = (data && data.detail) || 'Dispatch failed';
+                EventBus.emit('toast:show', { message: reason, type: 'alert' });
+            }).catch(() => {
+                EventBus.emit('toast:show', { message: 'Dispatch failed', type: 'alert' });
+            });
+        }
+    }).catch(() => {
+        EventBus.emit('toast:show', { message: 'Dispatch failed: network error', type: 'alert' });
+    });
+}
+
+// ============================================================
+// EventBus / Store handlers
+// ============================================================
+
+/**
+ * Auto-fit the camera to encompass all unit positions.
+ * Called once on the first units:updated event that has data.
+ */
+function _autoFitCamera() {
+    const units = TritiumStore.units;
+    const cam = _state.cam;
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    // Use operational bounds (considers units + minimum 200m extent)
+    const ob = _getOperationalBounds();
+
+    if (units.size === 0) {
+        // No units: zoom to show simulation bounds centered at origin
+        const fitW = ob.maxX - ob.minX;
+        const fitH = ob.maxY - ob.minY;
+        const zoomX = cssW / fitW;
+        const zoomY = cssH / fitH;
+        cam.targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.min(zoomX, zoomY)));
+        cam.targetX = 0;
+        cam.targetY = 0;
+        _state.hasAutoFit = true;
+        return;
+    }
+
+    // Compute bounding box of all unit positions
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [, unit] of units) {
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+        if (pos.x < minX) minX = pos.x;
+        if (pos.x > maxX) maxX = pos.x;
+        if (pos.y < minY) minY = pos.y;
+        if (pos.y > maxY) maxY = pos.y;
+    }
+
+    if (!isFinite(minX)) {
+        // All units lack position data — use operational bounds
+        const fitW = ob.maxX - ob.minX;
+        const fitH = ob.maxY - ob.minY;
+        const zoomX = cssW / fitW;
+        const zoomY = cssH / fitH;
+        cam.targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.min(zoomX, zoomY)));
+        cam.targetX = 0;
+        cam.targetY = 0;
+        _state.hasAutoFit = true;
+        return;
+    }
+
+    // Add 20% padding
+    const spanX = (maxX - minX) || 10; // avoid zero span
+    const spanY = (maxY - minY) || 10;
+    const padX = spanX * 0.2;
+    const padY = spanY * 0.2;
+
+    // Ensure the fit area is at least as large as operational bounds
+    const fitMinX = Math.min(minX - padX, ob.minX);
+    const fitMaxX = Math.max(maxX + padX, ob.maxX);
+    const fitMinY = Math.min(minY - padY, ob.minY);
+    const fitMaxY = Math.max(maxY + padY, ob.maxY);
+    const fitW = fitMaxX - fitMinX;
+    const fitH = fitMaxY - fitMinY;
+
+    // Compute zoom to fit both axes
+    const zoomX = cssW / fitW;
+    const zoomY = cssH / fitH;
+    const fitZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.min(zoomX, zoomY)));
+
+    cam.targetX = (fitMinX + fitMaxX) / 2;
+    cam.targetY = (fitMinY + fitMaxY) / 2;
+    cam.targetZoom = fitZoom;
+    _state.hasAutoFit = true;
+    console.log(`[MAP] Auto-fit camera: center=(${cam.targetX.toFixed(1)}, ${cam.targetY.toFixed(1)}), zoom=${fitZoom.toFixed(2)}`);
+}
+
+function _onUnitsUpdated(_targets) {
+    // Auto-fit camera on first unit data
+    if (!_state.hasAutoFit && TritiumStore.units.size > 0) {
+        _autoFitCamera();
+    }
+
+    // Clean up smoothHeadings for units that no longer exist
+    for (const id of _state.smoothHeadings.keys()) {
+        if (!TritiumStore.units.has(id)) {
+            _state.smoothHeadings.delete(id);
+        }
+    }
+}
+
+function _onMapMode(data) {
+    // Mode changes are handled by main.js (buttons, etc.)
+    // We could adjust render behavior based on mode here.
+}
+
+function _onDispatchMode(data) {
+    if (data && data.id) {
+        _state.dispatchMode = true;
+        _state.dispatchUnitId = data.id;
+        _state.canvas.style.cursor = 'crosshair';
+    }
+}
+
+function _onDispatched(data) {
+    // External dispatch events (from sidebar button, etc.)
+    // Arrow already added if we originated the dispatch
+}
+
+function _onMeshCenterOnNode(data) {
+    // Center camera on a mesh radio node
+    if (!data || data.x === undefined || data.y === undefined) return;
+    _state.cam.targetX = data.x;
+    _state.cam.targetY = data.y;
+    _state.cam.targetZoom = Math.max(5.0, _state.cam.zoom);
+    console.log(`[MAP] Center on mesh node: (${data.x.toFixed(1)}, ${data.y.toFixed(1)})`);
+}
+
+function _onDeviceOpenModal(data) {
+    if (!data || !data.id) return;
+    const unit = TritiumStore.units.get(data.id);
+    if (unit) {
+        DeviceModalManager.open(data.id, _resolveModalType(unit), unit);
+    }
+}
+
+function _onMinimapPan(data) {
+    if (!data || data.x === undefined || data.y === undefined) return;
+    _state.cam.targetX = data.x;
+    _state.cam.targetY = data.y;
+}
+
+/**
+ * Handle map:flyToMission event — move camera to mission area.
+ * Accepts x/y game coordinates. Calculates zoom from radius.
+ */
+function _onPanToMission(data) {
+    if (!data) return;
+    if (data.x !== undefined && data.y !== undefined) {
+        _state.cam.targetX = data.x;
+        _state.cam.targetY = data.y;
+    }
+    if (data.radius_m) {
+        // At zoom 1.0, viewport shows ~500m. Scale proportionally.
+        const z = 250 / Math.max(data.radius_m, 20);
+        _state.cam.targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    }
+    console.log(`[MAP] Pan to mission: (${_state.cam.targetX.toFixed(1)}, ${_state.cam.targetY.toFixed(1)}), zoom=${_state.cam.targetZoom.toFixed(2)}`);
+}
+
+function _onSelectedUnitChanged(newId, _oldId) {
+    // When a unit is clicked, show its latest thought (click-to-view).
+    // Surfaces stored thoughts even if they were below broadcast threshold.
+    if (newId) {
+        const unit = TritiumStore.units.get(newId);
+        if (unit && unit.latestThought && !unit.thoughtText) {
+            const lt = unit.latestThought;
+            unit.thoughtText = lt.text;
+            unit.thoughtEmotion = lt.emotion || 'neutral';
+            unit.thoughtImportance = lt.importance || 'normal';
+            unit.thoughtDuration = lt.duration || 5;
+            unit.thoughtExpires = Date.now() + (lt.duration || 5) * 1000;
+        }
+    }
+}
+
+// ============================================================
+// Geo / Satellite tiles
+// ============================================================
+
+function _loadGeoReference() {
+    fetch('/api/geo/reference')
+        .then(r => {
+            if (!r.ok) return null;
+            return r.json();
+        })
+        .then(data => {
+            if (!data) return;
+            if (!data.initialized) {
+                _state.noLocationSet = true;
+                console.warn('[MAP] Geo reference not initialized — showing fallback');
+                return;
+            }
+            _state.noLocationSet = false;
+            _state.geoCenter = { lat: data.lat, lng: data.lng };
+            _loadSatelliteTiles(data.lat, data.lng);
+            _loadOverlayData();
+        })
+        .catch(err => {
+            console.warn('[MAP] Geo reference fetch failed:', err);
+            _state.noLocationSet = true;
+        });
+}
+
+/**
+ * Fetch overlay data (building outlines + road polylines) from the server.
+ * Called once after geo reference is loaded.
+ */
+function _loadOverlayData() {
+    fetch('/api/geo/overlay')
+        .then(r => {
+            if (!r.ok) return null;
+            return r.json();
+        })
+        .then(data => {
+            if (!data) return;
+            _state.overlayBuildings = data.buildings || [];
+            _state.overlayRoads = data.roads || [];
+            console.log(`[MAP] Overlay loaded: ${_state.overlayBuildings.length} buildings, ${_state.overlayRoads.length} road segments`);
+        })
+        .catch(err => {
+            console.warn('[MAP] Overlay fetch failed:', err);
+        });
+}
+
+/**
+ * Get the appropriate tile level index for the current camera zoom.
+ */
+function _getSatTileLevelIndex() {
+    const zoom = _state.cam.zoom;
+    for (let i = 0; i < SAT_TILE_LEVELS.length; i++) {
+        if (zoom < SAT_TILE_LEVELS[i][0]) return i;
+    }
+    return SAT_TILE_LEVELS.length - 1;
+}
+
+/**
+ * Check if the camera zoom has crossed a tile level threshold.
+ * If so, debounce-reload tiles at the new resolution.
+ */
+function _checkSatelliteTileReload() {
+    if (!_state.geoCenter || !_state.showSatellite) return;
+
+    const newLevel = _getSatTileLevelIndex();
+    if (newLevel === _state.satTileLevel) return;
+
+    // Update level immediately to stop retriggering on every frame
+    // (smooth zoom lerp would otherwise reset the debounce timer forever)
+    _state.satTileLevel = newLevel;
+
+    // Debounce the actual tile fetch (zoom may still be lerping)
+    clearTimeout(_state.satReloadTimer);
+    _state.satReloadTimer = setTimeout(() => {
+        const idx = _getSatTileLevelIndex();
+        _state.satTileLevel = idx;
+        const [, tileZoom, radius] = SAT_TILE_LEVELS[idx];
+        console.log(`[MAP] Reloading satellite tiles: zoom=${tileZoom}, radius=${radius}m`);
+        _fetchTilesFromApi(_state.geoCenter.lat, _state.geoCenter.lng, radius, tileZoom);
+    }, 500);
+}
+
+function _loadSatelliteTiles(lat, lng) {
+    // Determine initial tile parameters from current zoom
+    const levelIdx = _getSatTileLevelIndex();
+    _state.satTileLevel = levelIdx;
+    const [, tileZoom, radius] = SAT_TILE_LEVELS[levelIdx];
+
+    // Use the geo.js tile loader if available on window
+    if (typeof window.geo !== 'undefined' && window.geo.loadSatelliteTiles) {
+        window.geo.loadSatelliteTiles(lat, lng, radius, tileZoom)
+            .then(tiles => {
+                if (tiles.length === 0) return;
+                _state.satTiles = tiles;
+                _state.geoLoaded = true;
+                console.log(`[MAP] Loaded ${tiles.length} satellite tiles (zoom ${tileZoom})`);
+            })
+            .catch(err => {
+                console.warn('[MAP] Satellite tiles failed:', err);
+            });
+        return;
+    }
+
+    // Fallback: fetch tile metadata from API and load images directly
+    _fetchTilesFromApi(lat, lng, radius, tileZoom);
+}
+
+function _fetchTilesFromApi(lat, lng, radiusMeters, zoom) {
+    // Calculate tile coordinates covering the area
+    // Each tile at zoom 19 is ~0.3m/px * 256px = ~76m
+    const n = Math.pow(2, zoom);
+    const latRad = lat * Math.PI / 180;
+    const centerTileX = Math.floor(n * (lng + 180) / 360);
+    const centerTileY = Math.floor(n * (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2);
+
+    // How many tiles to cover the radius
+    const metersPerTile = 156543.03392 * Math.cos(latRad) / n * 256;
+    const tilesNeeded = Math.ceil(radiusMeters / metersPerTile) + 1;
+
+    const promises = [];
+    for (let dx = -tilesNeeded; dx <= tilesNeeded; dx++) {
+        for (let dy = -tilesNeeded; dy <= tilesNeeded; dy++) {
+            const tx = centerTileX + dx;
+            const ty = centerTileY + dy;
+            promises.push(_loadTileImage(zoom, tx, ty, lat, lng, n, latRad, metersPerTile));
+        }
+    }
+
+    Promise.allSettled(promises).then(results => {
+        const tiles = results
+            .filter(r => r.status === 'fulfilled' && r.value)
+            .map(r => r.value);
+        if (tiles.length > 0) {
+            _state.satTiles = tiles;
+            _state.geoLoaded = true;
+            console.log(`[MAP] Loaded ${tiles.length} satellite tiles from API`);
+        }
+    });
+}
+
+function _loadTileImage(zoom, tx, ty, centerLat, centerLng, n, latRad, metersPerTile) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            // Calculate game-coord bounds for this tile
+            const tileLng = tx / n * 360 - 180;
+            const tileLngEnd = (tx + 1) / n * 360 - 180;
+            const tileLatRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ty / n)));
+            const tileLatEndRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (ty + 1) / n)));
+            const tileLat = tileLatRad * 180 / Math.PI;
+            const tileLatEnd = tileLatEndRad * 180 / Math.PI;
+
+            // Convert lat/lng to game coords (meters from center)
+            const R = 6378137; // Earth radius meters
+            const minX = (tileLng - centerLng) * Math.PI / 180 * R * Math.cos(latRad);
+            const maxX = (tileLngEnd - centerLng) * Math.PI / 180 * R * Math.cos(latRad);
+            const minY = (tileLatEnd - centerLat) * Math.PI / 180 * R; // South
+            const maxY = (tileLat - centerLat) * Math.PI / 180 * R;   // North
+
+            resolve({ image: img, bounds: { minX, maxX, minY, maxY } });
+        };
+        img.onerror = () => reject(new Error(`Tile ${zoom}/${tx}/${ty} failed`));
+        img.src = `/api/geo/tile/${zoom}/${tx}/${ty}`;
+    });
+}
+
+// ============================================================
+// Road tile overlay
+// ============================================================
+
+function _drawRoadTiles(ctx) {
+    const tiles = _state.roadTiles;
+    if (!tiles || tiles.length === 0) return;
+
+    const cssW = _state.canvas.width / _state.dpr;
+    const cssH = _state.canvas.height / _state.dpr;
+
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+
+    for (const tile of tiles) {
+        const b = tile.bounds;
+        const tl = worldToScreen(b.minX, b.maxY);
+        const br = worldToScreen(b.maxX, b.minY);
+        const sw = br.x - tl.x;
+        const sh = br.y - tl.y;
+
+        if (sw < 1 || sh < 1) continue;
+        if (br.x < 0 || tl.x > cssW) continue;
+        if (br.y < 0 || tl.y > cssH) continue;
+
+        ctx.drawImage(tile.image, tl.x, tl.y, sw, sh);
+    }
+
+    ctx.restore();
+}
+
+function _checkRoadTileReload() {
+    if (!_state.geoCenter || !_state.showRoads) return;
+
+    const newLevel = _getSatTileLevelIndex();
+    if (newLevel === _state.roadTileLevel) return;
+
+    clearTimeout(_state.roadReloadTimer);
+    _state.roadReloadTimer = setTimeout(() => {
+        const idx = _getSatTileLevelIndex();
+        if (idx !== _state.roadTileLevel) {
+            _state.roadTileLevel = idx;
+            const [, tileZoom, radius] = SAT_TILE_LEVELS[idx];
+            console.log(`[MAP] Reloading road tiles: zoom=${tileZoom}, radius=${radius}m`);
+            _fetchRoadTiles(_state.geoCenter.lat, _state.geoCenter.lng, radius, tileZoom);
+        }
+    }, 300);
+}
+
+function _loadRoadTiles(lat, lng) {
+    const levelIdx = _getSatTileLevelIndex();
+    _state.roadTileLevel = levelIdx;
+    const [, tileZoom, radius] = SAT_TILE_LEVELS[levelIdx];
+    _fetchRoadTiles(lat, lng, radius, tileZoom);
+}
+
+function _fetchRoadTiles(lat, lng, radiusMeters, zoom) {
+    const n = Math.pow(2, zoom);
+    const latRad = lat * Math.PI / 180;
+    const centerTileX = Math.floor(n * (lng + 180) / 360);
+    const centerTileY = Math.floor(n * (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2);
+
+    const metersPerTile = 156543.03392 * Math.cos(latRad) / n * 256;
+    const tilesNeeded = Math.ceil(radiusMeters / metersPerTile) + 1;
+
+    const promises = [];
+    for (let dx = -tilesNeeded; dx <= tilesNeeded; dx++) {
+        for (let dy = -tilesNeeded; dy <= tilesNeeded; dy++) {
+            const tx = centerTileX + dx;
+            const ty = centerTileY + dy;
+            promises.push(_loadRoadTileImage(zoom, tx, ty, lat, lng, n, latRad));
+        }
+    }
+
+    Promise.allSettled(promises).then(results => {
+        const tiles = results
+            .filter(r => r.status === 'fulfilled' && r.value)
+            .map(r => r.value);
+        if (tiles.length > 0) {
+            _state.roadTiles = tiles;
+            console.log(`[MAP] Loaded ${tiles.length} road tiles`);
+        }
+    });
+}
+
+function _loadRoadTileImage(zoom, tx, ty, centerLat, centerLng, n, latRad) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            const tileLng = tx / n * 360 - 180;
+            const tileLngEnd = (tx + 1) / n * 360 - 180;
+            const tileLatRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ty / n)));
+            const tileLatEndRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (ty + 1) / n)));
+            const tileLat = tileLatRad * 180 / Math.PI;
+            const tileLatEnd = tileLatEndRad * 180 / Math.PI;
+
+            const R = 6378137;
+            const minX = (tileLng - centerLng) * Math.PI / 180 * R * Math.cos(latRad);
+            const maxX = (tileLngEnd - centerLng) * Math.PI / 180 * R * Math.cos(latRad);
+            const minY = (tileLatEnd - centerLat) * Math.PI / 180 * R;
+            const maxY = (tileLat - centerLat) * Math.PI / 180 * R;
+
+            resolve({ image: img, bounds: { minX, maxX, minY, maxY } });
+        };
+        img.onerror = () => reject(new Error(`Road tile ${zoom}/${tx}/${ty} failed`));
+        img.src = `/api/geo/road-tile/${zoom}/${tx}/${ty}`;
+    });
+}
+
+// ============================================================
+// Zones / Exports
+// ============================================================
+
+/**
+ * Toggle satellite imagery overlay on/off.
+ * Callable externally via keyboard shortcut.
+ */
+export function toggleSatellite() {
+    _state.showSatellite = !_state.showSatellite;
+    console.log(`[MAP] Satellite imagery ${_state.showSatellite ? 'ON' : 'OFF'}`);
+    if (_state.showSatellite && _state.geoCenter && _state.satTiles.length === 0) {
+        _loadSatelliteTiles(_state.geoCenter.lat, _state.geoCenter.lng);
+    }
+}
+
+/**
+ * Toggle road overlay on/off.
+ */
+export function toggleRoads() {
+    _state.showRoads = !_state.showRoads;
+    console.log(`[MAP] Road overlay ${_state.showRoads ? 'ON' : 'OFF'}`);
+    if (_state.showRoads && _state.geoCenter && _state.roadTiles.length === 0) {
+        _loadRoadTiles(_state.geoCenter.lat, _state.geoCenter.lng);
+    }
+}
+
+/**
+ * Toggle grid overlay on/off.
+ */
+export function toggleGrid() {
+    _state.showGrid = !_state.showGrid;
+    console.log(`[MAP] Grid ${_state.showGrid ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle building outlines on/off.
+ */
+export function toggleBuildings() {
+    _state.showBuildings = !_state.showBuildings;
+    console.log(`[MAP] Buildings ${_state.showBuildings ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Return current map state for menu checkmarks.
+ */
+/**
+ * Toggle fog of war on/off.
+ */
+export function toggleFog() {
+    _state.fogEnabled = !_state.fogEnabled;
+    console.log(`[MAP] Fog of war ${_state.fogEnabled ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle mesh radio overlay on/off.
+ */
+export function toggleMesh() {
+    _state.showMesh = !_state.showMesh;
+    console.log(`[MAP] Mesh network ${_state.showMesh ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle NPC thought bubbles on/off.
+ */
+export function toggleThoughts() {
+    _state.showThoughts = !_state.showThoughts;
+    console.log(`[MAP] Thought bubbles ${_state.showThoughts ? 'ON' : 'OFF'}`);
+}
+
+export function getMapState() {
+    return {
+        showSatellite: _state.showSatellite,
+        showRoads: _state.showRoads,
+        showBuildings: _state.showBuildings,
+        showGrid: _state.showGrid,
+        showFog: _state.fogEnabled,
+        fogEnabled: _state.fogEnabled,
+        showMesh: _state.showMesh,
+        showThoughts: _state.showThoughts,
+    };
+}
+
+/**
+ * Center camera on the centroid of all hostile units.
+ * If no hostiles, center on (0,0).
+ */
+export function centerOnAction() {
+    const units = TritiumStore.units;
+    let sumX = 0, sumY = 0, count = 0;
+    units.forEach(u => {
+        if (u.alliance === 'hostile') {
+            sumX += (u.x || u.position?.x || 0);
+            sumY += (u.y || u.position?.y || 0);
+            count++;
+        }
+    });
+    if (count > 0) {
+        _state.cam.targetX = sumX / count;
+        _state.cam.targetY = sumY / count;
+        _state.cam.targetZoom = Math.max(2.0, _state.cam.zoom);
+    } else {
+        _state.cam.targetX = 0;
+        _state.cam.targetY = 0;
+    }
+    console.log(`[MAP] Center on action: (${_state.cam.targetX.toFixed(1)}, ${_state.cam.targetY.toFixed(1)})`);
+}
+
+/**
+ * Reset camera to origin with default zoom.
+ */
+export function resetCamera() {
+    _state.cam.targetX = 0;
+    _state.cam.targetY = 0;
+    _state.cam.targetZoom = 15.0;
+    console.log('[MAP] Camera reset');
+}
+
+/**
+ * Zoom in by factor 1.5, clamped to ZOOM_MAX.
+ */
+export function zoomIn() {
+    _state.cam.targetZoom = Math.min(_state.cam.targetZoom * 1.5, ZOOM_MAX);
+}
+
+/**
+ * Zoom out by factor 1.5, clamped to ZOOM_MIN.
+ */
+export function zoomOut() {
+    _state.cam.targetZoom = Math.max(_state.cam.targetZoom / 1.5, ZOOM_MIN);
+}
+
+// ============================================================
+// Zones
+// ============================================================
+
+function _fetchZones() {
+    fetch('/api/zones')
+        .then(r => {
+            if (!r.ok) return [];
+            return r.json();
+        })
+        .then(data => {
+            if (Array.isArray(data)) {
+                _state.zones = data;
+            } else if (data && Array.isArray(data.zones)) {
+                _state.zones = data.zones;
+            }
+        })
+        .catch(() => {
+            // Zones not available -- non-fatal
+        });
+}

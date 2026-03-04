@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=TRITIUM
+Comment=Launch TRITIUM-SC Command Center
+Exec=/home/scubasonar/Code/tritium-sc/scripts/tritium-launch.sh
+Icon=/home/scubasonar/Code/tritium-sc/assets/tritium.svg
+Terminal=false
+Type=Application
+Categories=Game;Simulation;
+Keywords=tritium;command;center;tactical;
+StartupNotify=true
+StartupWMClass=chromium

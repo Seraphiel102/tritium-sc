@@ -15,6 +15,33 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# Importance levels for thought bubbles.
+# Only thoughts at or above IMPORTANCE_BROADCAST_THRESHOLD are sent to clients.
+IMPORTANCE_IDLE = "idle"          # Background chatter, not displayed
+IMPORTANCE_LOW = "low"            # Minor observations
+IMPORTANCE_NORMAL = "normal"      # Standard thoughts
+IMPORTANCE_HIGH = "high"          # Notable events (spotted enemy, taking cover)
+IMPORTANCE_CRITICAL = "critical"  # Combat, damage, kills, distress
+
+# Numeric ranking for comparison
+_IMPORTANCE_RANK = {
+    IMPORTANCE_IDLE: 0,
+    IMPORTANCE_LOW: 1,
+    IMPORTANCE_NORMAL: 2,
+    IMPORTANCE_HIGH: 3,
+    IMPORTANCE_CRITICAL: 4,
+}
+
+# Only broadcast thoughts at or above this level to WebSocket clients.
+# Clients can still request any unit's stored thought on click.
+IMPORTANCE_BROADCAST_THRESHOLD = IMPORTANCE_HIGH
+
+
+def importance_rank(level: str) -> int:
+    """Return numeric rank for an importance level string."""
+    return _IMPORTANCE_RANK.get(level, 2)
+
+
 @dataclass
 class UnitThought:
     """A single thought bubble for a unit."""
@@ -22,6 +49,7 @@ class UnitThought:
     unit_id: str
     text: str
     emotion: str = "neutral"  # neutral, curious, afraid, angry, happy
+    importance: str = "normal"  # idle, low, normal, high, critical
     expires_at: float = 0.0
     created_at: float = field(default_factory=time.monotonic)
 
@@ -61,19 +89,32 @@ class ThoughtRegistry:
         text: str,
         emotion: str = "neutral",
         duration: float = 5.0,
+        importance: str = IMPORTANCE_NORMAL,
     ) -> UnitThought:
-        """Set a thought bubble for a unit. No control lock needed."""
+        """Set a thought bubble for a unit. No control lock needed.
+
+        Thoughts are always stored locally.  Only thoughts at or above
+        ``IMPORTANCE_BROADCAST_THRESHOLD`` are published to EventBus
+        (and therefore forwarded to WebSocket clients).
+        """
         now = time.monotonic()
         thought = UnitThought(
             unit_id=unit_id,
             text=text,
             emotion=emotion,
+            importance=importance,
             expires_at=now + duration,
             created_at=now,
         )
         with self._lock:
             self._thoughts[unit_id] = thought
-        if self._event_bus is not None:
+
+        # Only broadcast important thoughts to avoid spamming the frontend.
+        should_broadcast = (
+            importance_rank(importance)
+            >= importance_rank(IMPORTANCE_BROADCAST_THRESHOLD)
+        )
+        if should_broadcast and self._event_bus is not None:
             self._event_bus.publish(
                 "npc_thought",
                 {
@@ -81,6 +122,7 @@ class ThoughtRegistry:
                     "text": text,
                     "emotion": emotion,
                     "duration": duration,
+                    "importance": importance,
                 },
             )
         return thought

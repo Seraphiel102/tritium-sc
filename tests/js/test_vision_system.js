@@ -671,6 +671,340 @@ console.log('\n=== TestConeEdges ===\n');
 }
 
 // ============================================================
+// TestRadioGhostTracking
+// ============================================================
+
+console.log('\n=== TestRadioGhostTracking ===\n');
+
+{
+    // test_radio_ghost_created_with_type
+    if (loaded) {
+        const tracker = new GhostTracker();
+        const units = [
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.8,
+                identity: { bluetooth_mac: '4A:3B:C2:1D:E5:F6', wifi_mac: '' },
+            },
+        ];
+        tracker.update(units, 0.1);
+        const ghost = tracker.getGhost('h1');
+        assert(ghost !== null, 'radio ghost: created for radio-detected hostile');
+        assert(ghost.type === 'radio', 'radio ghost: type is radio');
+        assert(ghost.mac === '4A:3B:C2:1D:E5:F6', 'radio ghost: MAC address stored');
+    } else {
+        assert(false, 'radio ghost: created for radio-detected hostile (module not loaded)');
+        assert(false, 'radio ghost: type is radio (module not loaded)');
+        assert(false, 'radio ghost: MAC address stored (module not loaded)');
+    }
+}
+
+{
+    // test_visual_ghost_type_is_visual
+    if (loaded) {
+        const tracker = new GhostTracker();
+        const units = [
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: false,
+            },
+        ];
+        tracker.update(units, 0.1);
+        const ghost = tracker.getGhost('h1');
+        assert(ghost !== null, 'visual ghost: created');
+        assert(ghost.type === 'visual', 'visual ghost: type is visual');
+    } else {
+        assert(false, 'visual ghost: created (module not loaded)');
+        assert(false, 'visual ghost: type is visual (module not loaded)');
+    }
+}
+
+{
+    // test_radio_ghost_60s_ttl
+    if (loaded) {
+        const tracker = new GhostTracker();
+        const units = [
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.5,
+                identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF' },
+            },
+        ];
+        tracker.update(units, 0.0);
+        // Age to 35 seconds (past visual 30s but within radio 60s)
+        for (let i = 0; i < 350; i++) {
+            tracker.update(units, 0.1);
+        }
+        const ghost = tracker.getGhost('h1');
+        assert(ghost !== null, 'radio ghost: still alive at 35s (60s TTL)');
+        assert(ghost.opacity > 0, 'radio ghost: still visible at 35s');
+    } else {
+        assert(false, 'radio ghost: still alive at 35s (60s TTL) (module not loaded)');
+        assert(false, 'radio ghost: still visible at 35s (module not loaded)');
+    }
+}
+
+{
+    // test_radio_ghost_fades_after_60s
+    if (loaded) {
+        const tracker = new GhostTracker();
+        const units = [
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.5,
+                identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF' },
+            },
+        ];
+        tracker.update(units, 0.0);
+        // Age to 61 seconds
+        for (let i = 0; i < 610; i++) {
+            tracker.update(units, 0.1);
+        }
+        const ghost = tracker.getGhost('h1');
+        assert(ghost === null, 'radio ghost: faded after 60s');
+    } else {
+        assert(false, 'radio ghost: faded after 60s (module not loaded)');
+    }
+}
+
+{
+    // test_uncertainty_grows_with_age
+    if (loaded) {
+        const tracker = new GhostTracker();
+        const units = [
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.5,
+                identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF' },
+            },
+        ];
+        tracker.update(units, 0.0);
+        // Age 10 seconds
+        for (let i = 0; i < 100; i++) {
+            tracker.update(units, 0.1);
+        }
+        const ghost = tracker.getGhost('h1');
+        assert(ghost !== null, 'uncertainty: ghost exists');
+        assert(ghost.uncertainty > 0, 'uncertainty: grows with age');
+        // uncertainty = age * 0.5, so at ~10s should be ~5m
+        assert(ghost.uncertainty > 3 && ghost.uncertainty < 7, 'uncertainty: ~5m at 10s');
+    } else {
+        assert(false, 'uncertainty: ghost exists (module not loaded)');
+        assert(false, 'uncertainty: grows with age (module not loaded)');
+        assert(false, 'uncertainty: ~5m at 10s (module not loaded)');
+    }
+}
+
+{
+    // test_getRadioGhosts_filters
+    if (loaded) {
+        const tracker = new GhostTracker();
+        tracker.update([
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.8,
+                identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF' },
+            },
+            {
+                target_id: 'h2', alliance: 'hostile', visible: false,
+                position: { x: 30, y: 40 },
+                radio_detected: false,
+            },
+        ], 0.1);
+        const radioGhosts = tracker.getRadioGhosts();
+        const visualGhosts = tracker.getVisualGhosts();
+        assert(radioGhosts.length === 1, 'filter: 1 radio ghost');
+        assert(visualGhosts.length === 1, 'filter: 1 visual ghost');
+        assert(radioGhosts[0][0] === 'h1', 'filter: radio ghost is h1');
+        assert(visualGhosts[0][0] === 'h2', 'filter: visual ghost is h2');
+    } else {
+        assert(false, 'filter: 1 radio ghost (module not loaded)');
+        assert(false, 'filter: 1 visual ghost (module not loaded)');
+        assert(false, 'filter: radio ghost is h1 (module not loaded)');
+        assert(false, 'filter: visual ghost is h2 (module not loaded)');
+    }
+}
+
+{
+    // test_visual_ghost_upgrade_to_radio
+    if (loaded) {
+        const tracker = new GhostTracker();
+        // First update: invisible but no radio
+        tracker.update([
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: false,
+            },
+        ], 0.1);
+        let ghost = tracker.getGhost('h1');
+        assert(ghost.type === 'visual', 'upgrade: starts as visual');
+        // Second update: radio detected
+        tracker.update([
+            {
+                target_id: 'h1', alliance: 'hostile', visible: false,
+                position: { x: 10, y: 20 },
+                radio_detected: true, radio_signal_strength: 0.7,
+                identity: { bluetooth_mac: 'AA:BB:CC:DD:EE:FF' },
+            },
+        ], 0.1);
+        ghost = tracker.getGhost('h1');
+        assert(ghost.type === 'radio', 'upgrade: promoted to radio');
+        assert(ghost.mac === 'AA:BB:CC:DD:EE:FF', 'upgrade: MAC set after promotion');
+    } else {
+        assert(false, 'upgrade: starts as visual (module not loaded)');
+        assert(false, 'upgrade: promoted to radio (module not loaded)');
+        assert(false, 'upgrade: MAC set after promotion (module not loaded)');
+    }
+}
+
+// ============================================================
+// TestCoordinateTransforms
+// ============================================================
+
+console.log('\n=== TestCoordinateTransforms ===\n');
+
+{
+    // test_worldToScreen_with_map_project
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        // Mock map with project() and getContainer()
+        sys._mapState = {
+            map: {
+                project: (lngLat) => ({ x: lngLat[0] * 100, y: lngLat[1] * 100 }),
+                getContainer: () => ({ clientWidth: 1024, clientHeight: 1024 }),
+                getZoom: () => 16,
+                getCenter: () => ({ lat: 37.7159, lng: -121.896 }),
+            },
+            geoCenter: { lat: 37.7159, lng: -121.896 },
+        };
+        sys._fogCanvas = { width: 1024, height: 1024 };
+
+        // Test with lng/lat position
+        const result = sys._worldToScreen({ lng: -121.896, lat: 37.7159 });
+        assert(typeof result.x === 'number', 'worldToScreen: returns numeric x');
+        assert(typeof result.y === 'number', 'worldToScreen: returns numeric y');
+        assert(result.x !== 0 || result.y !== 0, 'worldToScreen: non-zero result for valid coords');
+    } else {
+        assert(false, 'worldToScreen: returns numeric x (module not loaded)');
+        assert(false, 'worldToScreen: returns numeric y (module not loaded)');
+        assert(false, 'worldToScreen: non-zero result for valid coords (module not loaded)');
+    }
+}
+
+{
+    // test_worldToScreen_no_map_returns_zero
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        sys._mapState = null;
+        const result = sys._worldToScreen({ x: 10, y: 20 });
+        assert(result.x === 0, 'worldToScreen: no map returns x=0');
+        assert(result.y === 0, 'worldToScreen: no map returns y=0');
+    } else {
+        assert(false, 'worldToScreen: no map returns x=0 (module not loaded)');
+        assert(false, 'worldToScreen: no map returns y=0 (module not loaded)');
+    }
+}
+
+{
+    // test_metersToPixels_with_zoom
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        sys._mapState = {
+            map: {
+                getZoom: () => 16,
+                getCenter: () => ({ lat: 37.7159 }),
+                getContainer: () => ({ clientWidth: 1024 }),
+            },
+        };
+        sys._fogCanvas = { width: 1024 };
+
+        const px = sys._metersToPixels(100);
+        assert(typeof px === 'number', 'metersToPixels: returns number');
+        assert(px > 0, 'metersToPixels: positive for positive meters');
+        // At zoom 16, 100m should be a reasonable number of pixels (not 100)
+        assert(px !== 100, 'metersToPixels: not identity transform');
+    } else {
+        assert(false, 'metersToPixels: returns number (module not loaded)');
+        assert(false, 'metersToPixels: positive for positive meters (module not loaded)');
+        assert(false, 'metersToPixels: not identity transform (module not loaded)');
+    }
+}
+
+{
+    // test_metersToPixels_no_map_returns_raw
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        sys._mapState = null;
+        const px = sys._metersToPixels(42);
+        assert(px === 42, 'metersToPixels: no map returns raw meters');
+    } else {
+        assert(false, 'metersToPixels: no map returns raw meters (module not loaded)');
+    }
+}
+
+{
+    // test_metersToPixels_zoom_scaling
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        sys._fogCanvas = { width: 1024 };
+
+        // Low zoom = smaller pixel result
+        sys._mapState = {
+            map: {
+                getZoom: () => 14,
+                getCenter: () => ({ lat: 37.7159 }),
+                getContainer: () => ({ clientWidth: 1024 }),
+            },
+        };
+        const pxLow = sys._metersToPixels(100);
+
+        // High zoom = larger pixel result
+        sys._mapState = {
+            map: {
+                getZoom: () => 18,
+                getCenter: () => ({ lat: 37.7159 }),
+                getContainer: () => ({ clientWidth: 1024 }),
+            },
+        };
+        const pxHigh = sys._metersToPixels(100);
+
+        assert(pxHigh > pxLow, 'metersToPixels: higher zoom = more pixels');
+    } else {
+        assert(false, 'metersToPixels: higher zoom = more pixels (module not loaded)');
+    }
+}
+
+{
+    // test_worldToScreen_fallback_game_meters
+    if (loaded) {
+        const sys = new FrontendVisionSystem();
+        sys._mapState = {
+            map: {
+                project: (lngLat) => ({ x: (lngLat[0] + 121.896) * 100000, y: (37.7159 - lngLat[1]) * 100000 }),
+                getContainer: () => ({ clientWidth: 1024, clientHeight: 1024 }),
+            },
+            geoCenter: { lat: 37.7159, lng: -121.896 },
+        };
+        sys._fogCanvas = { width: 1024, height: 1024 };
+
+        // Position with x/y (game meters, no lng/lat) should still produce a result
+        const result = sys._worldToScreen({ x: 50, y: 50 });
+        assert(typeof result.x === 'number', 'worldToScreen fallback: numeric x');
+        assert(typeof result.y === 'number', 'worldToScreen fallback: numeric y');
+    } else {
+        assert(false, 'worldToScreen fallback: numeric x (module not loaded)');
+        assert(false, 'worldToScreen fallback: numeric y (module not loaded)');
+    }
+}
+
+// ============================================================
 // Summary
 // ============================================================
 

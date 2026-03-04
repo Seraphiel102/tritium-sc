@@ -202,7 +202,16 @@ class NPCManager:
 
         # Auto-spawn thread state
         self._running = False
+        self._enabled = True
         self._thread: threading.Thread | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
 
     @property
     def npc_count(self) -> int:
@@ -241,6 +250,10 @@ class NPCManager:
 
             if not self._running:
                 break
+
+            # Skip if disabled (e.g. during battle mode)
+            if not self._enabled:
+                continue
 
             # Skip if engine has spawners paused
             if getattr(self._engine, "spawners_paused", False):
@@ -384,6 +397,33 @@ class NPCManager:
         self._missions[target.target_id] = mission
 
         return target
+
+    # -- Cleanup ------------------------------------------------------------
+
+    def reset(self) -> None:
+        """Clear all NPC tracking state between games.
+
+        Prevents stale missions, IDs, and name pools from leaking across
+        game resets.  The auto-spawn loop continues running and will
+        repopulate naturally.
+        """
+        self._missions.clear()
+        self._vehicle_types.clear()
+        self._bindings.clear()
+        self._used_names.clear()
+        self._npc_ids.clear()
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove all per-unit state for a target.
+
+        Called by engine.remove_target() to prevent memory leaks.
+        Cleans up: _npc_ids, _missions, _vehicle_types, _bindings.
+        Safe to call with unknown target_ids (no-op).
+        """
+        self._npc_ids.discard(target_id)
+        self._missions.pop(target_id, None)
+        self._vehicle_types.pop(target_id, None)
+        self._bindings.pop(target_id, None)
 
     # -- Queries ------------------------------------------------------------
 

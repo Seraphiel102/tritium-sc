@@ -38,6 +38,8 @@ from app.routers.mesh import router as mesh_router
 from app.routers.geodata import router as geodata_router
 from app.routers.npc import router as npc_router
 from app.routers.plugins import router as plugins_router
+from app.routers.devices import router as devices_router
+from app.routers.tak import router as tak_router
 
 
 # ---------------------------------------------------------------------------
@@ -84,18 +86,29 @@ def _create_simulation_engine():
     from engine.comms.event_bus import EventBus
     from engine.simulation import SimulationEngine, load_layout
 
+    # Set global Ollama host early so all LLM consumers use fleet
+    try:
+        from engine.perception.vision import set_ollama_host
+        if settings.fleet_enabled:
+            from engine.inference.fleet import OllamaFleet
+            fleet = OllamaFleet(auto_discover=settings.fleet_auto_discover)
+            if fleet.hosts:
+                set_ollama_host(fleet.hosts[0].url)
+                logger.info(f"Ollama fleet: {len(fleet.hosts)} host(s), primary={fleet.hosts[0].name}")
+        else:
+            set_ollama_host(settings.ollama_host)
+    except Exception:
+        logger.debug("Ollama fleet discovery skipped", exc_info=True)
+
     # Temporary event bus; gets replaced by Amy's actual bus after create_amy
     engine = SimulationEngine(EventBus())
 
-    if settings.simulation_layout:
-        layout_path = Path(settings.simulation_layout)
-        if layout_path.exists():
-            count = load_layout(str(layout_path), engine)
-            logger.info(f"Simulation: loaded {count} targets from {layout_path}")
-        else:
-            logger.warning(f"Simulation layout not found: {layout_path}")
+    # Layout is NOT auto-loaded at startup — engine starts with 0 units.
+    # Units are only placed by battle scenarios, API calls, or explicit
+    # profile/mission loads.  The layout path is still available via
+    # settings.simulation_layout for on-demand loading.
 
-    logger.info("Simulation engine created")
+    logger.info("Simulation engine created (clean start, 0 units)")
     return engine
 
 
@@ -480,6 +493,16 @@ async def lifespan(app: FastAPI):
                 else:
                     logger.info("Simulation engine started (10Hz tick)")
 
+                # Register formation Lua actions against this engine instance
+                try:
+                    from engine.actions.lua_registry import LuaActionRegistry
+                    from engine.actions.formation_actions import register_formation_actions
+                    _formation_registry = LuaActionRegistry.with_core_actions()
+                    register_formation_actions(_formation_registry, sim_engine)
+                    logger.info("Formation Lua actions registered")
+                except Exception as e:
+                    logger.warning(f"Formation actions registration failed: {e}")
+
             # Synthetic camera node (overhead view of simulation)
             if sim_engine is not None:
                 try:
@@ -582,9 +605,20 @@ async def lifespan(app: FastAPI):
 
                 # Bridge sim events to WebSocket so the browser canvas renders targets
                 start_headless_event_bridge(
-                    sim_engine.event_bus, asyncio.get_event_loop()
+                    sim_engine.event_bus, asyncio.get_event_loop(),
+                    simulation_engine=sim_engine,
                 )
                 logger.info("Headless simulation engine + event bridge started (no Amy)")
+
+                # Register formation Lua actions against this engine instance
+                try:
+                    from engine.actions.lua_registry import LuaActionRegistry
+                    from engine.actions.formation_actions import register_formation_actions
+                    _formation_registry = LuaActionRegistry.with_core_actions()
+                    register_formation_actions(_formation_registry, sim_engine)
+                    logger.info("Formation Lua actions registered (headless)")
+                except Exception as e:
+                    logger.warning(f"Formation actions registration failed: {e}")
 
     # Plugin system — discover, configure, and start all plugins
     plugin_manager = _start_plugins(app, amy_instance, sim_engine)
@@ -647,9 +681,11 @@ app.include_router(mesh_router)
 app.include_router(geodata_router)
 app.include_router(npc_router)
 app.include_router(plugins_router)
+app.include_router(devices_router)
+app.include_router(tak_router)
 
 # Static files
-frontend_path = Path(__file__).parent.parent.parent / "frontend"
+frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=frontend_path, follow_symlink=True), name="static")
 

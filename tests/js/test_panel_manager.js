@@ -942,6 +942,169 @@ console.log('\n--- Edge cases ---');
 })();
 
 // ============================================================
+// Panel mount error recovery
+// ============================================================
+
+(function testMountErrorRecovery() {
+    const pm = makePM(1200, 700);
+    const def = makeDef({
+        id: 'broken',
+        title: 'Broken',
+        mount() { throw new Error('mount explosion'); },
+    });
+    pm.register(def);
+    const result = pm.open('broken');
+    assert(result === null, 'open() returns null when mount() throws');
+    assert(!pm._panels.has('broken'), 'Panel is removed from _panels on mount failure');
+    assert(pm.isOpen('broken') === false, 'isOpen returns false for failed panel');
+})();
+
+(function testMountErrorDoesNotAffectOtherPanels() {
+    const pm = makePM(1200, 700);
+    pm.register(makeDef({ id: 'good', title: 'Good' }));
+    pm.register(makeDef({
+        id: 'bad', title: 'Bad',
+        mount() { throw new Error('oops'); },
+    }));
+    const good = pm.open('good');
+    const bad = pm.open('bad');
+    assert(good !== null, 'Good panel opens successfully');
+    assert(bad === null, 'Bad panel returns null');
+    assert(pm.isOpen('good') === true, 'Good panel is still open');
+    assert(pm.isOpen('bad') === false, 'Bad panel is not open');
+    pm.destroyAll();
+})();
+
+// ============================================================
+// 14. close() calls unmount() to prevent subscription leaks
+// ============================================================
+
+console.log('\n--- close() lifecycle: unmount on close ---');
+
+(function testCloseCallsUnmount() {
+    const pm = makePM(1200, 700);
+    let unmountCalled = false;
+    pm.register(makeDef({
+        id: 'lc1',
+        title: 'Lifecycle1',
+        unmount(bodyEl) { unmountCalled = true; },
+    }));
+    pm.open('lc1');
+    assert(!unmountCalled, 'unmount not called yet after open');
+    pm.close('lc1');
+    assert(unmountCalled, 'close() calls unmount() to clean up subscriptions');
+    pm.destroyAll();
+})();
+
+(function testCloseClears_unsubs() {
+    const pm = makePM(1200, 700);
+    let mountRan = false;
+    pm.register(makeDef({
+        id: 'lc2',
+        title: 'Lifecycle2',
+        mount(bodyEl, panel) {
+            mountRan = true;
+            // Simulate pushing cleanup fns into _unsubs
+            panel._unsubs.push(() => {});
+            panel._unsubs.push(() => {});
+        },
+    }));
+    const panel = pm.open('lc2');
+    assert(mountRan, 'mount ran on first open');
+    assert(panel._unsubs.length === 2, '_unsubs has 2 entries after mount, got ' + panel._unsubs.length);
+    pm.close('lc2');
+    assert(panel._unsubs.length === 0, '_unsubs cleared after close, got ' + panel._unsubs.length);
+    pm.destroyAll();
+})();
+
+(function testCloseHidesPanel() {
+    const pm = makePM(1200, 700);
+    pm.register(makeDef({ id: 'lc3', title: 'Lifecycle3' }));
+    pm.open('lc3');
+    assert(pm.isOpen('lc3'), 'panel open before close');
+    pm.close('lc3');
+    assert(!pm.isOpen('lc3'), 'panel not visible after close');
+    pm.destroyAll();
+})();
+
+// ============================================================
+// 15. open() re-mounts a previously closed (hidden) panel
+// ============================================================
+
+console.log('\n--- open() lifecycle: remount on reopen ---');
+
+(function testReopenCallsMountAgain() {
+    const pm = makePM(1200, 700);
+    let mountCount = 0;
+    pm.register(makeDef({
+        id: 'reopen1',
+        title: 'Reopen1',
+        mount(bodyEl, panel) { mountCount++; },
+        unmount(bodyEl) {},
+    }));
+    pm.open('reopen1');
+    assert(mountCount === 1, 'mount called once on first open');
+    pm.close('reopen1');
+    pm.open('reopen1');
+    assert(mountCount === 2, 'mount called again on reopen after close, got ' + mountCount);
+    pm.destroyAll();
+})();
+
+(function testReopenRegistersNewSubscriptions() {
+    const pm = makePM(1200, 700);
+    pm.register(makeDef({
+        id: 'reopen2',
+        title: 'Reopen2',
+        mount(bodyEl, panel) {
+            panel._unsubs.push(() => {});
+        },
+        unmount(bodyEl) {},
+    }));
+    const panel = pm.open('reopen2');
+    assert(panel._unsubs.length === 1, 'first open: 1 sub');
+    pm.close('reopen2');
+    assert(panel._unsubs.length === 0, 'after close: 0 subs');
+    pm.open('reopen2');
+    assert(panel._unsubs.length === 1, 'reopen: 1 sub again, got ' + panel._unsubs.length);
+    pm.destroyAll();
+})();
+
+(function testReopenPreservesPosition() {
+    const pm = makePM(1200, 700);
+    pm.register(makeDef({
+        id: 'reopen3',
+        title: 'Reopen3',
+        defaultPosition: { x: 50, y: 50 },
+    }));
+    const panel = pm.open('reopen3');
+    panel.setPosition(200, 300);
+    pm.close('reopen3');
+    pm.open('reopen3');
+    assertClose(panel.x, 200, 0.1, 'reopen preserves x position');
+    assertClose(panel.y, 300, 0.1, 'reopen preserves y position');
+    pm.destroyAll();
+})();
+
+(function testToggleCycleCleanup() {
+    const pm = makePM(1200, 700);
+    let mountCount = 0;
+    let unmountCount = 0;
+    pm.register(makeDef({
+        id: 'toggle-lc',
+        title: 'ToggleLC',
+        mount(bodyEl, panel) { mountCount++; },
+        unmount(bodyEl) { unmountCount++; },
+    }));
+    pm.toggle('toggle-lc');  // open
+    assert(mountCount === 1 && unmountCount === 0, 'first toggle: mount=1 unmount=0');
+    pm.toggle('toggle-lc');  // close
+    assert(mountCount === 1 && unmountCount === 1, 'second toggle: mount=1 unmount=1');
+    pm.toggle('toggle-lc');  // reopen
+    assert(mountCount === 2 && unmountCount === 1, 'third toggle: mount=2 unmount=1, got mount=' + mountCount + ' unmount=' + unmountCount);
+    pm.destroyAll();
+})();
+
+// ============================================================
 // Summary
 // ============================================================
 

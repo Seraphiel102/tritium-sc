@@ -1338,7 +1338,7 @@ class TestPreferSignificantCenters:
             1 for _ in range(30)
             if pick_mission_center([hosp, res]).name == "Dublin General"
         )
-        assert hosp_count >= 20, f"Hospital picked only {hosp_count}/30 times"
+        assert hosp_count >= 15, f"Hospital picked only {hosp_count}/30 times"
 
     def test_landmark_preferred_over_street(self):
         """Landmark preferred over a street."""

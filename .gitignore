@@ -59,8 +59,8 @@ thumbnails/
 data/synthetic/audio/
 data/synthetic/video/
 # Scenario run results and pre-generated images
-scenarios/.results/
-src/amy/scenarios/cache/
+tests/scenarios/.results/
+src/engine/scenarios/cache/
 vectors.json
 labels.json
 merges.json

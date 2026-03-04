@@ -264,7 +264,7 @@ I have TRITIUM-SC running on a TV in my home office. I'm working at my desk. I g
 
 **As a developer**, I want to change code and verify it works without manual testing.
 
-I make a change to `frontend/js/command/map.js`. I want to know if I broke anything.
+I make a change to `src/frontend/js/command/map.js`. I want to know if I broke anything.
 
 ```bash
 # Quick check (60 seconds): syntax + unit tests + JS tests + infra
@@ -286,10 +286,10 @@ I make a change to `frontend/js/command/map.js`. I want to know if I broke anyth
 For Python backend changes:
 ```bash
 # Unit tests for a specific module
-.venv/bin/python3 -m pytest tests/amy/test_combat.py -v
+.venv/bin/python3 -m pytest tests/engine/simulation/test_combat.py -v
 
 # All unit tests
-.venv/bin/python3 -m pytest tests/amy/ -m unit -v
+.venv/bin/python3 -m pytest tests/engine/ tests/amy/ -m unit -v
 ```
 
 For visual changes, I open `http://localhost:8000` in my browser and look at it. Then I take a screenshot and check it against the user stories above. Does it look like what Story 1 describes? If not, it's wrong.
@@ -306,10 +306,10 @@ The codebase is structured for parallel agent work:
 
 | Agent Focus | Owns | Can Read | Test Command |
 |------------|------|----------|--------------|
-| Backend | `src/amy/`, `src/app/` | Everything | `./test.sh 2` |
-| Frontend map | `frontend/js/command/map.js` | `frontend/`, `app/routers/` | `./test.sh 3` |
-| Frontend panels | `frontend/js/command/panels/` | `frontend/`, store.js, events.js | `./test.sh 3` |
-| Frontend CSS | `frontend/css/` | `frontend/` | `./test.sh 3` |
+| Backend | `src/engine/`, `src/amy/`, `src/app/` | Everything | `./test.sh 2` |
+| Frontend map | `src/frontend/js/command/map.js` | `src/frontend/`, `app/routers/` | `./test.sh 3` |
+| Frontend panels | `src/frontend/js/command/panels/` | `src/frontend/`, store.js, events.js | `./test.sh 3` |
+| Frontend CSS | `src/frontend/css/` | `src/frontend/` | `./test.sh 3` |
 | Tests | `tests/` | Everything | `./test.sh fast` |
 
 **Rules:**

@@ -81,9 +81,9 @@ class Settings(BaseSettings):
 
     # Simulation engine
     simulation_enabled: bool = True
-    simulation_layout: str = "scenarios/neighborhood_default.json"
+    simulation_layout: str = "tests/scenarios/neighborhood_default.json"
     simulation_mode: str = "sim"  # "sim" or "live" — controls Amy's tactical data source
-    simulation_bounds: float = 200.0  # Half-extent in meters (±200 = 400m x 400m)
+    simulation_bounds: float = 500.0  # Half-extent in meters (±500 = 1km x 1km city-scale)
     simulation_max_hostiles: int = 200  # Maximum simultaneous hostile targets
 
     # Plugin system
@@ -106,8 +106,15 @@ class Settings(BaseSettings):
     amy_think_interval: float = 8.0
 
     # Fleet / Model routing
-    fleet_enabled: bool = False       # opt-in; False = existing static behavior
+    fleet_enabled: bool = True        # auto-discover Ollama fleet on LAN + Tailscale
     fleet_auto_discover: bool = True  # Tailscale peer scan when fleet_enabled
+
+    # Backstory generation (distributed via Ollama fleet)
+    backstory_enabled: bool = True
+    backstory_bulk_model: str = "gemma3:1b"
+    backstory_key_model: str = "gemma3:4b"
+    backstory_max_concurrent: int = 3
+    backstory_cache_dir: str = "data/backstories"
 
     # Escalation thresholds
     escalation_linger_threshold: float = 30.0

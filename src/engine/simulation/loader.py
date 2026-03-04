@@ -86,6 +86,18 @@ def load_layout(path: str, engine: SimulationEngine) -> int:
     with open(path, "r") as f:
         data = json.load(f)
 
+    # Apply map_bounds from level metadata if present and larger than current
+    meta = data.get("meta", {})
+    level_bounds = meta.get("map_bounds")
+    if level_bounds is not None:
+        # Support both [min, max] and scalar formats
+        if isinstance(level_bounds, (list, tuple)) and len(level_bounds) >= 2:
+            half_extent = abs(level_bounds[1])
+        else:
+            half_extent = abs(float(level_bounds))
+        if half_extent > engine._map_bounds:
+            engine.set_map_bounds(half_extent)
+
     objects = data.get("objects", [])
     count = 0
     created_targets: list[tuple[SimulationTarget, tuple[float, float]]] = []

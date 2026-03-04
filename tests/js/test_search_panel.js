@@ -186,6 +186,57 @@ console.log('\n--- unmount() ---');
 (function() { let threw = false; try { SearchPanelDef.unmount(createMockElement('div')); } catch (e) { threw = true; } assert(!threw, 'unmount() does not throw'); })();
 
 // ============================================================
+// Merge request uses correct field names (primary_id, duplicate_ids)
+// ============================================================
+console.log('\n--- Merge request format ---');
+
+(function testMergeRequestUsesCorrectFieldNames() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/search.js', 'utf8');
+    // Backend MergeRequest model expects {primary_id: str, duplicate_ids: list[str]}
+    assert(src.includes('primary_id'), 'Merge request uses primary_id (matches backend MergeRequest model)');
+    assert(src.includes('duplicate_ids'), 'Merge request uses duplicate_ids array (matches backend MergeRequest model)');
+    assert(!src.includes('source_id'), 'Merge request does NOT use source_id (wrong field name for backend)');
+    assert(!src.includes('target_id: otherTid'), 'Merge request does NOT use target_id for merge target');
+})();
+
+// ============================================================
+// API contract correctness
+// ============================================================
+console.log('\n--- API contracts ---');
+
+(function testSightingsUsesPathParam() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/search.js', 'utf8');
+    assert(src.includes('/api/search/sightings/${'), 'Sightings uses path param (not query param)');
+    assert(!src.includes('/api/search/sightings?thumbnail_id='), 'Sightings does NOT use query param');
+})();
+
+(function testSimilarUsesPathParam() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/search.js', 'utf8');
+    assert(src.includes('/api/search/similar/${'), 'Similar uses path param (not query param)');
+    assert(!src.includes('/api/search/similar?thumbnail_id='), 'Similar does NOT use query param');
+})();
+
+(function testNoLabelGetRequest() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/search.js', 'utf8');
+    assert(!src.includes("'/api/search/label?"), 'No GET request to /api/search/label (only POST exists)');
+    assert(!src.includes('"/api/search/label?'), 'No GET request to /api/search/label (double-quote check)');
+    assert(!src.includes('/api/search/label?thumbnail_id='), 'No label query param fetch');
+})();
+
+(function testFeedbackSendsFeedbackType() {
+    const src = fs.readFileSync(__dirname + '/../../frontend/js/command/panels/search.js', 'utf8');
+    assert(src.includes('feedback_type'), 'Feedback sends feedback_type (matches backend FeedbackRequest model)');
+    assert(!src.includes('correct: true'), 'Feedback does NOT send {correct: true} (wrong field for backend)');
+    assert(!src.includes('correct: false'), 'Feedback does NOT send {correct: false} (wrong field for backend)');
+})();
+
+(function testBackendSightingsPathParam() {
+    const py = fs.readFileSync(__dirname + '/../../src/app/routers/search.py', 'utf8');
+    assert(py.includes('/sightings/{thumbnail_id}'), 'Backend sightings route uses path param');
+    assert(py.includes('/similar/{thumbnail_id}'), 'Backend similar route uses path param');
+})();
+
+// ============================================================
 // Summary
 // ============================================================
 console.log('\n' + '='.repeat(40));

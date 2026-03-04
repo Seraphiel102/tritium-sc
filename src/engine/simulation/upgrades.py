@@ -155,10 +155,10 @@ ABILITIES: dict[str, Ability] = {
     ),
     "emp_burst": Ability(
         "emp_burst", "EMP Burst",
-        "Slow enemies in 15m radius by 50% for 4s",
-        cooldown=40.0, duration=4.0,
-        effect="emp", magnitude=0.5,
-        eligible_types=["drone", "missile_turret"],
+        "Stun hostile flying units in 150m radius for 5s",
+        cooldown=40.0, duration=5.0,
+        effect="emp", magnitude=0.0,
+        eligible_types=["drone", "missile_turret", "rover"],
     ),
     "overclock": Ability(
         "overclock", "Overclock",
@@ -170,7 +170,13 @@ ABILITIES: dict[str, Ability] = {
 }
 
 # EMP burst radius in meters
-_EMP_RADIUS = 15.0
+_EMP_RADIUS = 150.0
+
+# Asset types considered "flying" for EMP targeting
+_FLYING_TYPES = frozenset({
+    "drone", "scout_drone", "swarm_drone",
+    "scout_swarm", "attack_swarm", "bomber_swarm",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +194,8 @@ class UpgradeSystem:
       5. get_stat_modifier(target_id, stat) -- query combined modifier
     """
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus=None) -> None:
+        self._event_bus = event_bus
         # Per-unit upgrade tracking: target_id -> [upgrade_id, ...]
         # (duplicates allowed for stacking)
         self._unit_upgrades: dict[str, list[str]] = {}
@@ -413,8 +420,22 @@ class UpgradeSystem:
         source: SimulationTarget,
         targets: dict[str, SimulationTarget],
     ) -> None:
-        """Apply EMP burst: slow enemies within radius."""
+        """Apply EMP burst: stun hostile flying units within radius.
+
+        The EMP burst is an area-of-effect ability that temporarily disables
+        all hostile flying units within _EMP_RADIUS (150m). Stunned units
+        get an ``emp_stun`` active effect (speed = 0, cannot fire) for the
+        ability's duration (5s).
+
+        Only hostile units with a flying asset_type are affected. Ground
+        units and friendly units are not stunned.
+
+        Publishes an ``emp_activated`` event on the EventBus with position,
+        radius, affected_count, and activated_by.
+        """
         sx, sy = source.position
+        affected_count = 0
+
         for tid, target in targets.items():
             if tid == source_id:
                 continue
@@ -422,6 +443,10 @@ class UpgradeSystem:
             if target.alliance == source.alliance:
                 continue
             if target.alliance == "neutral":
+                continue
+            # Only affect flying unit types
+            effective_type = target.drone_variant or target.asset_type
+            if effective_type not in _FLYING_TYPES:
                 continue
             # Check distance
             dx = target.position[0] - sx
@@ -431,10 +456,20 @@ class UpgradeSystem:
                 self._active_effects.append(ActiveEffect(
                     target_id=tid,
                     ability_id=ability.ability_id,
-                    effect="emp",
-                    magnitude=ability.magnitude,
+                    effect="emp_stun",
+                    magnitude=0.0,  # Complete stun: speed = 0
                     remaining=ability.duration,
                 ))
+                affected_count += 1
+
+        # Publish emp_activated event
+        if self._event_bus is not None:
+            self._event_bus.publish("emp_activated", {
+                "activated_by": source_id,
+                "position": {"x": sx, "y": sy},
+                "radius": _EMP_RADIUS,
+                "affected_count": affected_count,
+            })
 
     def get_multiplier(self, target_id: str, stat_name: str) -> float:
         """Return the current multiplier for a stat from simplified upgrades.
@@ -490,6 +525,11 @@ class UpgradeSystem:
             effect.remaining -= dt
             if effect.remaining > 0:
                 still_active.append(effect)
+            elif self._event_bus is not None:
+                self._event_bus.publish("ability_expired", {
+                    "unit_id": effect.target_id,
+                    "ability_id": effect.ability_id,
+                })
         self._active_effects = still_active
 
     # -- Stat modifiers -----------------------------------------------------
@@ -522,10 +562,16 @@ class UpgradeSystem:
         for effect in self._active_effects:
             if effect.target_id != target_id:
                 continue
+            if effect.effect == "emp_stun":
+                # EMP stun: speed = 0, weapon_cooldown = infinite (cannot fire)
+                if stat == "speed":
+                    return 0.0
+                elif stat == "weapon_cooldown":
+                    return 999.0  # Effectively infinite cooldown
             if stat == "speed" and effect.effect == "speed_boost":
                 combined *= effect.magnitude
             elif stat == "speed" and effect.effect == "emp":
-                combined *= effect.magnitude  # EMP slows (magnitude < 1)
+                combined *= effect.magnitude  # Legacy EMP slow (magnitude < 1)
             elif stat == "weapon_cooldown" and effect.effect == "overclock":
                 # Overclock: magnitude=3.0 means 3x fire rate = 1/3 cooldown
                 combined *= (1.0 / effect.magnitude)
@@ -560,6 +606,17 @@ class UpgradeSystem:
         """Get currently active effects for a unit."""
         return [e for e in self._active_effects if e.target_id == target_id]
 
+    def is_emp_stunned(self, target_id: str) -> bool:
+        """Check whether a unit is currently EMP stunned.
+
+        Returns True if the unit has an active ``emp_stun`` effect,
+        meaning it cannot move or fire.
+        """
+        for effect in self._active_effects:
+            if effect.target_id == target_id and effect.effect == "emp_stun":
+                return True
+        return False
+
     # -- Listing ------------------------------------------------------------
 
     def list_upgrades(self) -> list[Upgrade]:
@@ -577,6 +634,18 @@ class UpgradeSystem:
         return list(combined.values())
 
     # -- Reset --------------------------------------------------------------
+
+    def remove_unit(self, unit_id: str) -> None:
+        """Remove all upgrade/ability state for a single unit."""
+        self._unit_upgrades.pop(unit_id, None)
+        self._unit_abilities.pop(unit_id, None)
+        self._upgrades.pop(unit_id, None)
+        # Remove cooldowns for this unit
+        keys_to_remove = [k for k in self._ability_cooldowns if k[0] == unit_id]
+        for k in keys_to_remove:
+            del self._ability_cooldowns[k]
+        # Remove active effects for this unit
+        self._active_effects = [e for e in self._active_effects if e.target_id != unit_id]
 
     def reset(self) -> None:
         """Clear all upgrades, abilities, cooldowns, and active effects."""

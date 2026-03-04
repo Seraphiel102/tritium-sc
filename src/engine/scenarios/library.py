@@ -21,9 +21,9 @@ class ScenarioLibrary:
 
     def __init__(self, scenarios_dir: str | Path | None = None):
         if scenarios_dir is None:
-            # Default: <project_root>/scenarios/
-            # <project_root>/scenarios/ — go up 4 levels from src/amy/scenarios/library.py
-            scenarios_dir = Path(__file__).parent.parent.parent.parent / "scenarios"
+            # Default: <project_root>/tests/scenarios/
+            # go up 4 levels from src/engine/scenarios/library.py to project root
+            scenarios_dir = Path(__file__).parent.parent.parent.parent / "tests" / "scenarios"
         self._dir = Path(scenarios_dir)
         self._results_dir = self._dir / ".results"
         self._results_dir.mkdir(parents=True, exist_ok=True)

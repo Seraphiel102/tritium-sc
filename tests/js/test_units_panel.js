@@ -31,9 +31,14 @@ function createMockElement(tag) {
     let _innerHTML = '';
     let _textContent = '';
 
+    const attrs = {};
+
     const el = {
         tagName: (tag || 'DIV').toUpperCase(),
         className: '',
+        setAttribute(name, value) { attrs[name] = String(value); },
+        getAttribute(name) { return attrs[name] !== undefined ? attrs[name] : null; },
+        removeAttribute(name) { delete attrs[name]; },
         get innerHTML() { return _innerHTML; },
         set innerHTML(val) {
             _innerHTML = val;
@@ -621,6 +626,206 @@ function getDetailHtml(unitData) {
         kills: 7,
     });
     assert(html.includes('7'), 'Detail panel shows kills count 7');
+})();
+
+// ============================================================
+// 10. Detail panel shows COMBAT STATS from per-unit stats telemetry
+// ============================================================
+
+console.log('\n--- Detail panel COMBAT STATS ---');
+
+(function testDetailShowsCombatStatsSection() {
+    const html = getDetailHtml({
+        id: 'test-stats-1',
+        name: 'Turret-Stats',
+        type: 'turret',
+        alliance: 'friendly',
+        position: { x: 0, y: 0 },
+        health: 200, maxHealth: 200,
+        stats: { shots_fired: 5, shots_hit: 3, damage_dealt: 45.2, damage_taken: 12.0,
+                 kills: 1, deaths: 0, assists: 2, distance_traveled: 0.0,
+                 max_speed: 0.0, time_alive: 32.1, time_in_combat: 18.5, accuracy: 0.6 },
+    });
+    assert(html.includes('COMBAT STATS'), 'Detail panel shows COMBAT STATS section when stats present');
+})();
+
+(function testDetailShowsShotsFired() {
+    const html = getDetailHtml({
+        id: 'test-stats-shots',
+        name: 'Turret-Shots',
+        type: 'turret',
+        alliance: 'friendly',
+        position: { x: 0, y: 0 },
+        health: 200, maxHealth: 200,
+        stats: { shots_fired: 12, shots_hit: 8, damage_dealt: 80.0, damage_taken: 5.0,
+                 kills: 2, deaths: 0, assists: 0, distance_traveled: 0.0,
+                 max_speed: 0.0, time_alive: 45.0, time_in_combat: 30.0, accuracy: 0.667 },
+    });
+    assert(html.includes('12') && html.includes('8'), 'Detail shows shots_fired and shots_hit values');
+})();
+
+(function testDetailShowsDistanceTraveled() {
+    const html = getDetailHtml({
+        id: 'test-stats-dist',
+        name: 'Rover-Dist',
+        type: 'rover',
+        alliance: 'friendly',
+        position: { x: 10, y: 20 },
+        health: 150, maxHealth: 150,
+        stats: { shots_fired: 0, shots_hit: 0, damage_dealt: 0, damage_taken: 0,
+                 kills: 0, deaths: 0, assists: 0, distance_traveled: 128.4,
+                 max_speed: 5.2, time_alive: 60.0, time_in_combat: 0, accuracy: 0 },
+    });
+    assert(html.includes('128.4'), 'Detail shows distance_traveled value');
+    assert(html.includes('DISTANCE') || html.includes('DIST'), 'Detail shows distance label');
+})();
+
+(function testDetailHidesCombatStatsWhenNoActivity() {
+    const html = getDetailHtml({
+        id: 'test-stats-empty',
+        name: 'Camera-Idle',
+        type: 'camera',
+        alliance: 'friendly',
+        position: { x: 0, y: 0 },
+        health: 100, maxHealth: 100,
+        stats: { shots_fired: 0, shots_hit: 0, damage_dealt: 0, damage_taken: 0,
+                 kills: 0, deaths: 0, assists: 0, distance_traveled: 0,
+                 max_speed: 0, time_alive: 10.0, time_in_combat: 0, accuracy: 0 },
+    });
+    assert(!html.includes('COMBAT STATS'), 'Detail hides COMBAT STATS when no shots and no movement');
+})();
+
+(function testDetailNoCombatStatsWithoutStatsObj() {
+    const html = getDetailHtml({
+        id: 'test-stats-none',
+        name: 'Sensor-Plain',
+        type: 'sensor',
+        alliance: 'friendly',
+        position: { x: 5, y: 5 },
+        health: 50, maxHealth: 50,
+    });
+    assert(!html.includes('COMBAT STATS'), 'Detail does not show COMBAT STATS when stats object missing');
+})();
+
+(function testDetailShowsAccuracyPct() {
+    const html = getDetailHtml({
+        id: 'test-stats-acc',
+        name: 'Drone-Acc',
+        type: 'drone',
+        alliance: 'friendly',
+        position: { x: 0, y: 0 },
+        health: 60, maxHealth: 60,
+        stats: { shots_fired: 10, shots_hit: 6, damage_dealt: 30.0, damage_taken: 0,
+                 kills: 0, deaths: 0, assists: 0, distance_traveled: 50.0,
+                 max_speed: 3.0, time_alive: 20.0, time_in_combat: 15.0, accuracy: 0.6 },
+    });
+    assert(html.includes('60%') || html.includes('60'), 'Detail shows accuracy percentage');
+})();
+
+// ============================================================
+// 12. Detail panel incremental updates (_updateDetailFields)
+// ============================================================
+
+console.log('\n--- Detail panel incremental updates ---');
+
+(function testDetailUpdatesHealthInPlace() {
+    // First render at 100 HP, then update to 50 HP
+    const TritiumStore = vm.runInContext('TritiumStore', ctx);
+    TritiumStore.units.clear();
+    const bodyEl = UnitsPanelDef.create({});
+    const panel = { def: UnitsPanelDef, _unsubs: [] };
+    TritiumStore.updateUnit('incr-1', {
+        id: 'incr-1', name: 'Rover-Inc', type: 'rover', alliance: 'friendly',
+        position: { x: 10, y: 20 }, health: 100, maxHealth: 100,
+    });
+    TritiumStore.set('map.selectedUnitId', 'incr-1');
+    UnitsPanelDef.mount(bodyEl, panel);
+
+    const detailEl = bodyEl.querySelector('[data-bind="detail"]');
+    const firstHtml = detailEl.innerHTML;
+    assert(firstHtml.includes('100/100'), 'First render shows 100/100 health');
+
+    // Update health in store
+    const unit = TritiumStore.units.get('incr-1');
+    unit.health = 50;
+    TritiumStore._scheduleNotify('units');
+    TritiumStore.flushNotify();
+
+    // _lastDetailId guard should allow incremental update for same unit
+    const secondHtml = detailEl.innerHTML;
+    // The detail should still be visible (not hidden)
+    assert(detailEl.style.display !== 'none', 'Detail panel stays visible after update');
+})();
+
+(function testDetailRenderDetailSameUnitDoesNotReturnEarly() {
+    // Verify the _lastDetailId guard calls _updateDetailFields instead of returning
+    const TritiumStore = vm.runInContext('TritiumStore', ctx);
+    TritiumStore.units.clear();
+    const bodyEl = UnitsPanelDef.create({});
+    const panel = { def: UnitsPanelDef, _unsubs: [] };
+    TritiumStore.updateUnit('guard-1', {
+        id: 'guard-1', name: 'Guard Unit', type: 'rover', alliance: 'friendly',
+        position: { x: 0, y: 0 }, health: 80, maxHealth: 100,
+        thoughtText: 'I see something', thoughtEmotion: 'curious',
+    });
+    TritiumStore.set('map.selectedUnitId', 'guard-1');
+    UnitsPanelDef.mount(bodyEl, panel);
+
+    const detailEl = bodyEl.querySelector('[data-bind="detail"]');
+    const initialHtml = detailEl.innerHTML;
+    assert(initialHtml.includes('THOUGHT'), 'Initial render shows THOUGHT section');
+    assert(initialHtml.includes('I see something'), 'Initial render shows thought text');
+})();
+
+(function testDetailThoughtTextUpdatesOnSameUnit() {
+    // The _lastDetailId guard should call _updateDetailFields, not skip entirely
+    const _lastDetailId = vm.runInContext('typeof _lastDetailId !== "undefined" ? _lastDetailId : "N/A"', ctx);
+    assert(_lastDetailId !== undefined, '_lastDetailId variable exists in units.js scope');
+})();
+
+// ============================================================
+// 13. List item flashing prevention
+// ============================================================
+
+console.log('\n--- List item flashing prevention ---');
+
+(function testListItemHasLastContentProperty() {
+    // When a list item is created, it should have _lastContent set
+    const TritiumStore = vm.runInContext('TritiumStore', ctx);
+    TritiumStore.units.clear();
+    const bodyEl = UnitsPanelDef.create({});
+    const panel = { def: UnitsPanelDef, _unsubs: [] };
+    TritiumStore.updateUnit('flash-1', {
+        id: 'flash-1', name: 'Test Unit', type: 'rover', alliance: 'friendly',
+        position: { x: 0, y: 0 }, health: 100, maxHealth: 100,
+    });
+    UnitsPanelDef.mount(bodyEl, panel);
+    // The render function should have run; items should have _lastContent
+    // We can verify the code has the _lastContent comparison by checking
+    // the source includes the pattern
+    const code = require('fs').readFileSync(
+        require('path').join(__dirname, '..', '..', 'frontend', 'js', 'command', 'panels', 'units.js'), 'utf8'
+    );
+    assert(code.includes('_lastContent'), 'units.js uses _lastContent for list item caching');
+    assert(code.includes('_updateDetailFields'), 'units.js has _updateDetailFields for incremental updates');
+})();
+
+// ============================================================
+// 14. Store controlledUnitId key exists
+// ============================================================
+
+console.log('\n--- controlledUnitId store key ---');
+
+(function testStoreHasControlledUnitId() {
+    const TritiumStore = vm.runInContext('TritiumStore', ctx);
+    assert(TritiumStore.controlledUnitId === null, 'TritiumStore.controlledUnitId defaults to null');
+})();
+
+(function testStoreControlledUnitIdSetGet() {
+    const TritiumStore = vm.runInContext('TritiumStore', ctx);
+    TritiumStore.set('controlledUnitId', 'unit-123');
+    assert(TritiumStore.get('controlledUnitId') === 'unit-123', 'controlledUnitId can be set and retrieved');
+    TritiumStore.set('controlledUnitId', null);  // cleanup
 })();
 
 // ============================================================

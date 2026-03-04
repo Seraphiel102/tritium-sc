@@ -70,7 +70,17 @@ class NPCIntelligencePlugin(PluginInterface):
         self._engine = ctx.simulation_engine
         self._reactor = EventReactor(ctx.event_bus)
         self._alliance_mgr = AllianceManager(event_bus=ctx.event_bus)
-        self._scheduler = LLMThinkScheduler()
+        # Discover Ollama fleet for distributed NPC thinking
+        fleet_hosts = []
+        try:
+            from app.config import settings
+            if settings.fleet_enabled:
+                from engine.inference.fleet import OllamaFleet
+                fleet = OllamaFleet(auto_discover=settings.fleet_auto_discover)
+                fleet_hosts = [h.url for h in fleet.hosts]
+        except Exception:
+            pass
+        self._scheduler = LLMThinkScheduler(fleet_hosts=fleet_hosts)
         self._thought_registry = ThoughtRegistry(event_bus=ctx.event_bus, plugin=self)
 
     def start(self) -> None:
@@ -179,12 +189,15 @@ class NPCIntelligencePlugin(PluginInterface):
                 brain.apply_action(action)
                 brain._needs_fallback = False
                 brain.mark_thought()
-                # Publish thought bubble for fallback action
+                # Publish thought bubble for fallback action (low importance —
+                # idle chatter that the frontend won't auto-display).
                 if self._thought_registry is not None:
+                    from .thought_registry import IMPORTANCE_LOW
                     self._thought_registry.set_thought(
                         brain.target_id,
                         action.capitalize(),
                         duration=3.0,
+                        importance=IMPORTANCE_LOW,
                     )
 
     def _on_think_result(self, target_id: str, action: str) -> None:

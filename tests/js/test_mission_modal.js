@@ -403,6 +403,48 @@ console.log('\n--- Wave composition ---');
 
 
 // ============================================================
+// HTTP error handling in launch flow
+// ============================================================
+
+console.log('\n--- Launch error handling ---');
+
+{
+    // When backend returns HTTP 400 (game already running), modal should
+    // show the error detail, not just "DEPLOYMENT FAILED"
+    const resp400 = { ok: false, status: 400 };
+    const errBody = { detail: 'Cannot begin war in state: countdown' };
+
+    // The error detail should be surfaced to the user
+    assert(!resp400.ok, 'HTTP 400 response is not ok');
+    assert(errBody.detail.includes('Cannot begin war'), 'error detail explains why');
+
+    // The mission modal should check resp.ok BEFORE parsing as success
+    const launchResult = resp400.ok
+        ? 'scenario_applied'
+        : errBody.detail || 'Deployment failed';
+    assert(launchResult.includes('Cannot begin war'),
+        'launch failure shows backend error detail');
+}
+
+{
+    // Network failure should show generic deployment message
+    const caught = (() => {
+        try { throw new Error('fetch failed'); }
+        catch (e) { return e.message || 'DEPLOYMENT FAILED'; }
+    })();
+    assert(caught === 'fetch failed', 'network error message preserved');
+}
+
+{
+    // Successful deployment is recognized
+    const resp200 = { ok: true, status: 200 };
+    const body = { status: 'scenario_applied', mission_center: { x: 10, y: 20 } };
+    assert(resp200.ok && body.status === 'scenario_applied',
+        'successful launch recognized correctly');
+}
+
+
+// ============================================================
 // Summary
 // ============================================================
 

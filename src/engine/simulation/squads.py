@@ -172,12 +172,25 @@ class SquadManager:
         self._squads: dict[str, Squad] = {}
         # Track original speeds for hold-order restoration
         self._hold_base_speeds: dict[str, float] = {}
+        # Pathfinding router callback
+        self._router = None  # Callable[[start, end, asset_type, alliance], list]
+
+    def set_router(self, route_fn) -> None:
+        """Set the pathfinding router callback.
+
+        route_fn signature: (start, end, unit_type, alliance) -> list[waypoints]
+        """
+        self._router = route_fn
 
     def get_squad(self, squad_id: str | None) -> Squad | None:
         """Return a squad by ID, or None if not found."""
         if squad_id is None:
             return None
         return self._squads.get(squad_id)
+
+    def remove_unit(self, target_id: str) -> None:
+        """Remove per-unit squad state for a single unit."""
+        self._hold_base_speeds.pop(target_id, None)
 
     def clear(self, targets: dict[str, SimulationTarget] | None = None) -> None:
         """Dissolve all squads and clear squad_id on targets."""
@@ -423,6 +436,17 @@ class SquadManager:
                     # Flee away from center
                     flee_x = t.position[0] / dist_from_center * 100.0
                     flee_y = t.position[1] / dist_from_center * 100.0
+                # Route the retreat through pathfinder
+                if self._router is not None:
+                    try:
+                        routed = self._router(t.position, (flee_x, flee_y),
+                                              t.asset_type, t.alliance)
+                        if routed:
+                            t.waypoints = routed
+                            t._waypoint_index = 0
+                            continue
+                    except Exception:
+                        pass
                 t.waypoints = [(flee_x, flee_y)]
                 t._waypoint_index = 0
 

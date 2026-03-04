@@ -23,7 +23,17 @@ from .npc_router import NPCRouter
 from .prompts import build_npc_prompt, parse_npc_response
 from .routine import NPCRoutine, RoutineActivity, RoutineScheduler, VehicleRoutine
 from .think_scheduler import LLMThinkScheduler
-from .thought_registry import ThoughtRegistry, UnitThought
+from .thought_registry import (
+    ThoughtRegistry,
+    UnitThought,
+    IMPORTANCE_IDLE,
+    IMPORTANCE_LOW,
+    IMPORTANCE_NORMAL,
+    IMPORTANCE_HIGH,
+    IMPORTANCE_CRITICAL,
+    IMPORTANCE_BROADCAST_THRESHOLD,
+    importance_rank,
+)
 from .world_bridge import NPCWorldBridge
 from .world_model import (
     WorldModel,
@@ -55,6 +65,13 @@ __all__ = [
     "RoutineScheduler",
     "ThoughtRegistry",
     "UnitThought",
+    "IMPORTANCE_IDLE",
+    "IMPORTANCE_LOW",
+    "IMPORTANCE_NORMAL",
+    "IMPORTANCE_HIGH",
+    "IMPORTANCE_CRITICAL",
+    "IMPORTANCE_BROADCAST_THRESHOLD",
+    "importance_rank",
     "VehicleRoutine",
     "WorldModel",
     "build_npc_prompt",

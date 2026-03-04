@@ -3,6 +3,7 @@
 # Licensed under AGPL-3.0 — see LICENSE for details.
 """Simulation subsystem — battlespace engine, combat, game modes."""
 from .ambient import AmbientSpawner
+from .backstory import BackstoryGenerator
 from .behaviors import UnitBehaviors
 from .combat import CombatSystem, Projectile
 from .comms import Signal, UnitComms
@@ -14,13 +15,17 @@ from .fake_robot import FakeRobot, FakeRobotFleet
 from .game_mode import GameMode, InfiniteWaveMode, WaveConfig, WAVE_CONFIGS
 from .hazards import Hazard, HazardManager
 from .intercept import lead_target, predict_intercept, target_velocity, time_to_intercept
+from .inventory import InventoryItem, UnitInventory, ITEM_CATALOG, build_loadout, select_best_weapon
 from .loader import load_layout, load_zones
+from .lod import LODSystem, LODTier, ViewportState
 from .morale import MoraleSystem
+from .objectives import ObjectiveTracker
 from .movement import MovementController, smooth_path
+from .grid_pathfinder import MovementProfile, PROFILES, grid_find_path, profile_for_unit, smooth_path as grid_smooth_path
 from .pathfinding import plan_path
 from .pursuit import PursuitSystem
 from .replay import ReplayRecorder
-from .scenario import BattleScenario, DefenderConfig, SpawnGroup, WaveDefinition, load_battle_scenario
+from .scenario import BattleScenario, DefenderConfig, SpawnGroup, WaveDefinition, load_battle_scenario, spread_defenders
 from .sensors import SensorDevice, SensorSimulator
 from .spatial import SpatialGrid
 from .spectator import SpectatorMode
@@ -38,6 +43,7 @@ from .weapons import Weapon, WeaponSystem
 
 __all__ = [
     "AmbientSpawner",
+    "BackstoryGenerator",
     "CombatBridge",
     "CombatSystem",
     "CoverObject",
@@ -50,7 +56,10 @@ __all__ = [
     "Hazard",
     "HazardManager",
     "InfiniteWaveMode",
+    "InventoryItem",
+    "ITEM_CATALOG",
     "MoraleSystem",
+    "ObjectiveTracker",
     "MovementController",
     "Projectile",
     "PursuitSystem",
@@ -65,6 +74,7 @@ __all__ = [
     "SimulationEngine",
     "SpatialGrid",
     "load_battle_scenario",
+    "spread_defenders",
     "SimulationTarget",
     "SpectatorMode",
     "Squad",
@@ -77,6 +87,7 @@ __all__ = [
     "Transition",
     "UnitBehaviors",
     "UnitComms",
+    "UnitInventory",
     "UnitStats",
     "Upgrade",
     "Ability",
@@ -99,7 +110,12 @@ __all__ = [
     "lead_target",
     "load_layout",
     "load_zones",
+    "MovementProfile",
+    "PROFILES",
+    "grid_find_path",
+    "grid_smooth_path",
     "plan_path",
+    "profile_for_unit",
     "predict_intercept",
     "smooth_path",
     "target_velocity",
@@ -113,4 +129,6 @@ __all__ = [
     "get_street_names",
     "place_defenders_around_buildings",
     "load_cached",
+    "build_loadout",
+    "select_best_weapon",
 ]

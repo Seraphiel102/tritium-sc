@@ -121,7 +121,8 @@ class TestPredefinedWeapons:
 
     def test_default_weapons_has_expected_types(self):
         expected = {"turret", "drone", "rover", "person_hostile", "tank",
-                    "apc", "heavy_turret", "missile_turret", "scout_drone"}
+                    "apc", "heavy_turret", "missile_turret", "scout_drone",
+                    "graphling"}
         assert set(_DEFAULT_WEAPONS.keys()) == expected
 
     def test_turret_weapon(self):
@@ -437,9 +438,12 @@ class TestBackwardCompat:
             weapon_range=20.0, weapon_damage=15.0,
             weapon_cooldown=1.0, last_fired=0.0,
         )
+        # Empty inventory to test raw damage without armor reduction
+        from engine.simulation.inventory import UnitInventory
         target = SimulationTarget(
             target_id="h1", name="Hostile", alliance="hostile",
             asset_type="person", position=(1.0, 0.0), health=100.0,
+            inventory=UnitInventory(owner_id="h1"),
         )
 
         proj = combat.fire(source, target)
@@ -458,9 +462,10 @@ class TestBackwardCompat:
         bus = SimpleEventBus()
         combat = CombatSystem(bus)
 
+        # Use rover (non-mortar) to verify default speed=80
         source = SimulationTarget(
-            target_id="t1", name="Turret", alliance="friendly",
-            asset_type="turret", position=(0.0, 0.0),
+            target_id="t1", name="Rover", alliance="friendly",
+            asset_type="rover", position=(0.0, 0.0),
             weapon_range=20.0, weapon_damage=15.0,
             weapon_cooldown=1.0, last_fired=0.0,
         )

@@ -14,11 +14,11 @@ a real neighborhood map. Amy is the AI commander with real sensors (BCC950 PTZ,
 NVR cameras). The simulation engine provides a battle mode that stress-tests
 the same pipelines Amy uses in normal operation.
 
-The system has a games-common level editor (symlinked at frontend/common/)
+The system has a games-common level editor (symlinked at src/frontend/common/)
 that provides a full 3D scene editor with 30 asset types defined in
-frontend/js/editor/TritiumAssets.js and a pluggable serialization format in
-frontend/js/editor/TritiumLevelFormat.js.  The editor plugin is in
-frontend/js/editor/TritiumEditorPlugin.js.
+src/frontend/js/editor/TritiumAssets.js and a pluggable serialization format in
+src/frontend/js/editor/TritiumLevelFormat.js.  The editor plugin is in
+src/frontend/js/editor/TritiumEditorPlugin.js.
 
 ### What exists (read before changing)
 
@@ -29,33 +29,33 @@ Backend simulation:
 - src/engine/tactical/target_tracker.py — unified TargetTracker merging sim + YOLO detections
 - src/amy/commander.py — _sim_bridge_loop feeds EventBus events into TargetTracker
 - src/amy/brain/thinking.py — battlespace context in thinking prompt, dispatch/alert/patrol actions
-- src/amy/actions/lua_motor.py — dispatch(), alert(), patrol() Lua actions
+- src/engine/actions/lua_motor.py — dispatch(), alert(), patrol() Lua actions
 - src/amy/brain/sensorium.py — battlespace summary in rich_narrative()
 - src/amy/router.py — /api/amy/simulation/* endpoints (list, spawn, remove)
 - app/routers/targets_unified.py — /api/targets endpoint
 - app/main.py — creates SimulationEngine at startup, wires to Amy EventBus
 
 Frontend:
-- frontend/js/assets.js — tactical map canvas rendering sim targets
-- frontend/js/app.js — WebSocket handlers for amy_sim_telemetry events
-- frontend/js/amy.js — BATTLESPACE panel in Amy dashboard
-- frontend/js/editor/TritiumAssets.js — 30 asset type definitions (cameras, robots, drones, zones, sensors, paths)
-- frontend/js/editor/TritiumLevelFormat.js — JSON serialization format with structures, environment, amy config, objects
-- frontend/js/editor/TritiumEditorPlugin.js — wires editor to tritium app, playtest button
+- src/frontend/js/assets.js — tactical map canvas rendering sim targets
+- src/frontend/js/app.js — WebSocket handlers for amy_sim_telemetry events
+- src/frontend/js/amy.js — BATTLESPACE panel in Amy dashboard
+- src/frontend/js/editor/TritiumAssets.js — 30 asset type definitions (cameras, robots, drones, zones, sensors, paths)
+- src/frontend/js/editor/TritiumLevelFormat.js — JSON serialization format with structures, environment, amy config, objects
+- src/frontend/js/editor/TritiumEditorPlugin.js — wires editor to tritium app, playtest button
 
-Level editor (games-common at frontend/common/):
+Level editor (games-common at src/frontend/common/):
 - EditorCore.js — generic 3D editor framework
 - AssetRegistry.js — pluggable asset types
 - LevelSerializer.js — pluggable format system
 - TransformGizmo.js, SceneHierarchy.js, RegionTools.js, TerrainSystem.js, etc.
 
 Tests:
-- tests/amy/test_simulation_target.py, test_simulation_engine.py, test_simulation_loader.py
-- tests/amy/test_target_tracker.py, test_dispatch_actions.py
+- tests/engine/simulation/test_simulation_target.py, test_simulation_engine.py, test_simulation_loader.py
+- tests/engine/simulation/test_target_tracker.py, test_dispatch_actions.py
 
 ### Iteration checklist — work through IN ORDER, fix what's broken
 
-1. AUDIT: Run `python3 -m pytest tests/amy/ -m unit -v` and fix any failures first.
+1. AUDIT: Run `python3 -m pytest tests/engine/ tests/amy/ -m unit -v` and fix any failures first.
 
 2. EDITOR → SIMULATION BRIDGE: The level editor saves layouts to localStorage.
    The simulation loader reads JSON files.  Audit and fix the bridge:
@@ -119,10 +119,10 @@ Tests:
 ### Rules
 
 - Read existing code before modifying — understand the patterns first
-- Run the full test suite after changes: `.venv/bin/python3 -m pytest tests/amy/ -m unit -v`
+- Run the full test suite after changes: `.venv/bin/python3 -m pytest tests/engine/ tests/amy/ -m unit -v`
 - Don't break existing functionality (572+ tests must pass)
 - Follow existing conventions: type hints, no emojis, async/await, CYBERCORE CSS
 - The app name is TRITIUM-SC (Tritium-Security Central)
 - Real hardware (robots, turrets, cameras) is the primary use case; simulation tests the same pipelines
-- The games-common editor is a SHARED library — never modify files under frontend/common/
+- The games-common editor is a SHARED library — never modify files under src/frontend/common/
 - Only modify tritium-sc plugin files: TritiumAssets.js, TritiumLevelFormat.js, TritiumEditorPlugin.js
