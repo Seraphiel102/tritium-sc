@@ -911,12 +911,15 @@ class UnitBehaviors:
         """Find the nearest enemy within weapon_range.
 
         Uses SpatialGrid when available for O(k) lookup instead of O(n).
-        When vision_state is provided, pre-filters to only targets visible
-        to this unit. When None (backward compat), all enemies in range
-        are valid.
+        Vision pre-filtering is skipped for combatants — weapon_range is the
+        engagement distance, and the LOS check in CombatSystem.fire()
+        handles building obstruction.  This prevents the common issue where
+        vision_radius < weapon_range causes units to not fire until they're
+        on top of each other.
         """
-        # Pre-filter to visible targets when vision is available
-        if vision_state is not None:
+        # Only apply vision filtering for non-combatants (civilians, etc.)
+        # Combatants use weapon_range + LOS check instead.
+        if vision_state is not None and not unit.is_combatant:
             visible_targets = set(vision_state.can_see.get(unit.target_id, []))
             enemies = {k: v for k, v in enemies.items() if k in visible_targets}
 

@@ -334,7 +334,11 @@ class GameMode:
             self._publish_state_change()
             return
 
-        # Check wave complete: all wave hostiles eliminated or escaped
+        # Check wave complete: all wave hostiles eliminated or escaped.
+        # If spawn thread hasn't registered any hostiles yet, wait for it
+        # (avoids premature wave completion before spawning begins).
+        if not self._wave_hostile_ids and self._is_spawning():
+            return
         alive = self._count_wave_hostiles_alive()
         if alive == 0 and not self._is_spawning():
             self._on_wave_complete()
@@ -397,17 +401,22 @@ class GameMode:
 
         # Place pre-defined defenders
         from .target import SimulationTarget
+        from .scenario import apply_scenario_overrides
         for d in scenario.defenders:
             tid = f"{d.asset_type}-{d.name or 'auto'}-{id(d)}"
+            base_speed = d.speed if d.speed is not None else (
+                0.0 if d.asset_type in ("turret", "heavy_turret", "missile_turret") else 2.0
+            )
             target = SimulationTarget(
                 target_id=tid,
                 name=d.name or f"{d.asset_type.title()}",
                 alliance="friendly",
                 asset_type=d.asset_type,
                 position=d.position,
-                speed=0.0 if d.asset_type in ("turret", "heavy_turret", "missile_turret") else 2.0,
+                speed=base_speed,
             )
             target.apply_combat_profile()
+            apply_scenario_overrides(target, d)
             self._engine.add_target(target)
 
     # -- Wave management --------------------------------------------------------
@@ -498,7 +507,7 @@ class GameMode:
 
     def _spawn_scenario_wave(self, wave_def) -> None:
         """Spawn hostiles from a scenario WaveDefinition (mixed types)."""
-        from .scenario import WaveDefinition
+        from .scenario import WaveDefinition, apply_scenario_overrides
         spawn_index = 0
         for group in wave_def.groups:
             for i in range(group.count):
@@ -510,6 +519,7 @@ class GameMode:
                     health=group.health * wave_def.health_mult,
                     drone_variant=group.drone_variant,
                 )
+                apply_scenario_overrides(hostile, group)
                 self._wave_hostile_ids.add(hostile.target_id)
                 spawn_index += 1
                 if spawn_index < wave_def.total_count:

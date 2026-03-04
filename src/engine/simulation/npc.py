@@ -202,7 +202,16 @@ class NPCManager:
 
         # Auto-spawn thread state
         self._running = False
+        self._enabled = True
         self._thread: threading.Thread | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
 
     @property
     def npc_count(self) -> int:
@@ -241,6 +250,10 @@ class NPCManager:
 
             if not self._running:
                 break
+
+            # Skip if disabled (e.g. during battle mode)
+            if not self._enabled:
+                continue
 
             # Skip if engine has spawners paused
             if getattr(self._engine, "spawners_paused", False):

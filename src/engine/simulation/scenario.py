@@ -31,6 +31,14 @@ class SpawnGroup:
     health: float = 80.0
     drone_variant: str | None = None  # "scout_swarm", "attack_swarm", "bomber_swarm"
 
+    # Optional combat overrides (applied AFTER apply_combat_profile defaults)
+    max_health: float | None = None
+    weapon_range: float | None = None
+    weapon_cooldown: float | None = None
+    weapon_damage: float | None = None
+    ammo_count: int | None = None
+    ammo_max: int | None = None
+
 
 @dataclass
 class WaveDefinition:
@@ -56,6 +64,16 @@ class DefenderConfig:
     asset_type: str  # "turret", "rover", "drone", etc.
     position: tuple[float, float]
     name: str | None = None
+
+    # Optional combat overrides (applied AFTER apply_combat_profile defaults)
+    health: float | None = None
+    max_health: float | None = None
+    weapon_range: float | None = None
+    weapon_cooldown: float | None = None
+    weapon_damage: float | None = None
+    ammo_count: int | None = None
+    ammo_max: int | None = None
+    speed: float | None = None
 
 
 @dataclass
@@ -90,6 +108,12 @@ class BattleScenario:
                             "speed": g.speed,
                             "health": g.health,
                             **({"drone_variant": g.drone_variant} if g.drone_variant else {}),
+                            **({"max_health": g.max_health} if g.max_health is not None else {}),
+                            **({"weapon_range": g.weapon_range} if g.weapon_range is not None else {}),
+                            **({"weapon_cooldown": g.weapon_cooldown} if g.weapon_cooldown is not None else {}),
+                            **({"weapon_damage": g.weapon_damage} if g.weapon_damage is not None else {}),
+                            **({"ammo_count": g.ammo_count} if g.ammo_count is not None else {}),
+                            **({"ammo_max": g.ammo_max} if g.ammo_max is not None else {}),
                         }
                         for g in w.groups
                     ],
@@ -106,6 +130,14 @@ class BattleScenario:
                     "asset_type": d.asset_type,
                     "position": list(d.position),
                     "name": d.name,
+                    **({"health": d.health} if d.health is not None else {}),
+                    **({"max_health": d.max_health} if d.max_health is not None else {}),
+                    **({"weapon_range": d.weapon_range} if d.weapon_range is not None else {}),
+                    **({"weapon_cooldown": d.weapon_cooldown} if d.weapon_cooldown is not None else {}),
+                    **({"weapon_damage": d.weapon_damage} if d.weapon_damage is not None else {}),
+                    **({"ammo_count": d.ammo_count} if d.ammo_count is not None else {}),
+                    **({"ammo_max": d.ammo_max} if d.ammo_max is not None else {}),
+                    **({"speed": d.speed} if d.speed is not None else {}),
                 }
                 for d in self.defenders
             ],
@@ -125,6 +157,12 @@ class BattleScenario:
                     speed=g.get("speed", 1.5),
                     health=g.get("health", 80.0),
                     drone_variant=g.get("drone_variant"),
+                    max_health=g.get("max_health"),
+                    weapon_range=g.get("weapon_range"),
+                    weapon_cooldown=g.get("weapon_cooldown"),
+                    weapon_damage=g.get("weapon_damage"),
+                    ammo_count=g.get("ammo_count"),
+                    ammo_max=g.get("ammo_max"),
                 )
                 for g in w["groups"]
             ]
@@ -145,6 +183,14 @@ class BattleScenario:
                 asset_type=d["asset_type"],
                 position=(float(pos[0]), float(pos[1])),
                 name=d.get("name"),
+                health=d.get("health"),
+                max_health=d.get("max_health"),
+                weapon_range=d.get("weapon_range"),
+                weapon_cooldown=d.get("weapon_cooldown"),
+                weapon_damage=d.get("weapon_damage"),
+                ammo_count=d.get("ammo_count"),
+                ammo_max=d.get("ammo_max"),
+                speed=d.get("speed"),
             ))
 
         return cls(
@@ -158,6 +204,32 @@ class BattleScenario:
             tags=data.get("tags", []),
             mode_config=data.get("mode_config"),
         )
+
+
+def apply_scenario_overrides(target, config) -> None:
+    """Apply optional combat overrides from a DefenderConfig or SpawnGroup onto a SimulationTarget.
+
+    Call AFTER target.apply_combat_profile() so these values override profile defaults.
+    Only fields that are not None are applied.
+    """
+    if getattr(config, "health", None) is not None:
+        target.health = config.health
+        target.max_health = config.max_health if config.max_health is not None else config.health
+    if getattr(config, "max_health", None) is not None and getattr(config, "health", None) is None:
+        target.max_health = config.max_health
+    if getattr(config, "weapon_range", None) is not None:
+        target.weapon_range = config.weapon_range
+    if getattr(config, "weapon_cooldown", None) is not None:
+        target.weapon_cooldown = config.weapon_cooldown
+    if getattr(config, "weapon_damage", None) is not None:
+        target.weapon_damage = config.weapon_damage
+    if getattr(config, "ammo_count", None) is not None:
+        target.ammo_count = config.ammo_count
+        target.ammo_max = config.ammo_max if config.ammo_max is not None else config.ammo_count
+    if getattr(config, "ammo_max", None) is not None and getattr(config, "ammo_count", None) is None:
+        target.ammo_max = config.ammo_max
+    if getattr(config, "speed", None) is not None:
+        target.speed = config.speed
 
 
 def load_battle_scenario(path: str) -> BattleScenario:

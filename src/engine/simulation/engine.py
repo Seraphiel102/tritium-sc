@@ -508,6 +508,13 @@ class SimulationEngine:
         """Resume hostile and ambient spawners."""
         self._spawners_paused.clear()
 
+    def resume_ambient(self) -> None:
+        """Re-enable ambient + NPC spawners (after battle ends, for neighborhood mode)."""
+        if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+            self._ambient_spawner.enabled = True
+        if self._npc_manager is not None:
+            self._npc_manager.enabled = True
+
     # -- Game mode interface ------------------------------------------------
 
     def begin_war(self) -> None:
@@ -588,6 +595,19 @@ class SimulationEngine:
                 instigator_count = scenario.get("instigator_count", 0)
                 if instigator_count:
                     self._objective_tracker.set_instigator_count(instigator_count)
+
+            # Disable ALL neutral spawners during battle — only combat units
+            if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+                self._ambient_spawner.enabled = False
+            if self._npc_manager is not None:
+                self._npc_manager.enabled = False
+            # Remove existing neutrals so they don't clutter the battlefield
+            neutral_ids = [
+                tid for tid, t in self._targets.items()
+                if t.alliance == "neutral"
+            ]
+            for tid in neutral_ids:
+                del self._targets[tid]
 
             self.game_mode.begin_war()
 
@@ -690,9 +710,13 @@ class SimulationEngine:
             # Reset backstory generator (clear queue/pending/backstories)
             if self._backstory_generator is not None:
                 self._backstory_generator.reset()
-            # Clear ambient spawner used names so names recycle between games
+            # Disable ALL neutral spawners during reset — begin_war() keeps them off,
+            # resume_ambient() re-enables them for neighborhood mode.
             if hasattr(self, '_ambient_spawner') and self._ambient_spawner is not None:
+                self._ambient_spawner.enabled = False
                 self._ambient_spawner._used_names.clear()
+            if self._npc_manager is not None:
+                self._npc_manager.enabled = False
             # Remove ALL simulation targets (hostiles, friendly combatants,
             # scenario defenders, neutrals).  This prevents layout units with
             # non-standard ID prefixes (heavy_turret-, tank-, apc-, etc.) from
@@ -718,7 +742,10 @@ class SimulationEngine:
             target=self._random_hostile_spawner, name="sim-spawner", daemon=True
         )
         self._spawner_thread.start()
+        # Ambient + NPC spawners start DISABLED by default.
+        # They only activate via resume_ambient() or explicit profile load.
         self._ambient_spawner = AmbientSpawner(self)
+        self._ambient_spawner.enabled = False
         self._ambient_spawner.start()
 
         # NPC world population
@@ -735,6 +762,7 @@ class SimulationEngine:
             self._npc_manager = NPCManager(
                 self, max_vehicles=npc_max_v, max_pedestrians=npc_max_p
             )
+            self._npc_manager.enabled = False  # disabled until profile/mission loads
             self._npc_manager.start()
 
         # Start combat event listener
