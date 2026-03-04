@@ -423,7 +423,7 @@ class TestSwarmScenario:
     def test_scenario_file_exists(self):
         import json
         from pathlib import Path
-        path = Path(__file__).parents[3] / "scenarios" / "battle" / "swarm_attack.json"
+        path = Path(__file__).parents[3] / "tests" / "scenarios" / "battle" / "swarm_attack.json"
         assert path.exists(), f"Scenario file not found: {path}"
         data = json.loads(path.read_text())
         assert data["scenario_id"] == "swarm_attack"
@@ -431,7 +431,7 @@ class TestSwarmScenario:
     def test_scenario_has_swarm_drone_groups(self):
         import json
         from pathlib import Path
-        path = Path(__file__).parents[3] / "scenarios" / "battle" / "swarm_attack.json"
+        path = Path(__file__).parents[3] / "tests" / "scenarios" / "battle" / "swarm_attack.json"
         data = json.loads(path.read_text())
         # At least one wave should contain swarm_drone groups
         has_swarm = False
@@ -444,7 +444,7 @@ class TestSwarmScenario:
     def test_scenario_total_drones_at_least_50(self):
         import json
         from pathlib import Path
-        path = Path(__file__).parents[3] / "scenarios" / "battle" / "swarm_attack.json"
+        path = Path(__file__).parents[3] / "tests" / "scenarios" / "battle" / "swarm_attack.json"
         data = json.loads(path.read_text())
         total = 0
         for wave in data["waves"]:
@@ -456,7 +456,7 @@ class TestSwarmScenario:
     def test_scenario_has_defenders(self):
         import json
         from pathlib import Path
-        path = Path(__file__).parents[3] / "scenarios" / "battle" / "swarm_attack.json"
+        path = Path(__file__).parents[3] / "tests" / "scenarios" / "battle" / "swarm_attack.json"
         data = json.loads(path.read_text())
         assert len(data.get("defenders", [])) > 0, "Scenario should include defenders"
 

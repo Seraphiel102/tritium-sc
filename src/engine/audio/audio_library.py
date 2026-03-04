@@ -4,7 +4,7 @@
 """Audio Library Manager -- generates, caches, and serves WAV sound effects.
 
 Stores effects as WAV files organized by category:
-    data/synthetic/audio/
+    assets/sfx/
         combat/     nerf_shot, projectile_whoosh, impact_hit, explosion,
                     turret_rotate, drone_buzz, footstep
         ambient/    ambient_wind, ambient_birds
@@ -118,7 +118,7 @@ _EFFECT_CATALOG: dict[str, tuple[str, str, float, dict[str, Any]]] = {
 class AudioLibrary:
     """Manages generation, caching, and serving of procedural sound effects."""
 
-    def __init__(self, library_path: str = "data/synthetic/audio") -> None:
+    def __init__(self, library_path: str = "assets/sfx") -> None:
         self.library_path = library_path
         self.gen = SoundEffectGenerator()
 

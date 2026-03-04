@@ -119,7 +119,7 @@ class TestAudioLibraryInit:
 
     def test_default_path(self):
         lib = AudioLibrary()
-        assert lib.library_path == "data/synthetic/audio"
+        assert lib.library_path == "assets/sfx"
 
     def test_custom_path(self, tmp_path):
         lib = AudioLibrary(str(tmp_path / "audio"))

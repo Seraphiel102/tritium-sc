@@ -327,7 +327,7 @@ class TestSampleLayout:
     """Validate the sample neighborhood layout shipped with the project."""
 
     def test_sample_layout_loads(self):
-        """scenarios/neighborhood_default.json should load without errors."""
+        """tests/scenarios/neighborhood_default.json should load without errors."""
         import os
         layout_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "scenarios", "neighborhood_default.json"

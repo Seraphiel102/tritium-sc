@@ -41,12 +41,12 @@ protocols.
 
 ## 3. Demo Servers
 
-Each demo server is a standalone Python process in `demo/`. No dependency on
+Each demo server is a standalone Python process in `examples/`. No dependency on
 the main TRITIUM-SC app. Each has its own `requirements.txt`, `README.md`,
 `main.py`, and `tests/` directory. Each can run independently with just an
 MQTT broker.
 
-### 3.1 Demo Camera Server (`demo/camera-server/`)
+### 3.1 Demo Camera Server (`examples/camera-server/`)
 
 **Purpose:** Simulates an IP camera that produces video frames, serves MJPEG
 over HTTP, publishes YOLO-style detections via MQTT, and responds to ONVIF
@@ -59,7 +59,7 @@ discovery probes.
 
 **Architecture:**
 ```
-demo/camera-server/
+examples/camera-server/
   main.py              # Entry point, arg parsing, server startup
   camera.py            # Frame generation (procedural or from video file)
   mjpeg_server.py      # HTTP MJPEG streaming endpoint
@@ -111,14 +111,14 @@ demo/camera-server/
 
 **CLI:**
 ```bash
-cd demo/camera-server
+cd examples/camera-server
 pip install -r requirements.txt
 python main.py --camera-id demo-cam-01 --port 8081 \
     --mqtt-host localhost --mqtt-port 1883 --site home \
     --fps 10 --width 640 --height 480 --mode procedural
 ```
 
-### 3.2 Demo Robot Server (`demo/robot-server/`)
+### 3.2 Demo Robot Server (`examples/robot-server/`)
 
 **Purpose:** Simulates a mobile robot (rover, drone, or turret) that publishes
 MQTT telemetry, receives dispatch/patrol/recall commands, and simulates
@@ -130,7 +130,7 @@ physics-based movement.
 
 **Architecture:**
 ```
-demo/robot-server/
+examples/robot-server/
   main.py              # Entry point, arg parsing
   robot.py             # Robot state machine (idle, moving, patrolling, engaging)
   physics.py           # Differential drive kinematics, battery, thermal
@@ -223,20 +223,20 @@ demo/robot-server/
 
 **CLI:**
 ```bash
-cd demo/robot-server
+cd examples/robot-server
 python main.py --robot-id demo-rover-01 --type rover --name "Rover Alpha" \
     --mqtt-host localhost --mqtt-port 1883 --site home \
     --start-x 0 --start-y 0 --telemetry-interval 0.5
 ```
 
-### 3.3 Demo Motion Sensor (`demo/motion-sensor/`)
+### 3.3 Demo Motion Sensor (`examples/motion-sensor/`)
 
 **Purpose:** Simulates a PIR, microwave, or acoustic motion sensor that
 publishes detection events via MQTT.
 
 **Architecture:**
 ```
-demo/motion-sensor/
+examples/motion-sensor/
   main.py              # Entry point
   sensor.py            # Detection state machine (idle, triggered, cooldown)
   patterns.py          # Trigger pattern generators (random, scheduled, burst)
@@ -284,20 +284,20 @@ demo/motion-sensor/
 
 **CLI:**
 ```bash
-cd demo/motion-sensor
+cd examples/motion-sensor
 python main.py --sensor-id demo-pir-01 --type pir --zone front_door \
     --mqtt-host localhost --mqtt-port 1883 --site home \
     --position-x 25.0 --position-y -10.0 --pattern random --rate 0.5
 ```
 
-### 3.4 Demo Mesh Radio (`demo/mesh-radio/`)
+### 3.4 Demo Mesh Radio (`examples/mesh-radio/`)
 
 **Purpose:** Simulates a Meshtastic or MeshCore LoRa mesh radio node that
 publishes position and text messages via MQTT.
 
 **Architecture:**
 ```
-demo/mesh-radio/
+examples/mesh-radio/
   main.py              # Entry point
   node.py              # Mesh node state (position, battery, neighbors)
   mesh_sim.py          # Simulate multi-hop mesh (SNR, RSSI, path loss)
@@ -345,13 +345,13 @@ Where `{protocol}` is `meshtastic` or `meshcore`.
 
 **CLI:**
 ```bash
-cd demo/mesh-radio
+cd examples/mesh-radio
 python main.py --node-id "!aabbccdd" --name "Hilltop Node" \
     --protocol meshtastic --lat 37.7749 --lng -122.4194 \
     --mqtt-host localhost --mqtt-port 1883 --site home
 ```
 
-### 3.5 Demo Fleet Launcher (`demo/fleet-launcher.py`)
+### 3.5 Demo Fleet Launcher (`examples/fleet-launcher.py`)
 
 **Purpose:** Starts multiple demo servers at once for a complete simulated
 environment.
@@ -878,11 +878,11 @@ Every component follows TDD:
 **Test locations:**
 | Component | Test Location | Count (est) |
 |-----------|--------------|-------------|
-| Demo camera | `demo/camera-server/tests/` | 15 |
-| Demo robot | `demo/robot-server/tests/` | 20 |
-| Demo sensor | `demo/motion-sensor/tests/` | 10 |
-| Demo mesh | `demo/mesh-radio/tests/` | 12 |
-| Fleet launcher | `demo/tests/test_fleet.py` | 5 |
+| Demo camera | `examples/camera-server/tests/` | 15 |
+| Demo robot | `examples/robot-server/tests/` | 20 |
+| Demo sensor | `examples/motion-sensor/tests/` | 10 |
+| Demo mesh | `examples/mesh-radio/tests/` | 12 |
+| Fleet launcher | `examples/tests/test_fleet.py` | 5 |
 | Device modals | `tests/js/test_device_modal.js` | 15 |
 | Map layers | `tests/engine/layers/` | 25 |
 | Combat bridge | `tests/engine/simulation/test_combat_bridge.py` | 15 |

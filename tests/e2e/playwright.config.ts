@@ -28,7 +28,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'cd ../.. && python run.py',
+    command: 'cd ../.. && python scripts/run.py',
     url: 'http://localhost:8000/health',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

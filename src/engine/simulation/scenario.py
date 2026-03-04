@@ -9,7 +9,7 @@ simulation: wave definitions with mixed hostile types, pre-placed defenders,
 and map bounds.
 
 Usage:
-    scenario = load_battle_scenario("scenarios/battle/street_combat.json")
+    scenario = load_battle_scenario("tests/scenarios/battle/street_combat.json")
     engine.game_mode.load_scenario(scenario)
     engine.game_mode.begin_war()
 """

@@ -338,7 +338,7 @@ class TestScenarioPositions:
     def test_street_combat_defender_at_origin(self, bus):
         """Street combat scenario places rover at (0, 0)."""
         from pathlib import Path
-        scenario_file = Path(__file__).resolve().parents[3] / "scenarios" / "battle" / "street_combat.json"
+        scenario_file = Path(__file__).resolve().parents[3] / "tests" / "scenarios" / "battle" / "street_combat.json"
         if not scenario_file.is_file():
             pytest.skip("street_combat.json not found")
 

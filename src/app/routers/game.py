@@ -173,7 +173,7 @@ async def get_projectiles(request: Request):
 @router.get("/scenarios")
 async def list_battle_scenarios():
     """List available battle scenarios."""
-    scenarios_dir = Path(__file__).resolve().parents[3] / "scenarios" / "battle"
+    scenarios_dir = Path(__file__).resolve().parents[3] / "tests" / "scenarios" / "battle"
     if not scenarios_dir.is_dir():
         return []
     results = []
@@ -204,7 +204,7 @@ async def start_battle_scenario(scenario_name: str, request: Request):
     engine = _get_engine(request)
 
     # Find scenario file
-    scenarios_dir = Path(__file__).resolve().parents[3] / "scenarios" / "battle"
+    scenarios_dir = Path(__file__).resolve().parents[3] / "tests" / "scenarios" / "battle"
     scenario_file = scenarios_dir / f"{scenario_name}.json"
     if not scenario_file.is_file():
         raise HTTPException(404, f"Scenario not found: {scenario_name}")

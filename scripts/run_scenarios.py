@@ -5,7 +5,7 @@
 """Run scenarios and report behavioral profiles.
 
 Usage:
-    .venv/bin/python3 run_scenarios.py [scenario_name ...]
+    .venv/bin/python3 scripts/run_scenarios.py [scenario_name ...]
 
 If no scenario names given, runs a default set of interesting ones.
 """
@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 # Ensure project root is on path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from amy.scenarios.library import ScenarioLibrary
 from amy.scenarios.runner import ScenarioRunner

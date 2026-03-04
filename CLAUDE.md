@@ -168,17 +168,26 @@ tritium-sc/
 │   │   ├── core/             # Commander, thinking, memory, sensorium
 │   │   ├── brain/            # Thinking battle tests
 │   │   └── api/              # Amy-specific API tests
+│   ├── scenarios/             # Behavioral test scenarios (JSON)
 │   ├── integration/           # 23 server E2E tests (headless, auto-port)
 │   ├── visual/                # 23 three-layer E2E (OpenCV + LLM + API)
 │   ├── js/                    # 281 JS tests (math, audio, fog, geo, panels)
 │   ├── lib/                   # 62 test infrastructure tests
 │   └── ui/                    # Vision audit, gameplay, battle verification
-├── examples/
+├── examples/                   # ALL standalone reference projects
 │   ├── robot-template/        # Reference MQTT robot brain (Python)
-│   └── ros2-robot/            # ROS2 Humble robot (Nav2 + MQTT bridge)
-├── scripts/                    # CLI tools
+│   ├── ros2-robot/            # ROS2 Humble robot (Nav2 + MQTT bridge)
+│   ├── camera-server/         # Demo camera simulator
+│   ├── hostile-agent/         # Demo hostile LLM agent
+│   ├── mesh-radio/            # Demo Meshtastic radio
+│   ├── motion-sensor/         # Demo motion sensor
+│   ├── robot-server/          # Demo robot simulator
+│   └── swarm-drone/           # Demo drone swarm
+├── assets/                     # Static assets
+│   ├── sfx/                   # Sound effects (67 WAVs, 7 categories)
+│   └── desktop/               # Desktop launcher files (.desktop, .svg)
+├── scripts/                    # CLI tools + entry points
 ├── docs/                       # Documentation
-├── scenarios/                  # 33 behavioral test scenarios (JSON)
 ├── conf/                       # Configuration files (gitignored)
 ├── data/                       # Runtime data (gitignored)
 │   ├── amy/                   # Amy's photos, transcripts, memory.json

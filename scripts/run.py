@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # Add src/ to PYTHONPATH for app/amy imports
-_src = str(Path(__file__).parent / "src")
+_src = str(Path(__file__).parent.parent / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
@@ -36,10 +36,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python run.py                     # Run with defaults
-  python run.py --port 8080         # Custom port
-  python run.py --reload            # Development mode with auto-reload
-  python run.py --workers 4         # Production mode with 4 workers
+  python scripts/run.py                     # Run with defaults
+  python scripts/run.py --port 8080         # Custom port
+  python scripts/run.py --reload            # Development mode with auto-reload
+  python scripts/run.py --workers 4         # Production mode with 4 workers
         """,
     )
 

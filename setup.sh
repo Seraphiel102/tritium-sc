@@ -106,14 +106,14 @@ print('Database initialized')
 start_dev() {
     log "Starting development server..."
     source .venv/bin/activate
-    python run.py --reload
+    python scripts/run.py --reload
 }
 
 # Start production server
 start_prod() {
     log "Starting production server..."
     source .venv/bin/activate
-    python run.py --workers 4
+    python scripts/run.py --workers 4
 }
 
 # Docker commands
@@ -189,7 +189,7 @@ full_install() {
     echo ""
     log "Or manually:"
     echo "    source .venv/bin/activate"
-    echo "    python run.py"
+    echo "    python scripts/run.py"
     echo ""
 }
 

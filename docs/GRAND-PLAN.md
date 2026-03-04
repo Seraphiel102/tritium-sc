@@ -373,6 +373,6 @@ When the operator wakes up and runs `./test.sh fast`, all tiers pass. When they 
 - `src/engine/simulation/engine.py` — Use pathfinder for unit movement
 - `src/engine/simulation/behaviors.py` — Road-aware hostile approach
 - `src/engine/simulation/target.py` — Smooth heading interpolation
-- `scenarios/neighborhood_default.json` — Road-aligned positions
+- `tests/scenarios/neighborhood_default.json` — Road-aligned positions
 - `frontend/js/command/map.js` — Unit icon rendering, fog of war
 - `test.sh` — Add tier 12

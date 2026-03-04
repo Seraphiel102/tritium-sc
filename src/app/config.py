@@ -81,7 +81,7 @@ class Settings(BaseSettings):
 
     # Simulation engine
     simulation_enabled: bool = True
-    simulation_layout: str = "scenarios/neighborhood_default.json"
+    simulation_layout: str = "tests/scenarios/neighborhood_default.json"
     simulation_mode: str = "sim"  # "sim" or "live" — controls Amy's tactical data source
     simulation_bounds: float = 500.0  # Half-extent in meters (±500 = 1km x 1km city-scale)
     simulation_max_hostiles: int = 200  # Maximum simultaneous hostile targets

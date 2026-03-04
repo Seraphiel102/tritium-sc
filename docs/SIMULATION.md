@@ -464,7 +464,7 @@ cameras, structures, walls, floors, lights, sensors, speakers, buildings, roads,
 
 ### Sample Layout
 
-See `scenarios/neighborhood_default.json` for a complete example with:
+See `tests/scenarios/neighborhood_default.json` for a complete example with:
 - 1 patrol rover (perimeter route along streets)
 - 2 sentry turrets (north and south coverage)
 - 1 scout drone (wide aerial patrol)
