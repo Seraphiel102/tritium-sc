@@ -212,31 +212,22 @@ async def start_battle_scenario(scenario_name: str, request: Request):
     # Reset to clean state
     engine.reset_game()
 
+    # Disable ALL neutral spawners immediately to prevent neutrals spawning
+    # between reset and begin_war
+    if hasattr(engine, '_ambient_spawner') and engine._ambient_spawner is not None:
+        engine._ambient_spawner.enabled = False
+    if hasattr(engine, '_npc_manager') and engine._npc_manager is not None:
+        engine._npc_manager.enabled = False
+
     # Load scenario
     from engine.simulation.scenario import load_battle_scenario
     scenario = load_battle_scenario(str(scenario_file))
 
-    # Apply: set bounds, place defenders, configure waves
-    engine._map_bounds = scenario.map_bounds
+    # Apply: set bounds, configure waves, place defenders (with overrides)
+    engine.set_map_bounds(scenario.map_bounds)
     engine.MAX_HOSTILES = scenario.max_hostiles
 
-    # Place defenders
-    from engine.simulation.target import SimulationTarget
-    for defender in scenario.defenders:
-        target = SimulationTarget(
-            target_id=f"{defender.asset_type}-{uuid.uuid4().hex[:6]}",
-            name=defender.asset_type.replace("_", " ").title(),
-            alliance="friendly",
-            asset_type=defender.asset_type,
-            position=defender.position,
-            speed=0.0 if "turret" in defender.asset_type else 2.0,
-            waypoints=[],
-            status="idle" if "turret" not in defender.asset_type else "stationary",
-        )
-        target.apply_combat_profile()
-        engine.add_target(target)
-
-    # Load scenario into game mode (configures wave spawning)
+    # load_scenario() places defenders (with combat overrides) + configures wave spawning
     engine.game_mode.load_scenario(scenario)
 
     # Begin war

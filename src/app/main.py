@@ -103,15 +103,12 @@ def _create_simulation_engine():
     # Temporary event bus; gets replaced by Amy's actual bus after create_amy
     engine = SimulationEngine(EventBus())
 
-    if settings.simulation_layout:
-        layout_path = Path(settings.simulation_layout)
-        if layout_path.exists():
-            count = load_layout(str(layout_path), engine)
-            logger.info(f"Simulation: loaded {count} targets from {layout_path}")
-        else:
-            logger.warning(f"Simulation layout not found: {layout_path}")
+    # Layout is NOT auto-loaded at startup — engine starts with 0 units.
+    # Units are only placed by battle scenarios, API calls, or explicit
+    # profile/mission loads.  The layout path is still available via
+    # settings.simulation_layout for on-demand loading.
 
-    logger.info("Simulation engine created")
+    logger.info("Simulation engine created (clean start, 0 units)")
     return engine
 
 
