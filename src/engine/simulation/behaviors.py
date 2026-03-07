@@ -556,6 +556,9 @@ class UnitBehaviors:
             self._seek_cover(kid)
             return
 
+        # Seek nearest defender if out of waypoints (prevents stalemates)
+        self._seek_nearest_defender(kid, friendlies)
+
         # Flanking: lateral offset when facing stationary turret
         self._try_flank(kid, friendlies)
 
@@ -576,6 +579,34 @@ class UnitBehaviors:
                 kid.position[0] + math.cos(heading_rad) * offset,
                 kid.position[1] - math.sin(heading_rad) * offset,
             )
+
+    def _seek_nearest_defender(
+        self,
+        hostile: SimulationTarget,
+        friendlies: dict[str, SimulationTarget],
+    ) -> None:
+        """When a hostile has no waypoints, move toward the nearest alive defender.
+
+        This prevents stalemates where hostiles wander into dead zones
+        far from any turret's weapon range.
+        """
+        if hostile.waypoints:
+            return  # still has waypoints, nothing to do
+
+        best_dist = float("inf")
+        best_pos = None
+        hx, hy = hostile.position
+        for f in friendlies.values():
+            if f.status == "eliminated":
+                continue
+            fx, fy = f.position
+            d = math.sqrt((hx - fx) ** 2 + (hy - fy) ** 2)
+            if d < best_dist:
+                best_dist = d
+                best_pos = (fx, fy)
+
+        if best_pos is not None and best_dist > hostile.weapon_range * 0.8:
+            hostile.waypoints = [best_pos]
 
     # -- Comms signal reaction ---------------------------------------------------
 

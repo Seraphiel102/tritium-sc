@@ -541,3 +541,130 @@ class SoundEffectGenerator:
             out[start:end] += chirp[:end - start]
 
         return self._normalize(out)
+
+    # ------------------------------------------------------------------
+    # Additional combat / game effects (fill gaps for frontend requests)
+    # ------------------------------------------------------------------
+
+    def explosion_small(self, duration: float = 0.5) -> np.ndarray:
+        """Smaller explosion variant: shorter, higher-pitched."""
+        n = self._samples(duration)
+        t = self._time(n)
+        rumble = np.sin(2 * np.pi * 90 * t).astype(np.float32)
+        noise = np.random.randn(n).astype(np.float32)
+        env = self._exp_decay(n, rate=6.0)
+        out = (rumble * 0.5 + noise * 0.5) * env
+        return self._normalize(out)
+
+    def turret_lock_on(self, duration: float = 0.4) -> np.ndarray:
+        """Turret acquiring target: rising electronic tone."""
+        n = self._samples(duration)
+        t = self._time(n)
+        freq = 400 + 800 * (t / duration)
+        tone = np.sin(2 * np.pi * freq * t).astype(np.float32)
+        env = np.ones(n, dtype=np.float32)
+        env[-n // 5:] = np.linspace(1, 0, n // 5)
+        return self._normalize(tone * env * 0.7)
+
+    def drone_flyby(self, duration: float = 1.0) -> np.ndarray:
+        """Drone passing overhead: Doppler-shifted buzz."""
+        n = self._samples(duration)
+        t = self._time(n)
+        freq = 180 + 60 * np.sin(np.pi * t / duration)
+        buzz = np.sin(2 * np.pi * freq * t).astype(np.float32)
+        harm = np.sin(2 * np.pi * freq * 3 * t).astype(np.float32) * 0.3
+        env = np.sin(np.pi * t / duration).astype(np.float32)
+        return self._normalize((buzz + harm) * env)
+
+    def ricochet(self, duration: float = 0.3) -> np.ndarray:
+        """Ricochet: high-pitched descending whine."""
+        n = self._samples(duration)
+        t = self._time(n)
+        freq = 3000 * np.exp(-4.0 * t / duration)
+        tone = np.sin(2 * np.pi * freq * t).astype(np.float32)
+        env = self._exp_decay(n, rate=8.0)
+        noise = np.random.randn(n).astype(np.float32) * 0.15
+        out = tone * env * 0.7 + noise * self._exp_decay(n, rate=40.0)
+        return self._normalize(out)
+
+    def shield_hit(self, duration: float = 0.25) -> np.ndarray:
+        """Energy shield absorbing impact: buzzy thump."""
+        n = self._samples(duration)
+        t = self._time(n)
+        tone = np.sin(2 * np.pi * 220 * t).astype(np.float32)
+        buzz = np.sin(2 * np.pi * 660 * t).astype(np.float32) * 0.4
+        env = self._exp_decay(n, rate=12.0)
+        return self._normalize((tone + buzz) * env)
+
+    def wave_complete(self, duration: float = 1.0) -> np.ndarray:
+        """Wave cleared: ascending major chord stab."""
+        n = self._samples(duration)
+        t = self._time(n)
+        c = np.sin(2 * np.pi * 523 * t).astype(np.float32)
+        e = np.sin(2 * np.pi * 659 * t).astype(np.float32)
+        g = np.sin(2 * np.pi * 784 * t).astype(np.float32)
+        env = self._exp_decay(n, rate=2.0)
+        return self._normalize((c + e * 0.8 + g * 0.6) * env / 2.4)
+
+    def countdown_tick(self, duration: float = 0.15) -> np.ndarray:
+        """Short countdown tick: crisp click."""
+        n = self._samples(duration)
+        t = self._time(n)
+        tone = np.sin(2 * np.pi * 800 * t).astype(np.float32)
+        env = self._exp_decay(n, rate=25.0)
+        return self._normalize(tone * env)
+
+    def countdown_go(self, duration: float = 0.4) -> np.ndarray:
+        """Countdown GO: higher pitched double beep."""
+        n = self._samples(duration)
+        t = self._time(n)
+        tone = np.sin(2 * np.pi * 1200 * t).astype(np.float32)
+        gate = np.ones(n, dtype=np.float32)
+        mid = n // 2
+        gap_half = n // 20
+        gate[mid - gap_half:mid + gap_half] = 0
+        env = self._exp_decay(n, rate=4.0)
+        return self._normalize(tone * gate * env)
+
+    def reload_sound(self, duration: float = 0.5) -> np.ndarray:
+        """Weapon reload: mechanical click-clack."""
+        n = self._samples(duration)
+        out = np.zeros(n, dtype=np.float32)
+        for offset_frac, freq in [(0.0, 600), (0.4, 400)]:
+            start = int(offset_frac * n)
+            click_n = min(n // 5, n - start)
+            ct = self._time(click_n)
+            click = np.sin(2 * np.pi * freq * ct).astype(np.float32)
+            click *= self._exp_decay(click_n, rate=30.0)
+            out[start:start + click_n] += click * 0.7
+        return self._normalize(out)
+
+    def hostile_detected(self, duration: float = 0.6) -> np.ndarray:
+        """Hostile detected alert: two-tone warning beep."""
+        n = self._samples(duration)
+        t = self._time(n)
+        half = n // 2
+        tone = np.zeros(n, dtype=np.float32)
+        tone[:half] = np.sin(2 * np.pi * 600 * t[:half])
+        tone[half:] = np.sin(2 * np.pi * 800 * t[half:])
+        env = np.ones(n, dtype=np.float32) * 0.8
+        env[-n // 8:] = np.linspace(0.8, 0, n // 8)
+        return self._normalize(tone * env)
+
+    def weapon_jam(self, duration: float = 0.3) -> np.ndarray:
+        """Weapon jam: grinding buzz with abrupt stop."""
+        n = self._samples(duration)
+        t = self._time(n)
+        buzz = np.sin(2 * np.pi * 120 * t).astype(np.float32)
+        noise = np.random.randn(n).astype(np.float32) * 0.5
+        env = np.ones(n, dtype=np.float32)
+        env[-n // 4:] = np.linspace(1, 0, n // 4)
+        return self._normalize((buzz + noise) * env * 0.6)
+
+    def sensor_triggered(self, duration: float = 0.4) -> np.ndarray:
+        """Sensor triggered: quick electronic ping."""
+        n = self._samples(duration)
+        t = self._time(n)
+        tone = np.sin(2 * np.pi * 1500 * t).astype(np.float32)
+        env = self._exp_decay(n, rate=6.0)
+        return self._normalize(tone * env * 0.6)

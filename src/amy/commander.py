@@ -365,20 +365,31 @@ def _process_bridge_message(cmd, msg: dict) -> None:
         _handle_combat_event(cmd, msg_type, data)
         return
 
-    # sim_telemetry — feed target tracker + check unit health
-    if msg_type == "sim_telemetry":
+    # sim_telemetry_batch — feed target tracker + check unit health
+    if msg_type == "sim_telemetry_batch":
         tracker = getattr(cmd, "target_tracker", None)
-        if tracker is not None:
-            tracker.update_from_simulation(data)
-        # Check health of each unit in telemetry
-        targets = data.get("targets", [])
-        if isinstance(targets, list):
-            for t in targets:
-                if isinstance(t, dict) and t.get("is_combatant"):
-                    _check_unit_health(cmd, t)
-        # Also check the top-level if it is a single unit dict
-        if data.get("is_combatant"):
-            _check_unit_health(cmd, data)
+        if isinstance(data, list):
+            for t in data:
+                if isinstance(t, dict):
+                    if tracker is not None:
+                        tracker.update_from_simulation(t)
+                    if t.get("is_combatant"):
+                        _check_unit_health(cmd, t)
+        elif isinstance(data, dict):
+            # Single target dict or wrapper with "targets" key
+            targets = data.get("targets", [])
+            if targets:
+                for t in targets:
+                    if isinstance(t, dict):
+                        if tracker is not None:
+                            tracker.update_from_simulation(t)
+                        if t.get("is_combatant"):
+                            _check_unit_health(cmd, t)
+            elif data.get("target_id"):
+                if tracker is not None:
+                    tracker.update_from_simulation(data)
+                if data.get("is_combatant"):
+                    _check_unit_health(cmd, data)
 
     elif msg_type == "game_state_change":
         state = data.get("state", "")
@@ -2157,9 +2168,13 @@ class Commander:
             try:
                 msg = self._sim_sub.get(timeout=1.0)
                 msg_type = msg.get("type", "")
-                if msg_type == "sim_telemetry":
-                    data = msg.get("data", {})
-                    self.target_tracker.update_from_simulation(data)
+                if msg_type == "sim_telemetry_batch":
+                    batch = msg.get("data", [])
+                    if isinstance(batch, list):
+                        for target_data in batch:
+                            self.target_tracker.update_from_simulation(target_data)
+                    elif isinstance(batch, dict):
+                        self.target_tracker.update_from_simulation(batch)
                 elif msg_type == "detections":
                     data = msg.get("data", {})
                     for det in data.get("boxes", []):

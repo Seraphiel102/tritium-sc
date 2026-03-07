@@ -108,6 +108,28 @@ _EFFECT_CATALOG: dict[str, tuple[str, str, float, dict[str, Any]]] = {
                                         {"streak_name": "DOMINATING"}),
     "elimination_streak_godlike":       ("game", "elimination_streak", 1.5,
                                         {"streak_name": "GODLIKE"}),
+    # Additional combat effects (eliminates 404 errors during battle)
+    "explosion_small":    ("combat",  "explosion_small",    0.5,  {}),
+    "turret_lock_on":     ("combat",  "turret_lock_on",     0.4,  {}),
+    "drone_flyby":        ("combat",  "drone_flyby",        1.0,  {}),
+    "ricochet":           ("combat",  "ricochet",           0.3,  {}),
+    "shield_hit":         ("combat",  "shield_hit",         0.25, {}),
+    "wave_complete":      ("game",    "wave_complete",      1.0,  {}),
+    "countdown_tick":     ("game",    "countdown_tick",     0.15, {}),
+    "countdown_go":       ("game",    "countdown_go",       0.4,  {}),
+    "reload":             ("combat",  "reload_sound",       0.5,  {}),
+    "hostile_detected":   ("alerts",  "hostile_detected",   0.6,  {}),
+    "weapon_jam":         ("combat",  "weapon_jam",         0.3,  {}),
+    "sensor_triggered":   ("alerts",  "sensor_triggered",   0.4,  {}),
+    # Streak shorthand aliases (war-events.js uses short names)
+    "killing_spree":      ("game",    "elimination_streak", 1.5,
+                           {"streak_name": "KILLING SPREE"}),
+    "rampage":            ("game",    "elimination_streak", 1.5,
+                           {"streak_name": "RAMPAGE"}),
+    "dominating":         ("game",    "elimination_streak", 1.5,
+                           {"streak_name": "DOMINATING"}),
+    "godlike":            ("game",    "elimination_streak", 1.5,
+                           {"streak_name": "GODLIKE"}),
 }
 
 
