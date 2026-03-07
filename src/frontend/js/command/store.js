@@ -258,6 +258,9 @@ export const TritiumStore = {
         this.set('game.waveHostilesRemaining', 0);
         this.set('game.difficultyMultiplier', 1.0);
 
+        // Directional state
+        this.set('game.waveDirection', null);
+
         // Per-game overlay data
         this.set('hazards', new Map());
         this.set('game.hostileIntel', null);
