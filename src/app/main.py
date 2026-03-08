@@ -200,6 +200,28 @@ def _start_meshcore_bridge(amy_instance) -> object | None:
         return None
 
 
+def _start_fleet_bridge(amy_instance) -> object | None:
+    """Start FleetBridge if enabled. Returns bridge or None.
+
+    Graceful: if the fleet server is not reachable, logs a warning and continues.
+    """
+    if not settings.fleet_bridge_enabled:
+        return None
+
+    try:
+        from engine.comms.fleet_bridge import FleetBridge
+        bridge = FleetBridge(
+            event_bus=amy_instance.event_bus,
+            ws_url=settings.fleet_bridge_url,
+        )
+        bridge.start()
+        logger.info(f"Fleet bridge started ({settings.fleet_bridge_url})")
+        return bridge
+    except Exception as e:
+        logger.warning(f"Fleet bridge failed to start: {e}")
+        return None
+
+
 def _start_mesh_web_source(amy_instance) -> object | None:
     """Start mesh web source poller if enabled. Returns source or None.
 
@@ -411,6 +433,12 @@ def _shutdown_subsystems(amy_instance, sim_engine, mqtt_bridge, app: FastAPI) ->
         logger.info("Stopping mesh web source...")
         mesh_web.stop()
 
+    # 2.4. Fleet bridge
+    fleet_br = getattr(getattr(app, "state", None), "fleet_bridge", None)
+    if fleet_br is not None:
+        logger.info("Stopping fleet bridge...")
+        fleet_br.stop()
+
     # 2.5. Synthetic camera
     syn_cam = getattr(getattr(app, "state", None), "syn_cam", None)
     if syn_cam is not None:
@@ -570,6 +598,11 @@ async def lifespan(app: FastAPI):
             mesh_web = _start_mesh_web_source(amy_instance)
             if mesh_web is not None:
                 app.state.mesh_web_source = mesh_web
+
+            # Fleet bridge (tritium-edge fleet server WebSocket)
+            fleet_bridge = _start_fleet_bridge(amy_instance)
+            if fleet_bridge is not None:
+                app.state.fleet_bridge = fleet_bridge
 
             # Threat escalation
             _start_escalation(amy_instance, sim_engine, mqtt_bridge)

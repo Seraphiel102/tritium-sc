@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     fleet_enabled: bool = True        # auto-discover Ollama fleet on LAN + Tailscale
     fleet_auto_discover: bool = True  # Tailscale peer scan when fleet_enabled
 
+    # Fleet bridge — WebSocket connection to tritium-edge fleet server
+    fleet_bridge_enabled: bool = False
+    fleet_bridge_url: str = "ws://192.168.86.9:8080/ws"
+
     # Backstory generation (distributed via Ollama fleet)
     backstory_enabled: bool = True
     backstory_bulk_model: str = "gemma3:1b"
