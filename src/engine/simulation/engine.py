@@ -324,7 +324,10 @@ class SimulationEngine:
                             target.asset_type,
                             target.alliance,
                         )
-                        target.waypoints = new_path
+                        target.waypoints = [
+                            wp for wp in new_path
+                            if not self._obstacles.point_in_building(wp[0], wp[1])
+                        ]
                     else:
                         # No segment crossings — just remove waypoints inside buildings
                         target.waypoints = [
