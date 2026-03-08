@@ -22,6 +22,47 @@ function _esc(text) {
 const STALE_THRESHOLD_S = 60;   // yellow after 60s without heartbeat
 const OFFLINE_THRESHOLD_S = 180; // red after 180s without heartbeat
 
+function _healthClass(classification) {
+    switch ((classification || '').toLowerCase()) {
+        case 'healthy':  return 'fleet-health-healthy';
+        case 'warning':  return 'fleet-health-warning';
+        case 'critical': return 'fleet-health-critical';
+        default:         return 'fleet-health-unknown';
+    }
+}
+
+function _healthColor(classification) {
+    switch ((classification || '').toLowerCase()) {
+        case 'healthy':  return 'var(--green)';
+        case 'warning':  return 'var(--yellow, #fcee0a)';
+        case 'critical': return 'var(--magenta)';
+        default:         return 'var(--text-dim, #888)';
+    }
+}
+
+function _timeAgo(ts) {
+    if (!ts) return 'never';
+    const secs = Math.floor(Date.now() / 1000 - ts);
+    if (secs < 5) return 'just now';
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+    return `${Math.floor(secs / 86400)}d ago`;
+}
+
+function _formatBytes(bytes) {
+    if (bytes === undefined || bytes === null) return '--';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function _batteryIcon(pct) {
+    if (pct === undefined || pct === null) return '';
+    const color = pct > 50 ? 'var(--green)' : pct > 20 ? 'var(--yellow, #fcee0a)' : 'var(--magenta)';
+    return `<span style="color:${color}">${pct}%</span>`;
+}
+
 function _nodeStatus(node) {
     if (node._online === false) return 'offline';
     const lastSeen = node._last_seen_ts || 0;
@@ -73,7 +114,7 @@ export const FleetPanelDef = {
     id: 'fleet',
     title: 'FLEET NODES',
     defaultPosition: { x: null, y: null },
-    defaultSize: { w: 340, h: 420 },
+    defaultSize: { w: 620, h: 520 },
 
     create(panel) {
         const el = document.createElement('div');
@@ -81,12 +122,37 @@ export const FleetPanelDef = {
         el.innerHTML = `
             <div class="fleet-toolbar">
                 <span class="fleet-node-count mono" data-bind="node-count">0 nodes</span>
+                <span class="fleet-refresh-indicator mono" data-bind="refresh-indicator">--</span>
                 <button class="panel-action-btn" data-action="refresh" title="Refresh node list">REFRESH</button>
             </div>
-            <ul class="panel-list fleet-node-list" data-bind="node-list" role="listbox" aria-label="Fleet sensor nodes">
-                <li class="panel-empty">Waiting for fleet data...</li>
-            </ul>
+            <div class="fleet-device-table-wrap" data-bind="device-table-wrap">
+                <table class="fleet-device-table" data-bind="device-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>DEVICE</th>
+                            <th>HEALTH</th>
+                            <th>LAST SEEN</th>
+                            <th>FW</th>
+                            <th>HEAP</th>
+                            <th>BAT</th>
+                            <th>RSSI</th>
+                        </tr>
+                    </thead>
+                    <tbody data-bind="device-tbody">
+                        <tr><td colspan="8" class="panel-empty">Waiting for fleet data...</td></tr>
+                    </tbody>
+                </table>
+            </div>
             <div class="fleet-node-detail" data-bind="node-detail" style="display:none"></div>
+            <div class="fleet-map-section" data-bind="fleet-map">
+                <div class="panel-section-label">FLEET MAP</div>
+                <div class="fleet-map-placeholder" data-bind="map-placeholder">
+                    <span class="fleet-map-icon">&#x25C9;</span>
+                    <span>Map view coming soon</span>
+                    <span class="mono fleet-map-count" data-bind="map-node-count">0 nodes registered</span>
+                </div>
+            </div>
             <div class="fleet-health-bar" data-bind="health-bar" style="display:none">
                 <div class="panel-section-label">FLEET HEALTH</div>
                 <div class="panel-stat-row">
@@ -134,12 +200,13 @@ export const FleetPanelDef = {
     },
 
     mount(bodyEl, panel) {
-        const nodeListEl = bodyEl.querySelector('[data-bind="node-list"]');
+        const deviceTbodyEl = bodyEl.querySelector('[data-bind="device-tbody"]');
         const nodeCountEl = bodyEl.querySelector('[data-bind="node-count"]');
         const nodeDetailEl = bodyEl.querySelector('[data-bind="node-detail"]');
         const statusDot = bodyEl.querySelector('[data-bind="status-dot"]');
         const statusLabelEl = bodyEl.querySelector('[data-bind="status-label"]');
         const refreshBtn = bodyEl.querySelector('[data-action="refresh"]');
+        const refreshIndicator = bodyEl.querySelector('[data-bind="refresh-indicator"]');
         const healthBar = bodyEl.querySelector('[data-bind="health-bar"]');
         const healthScoreEl = bodyEl.querySelector('[data-bind="health-score"]');
         const healthNodesEl = bodyEl.querySelector('[data-bind="health-nodes"]');
@@ -151,11 +218,29 @@ export const FleetPanelDef = {
         const configPendingEl = bodyEl.querySelector('[data-bind="config-pending"]');
         const anomalyBar = bodyEl.querySelector('[data-bind="anomaly-bar"]');
         const anomalyListEl = bodyEl.querySelector('[data-bind="anomaly-list"]');
+        const mapPlaceholder = bodyEl.querySelector('[data-bind="map-placeholder"]');
+        const mapNodeCount = bodyEl.querySelector('[data-bind="map-node-count"]');
 
         // node tracking: device_id -> merged node data
         let nodes = {};
+        // health report per-node classification: device_id -> { classification, anomalies, ... }
+        let healthReportNodes = {};
         let selectedNodeId = null;
         let bridgeConnected = false;
+        let lastRefreshTs = 0;
+
+        // --- Refresh indicator ---
+        function updateRefreshIndicator() {
+            if (refreshIndicator) {
+                refreshIndicator.textContent = lastRefreshTs
+                    ? _timeAgo(lastRefreshTs)
+                    : '--';
+            }
+        }
+
+        // Update the refresh indicator every second
+        const refreshTickInterval = setInterval(updateRefreshIndicator, 1000);
+        panel._unsubs.push(() => clearInterval(refreshTickInterval));
 
         // --- Status bar ---
         function updateStatusBar() {
@@ -173,52 +258,76 @@ export const FleetPanelDef = {
             }
         }
 
-        // --- Node list rendering ---
+        // --- Map placeholder ---
+        function updateMapCount() {
+            const count = Object.keys(nodes).length;
+            if (mapNodeCount) {
+                mapNodeCount.textContent = `${count} node${count !== 1 ? 's' : ''} registered`;
+            }
+        }
+
+        // --- Device table rendering ---
         function renderNodes() {
             const nodeArr = Object.values(nodes);
             if (nodeCountEl) nodeCountEl.textContent = `${nodeArr.length} nodes`;
 
-            if (!nodeListEl) return;
+            updateMapCount();
+
+            if (!deviceTbodyEl) return;
 
             if (nodeArr.length === 0) {
-                nodeListEl.innerHTML = '<li class="panel-empty">Waiting for fleet data...</li>';
+                deviceTbodyEl.innerHTML = '<tr><td colspan="8" class="panel-empty">Waiting for fleet data...</td></tr>';
                 return;
             }
 
-            // Sort: online first, then stale, then offline
-            const order = { online: 0, stale: 1, unknown: 2, offline: 3 };
-            nodeArr.sort((a, b) => (order[_nodeStatus(a)] || 9) - (order[_nodeStatus(b)] || 9));
+            // Sort: critical first, then warning, then healthy; within same health, online first
+            const healthOrder = { critical: 0, warning: 1, healthy: 2, unknown: 3 };
+            const statusOrder = { online: 0, stale: 1, unknown: 2, offline: 3 };
+            nodeArr.sort((a, b) => {
+                const aHealth = healthReportNodes[a.device_id || a.id]?.classification || 'unknown';
+                const bHealth = healthReportNodes[b.device_id || b.id]?.classification || 'unknown';
+                const hDiff = (healthOrder[aHealth] ?? 9) - (healthOrder[bHealth] ?? 9);
+                if (hDiff !== 0) return hDiff;
+                return (statusOrder[_nodeStatus(a)] || 9) - (statusOrder[_nodeStatus(b)] || 9);
+            });
 
-            nodeListEl.innerHTML = nodeArr.map(n => {
+            deviceTbodyEl.innerHTML = nodeArr.map(n => {
                 const deviceId = n.device_id || n.id || '';
                 const status = _nodeStatus(n);
                 const dotClass = _statusDot(status);
                 const fw = _esc(n.version || n.firmware || '--');
-                const ip = _esc(n.ip || '--');
                 const rssi = n.rssi !== undefined ? n.rssi : (n.wifi_rssi !== undefined ? n.wifi_rssi : null);
-                const uptime = n.uptime_s !== undefined ? n.uptime_s : n.uptime;
-                const bleCount = n.sensors?.ble_scanner?.count
-                    || n.sensors?.ble_scanner?.devices?.length
-                    || n.ble_count || 0;
+                const lastSeen = n._last_seen_ts || 0;
+                const freeHeap = n.free_heap;
+                const battery = n.battery_pct ?? n.sensors?.power?.battery_pct;
                 const anomalyCount = n._anomaly_count || 0;
-                const anomalyBadge = anomalyCount > 0
-                    ? `<span class="fleet-anomaly-badge" style="color:var(--magenta);font-weight:bold" title="${anomalyCount} anomalies"> ⚠${anomalyCount}</span>`
-                    : '';
                 const isSelected = selectedNodeId === deviceId;
 
-                return `<li class="panel-list-item fleet-node-item${isSelected ? ' active' : ''}" data-device-id="${_esc(deviceId)}" role="option">
-                    <span class="${dotClass}" style="margin-right:6px"></span>
-                    <span class="fleet-node-id mono" style="flex:1">${_esc(deviceId)}${anomalyBadge}</span>
-                    <span class="fleet-node-meta mono" style="color:var(--text-dim);font-size:0.75em">
-                        ${ip} | ${_rssiBar(rssi)} | ${_formatUptime(uptime)} | BLE:${bleCount}
-                    </span>
-                </li>`;
+                // Health classification from health report
+                const hrNode = healthReportNodes[deviceId] || {};
+                const classification = hrNode.classification || 'unknown';
+                const healthClr = _healthColor(classification);
+
+                const anomalyBadge = anomalyCount > 0
+                    ? ` <span style="color:var(--magenta);font-weight:bold" title="${anomalyCount} anomalies">!${anomalyCount}</span>`
+                    : '';
+
+                return `<tr class="fleet-device-row${isSelected ? ' active' : ''}" data-device-id="${_esc(deviceId)}">
+                    <td><span class="${dotClass}"></span></td>
+                    <td class="mono fleet-device-id-cell" title="${_esc(deviceId)}">${_esc(deviceId)}${anomalyBadge}</td>
+                    <td class="mono" style="color:${healthClr}">${_esc(classification.toUpperCase())}</td>
+                    <td class="mono">${_timeAgo(lastSeen)}</td>
+                    <td class="mono">${fw}</td>
+                    <td class="mono">${_formatBytes(freeHeap)}</td>
+                    <td class="mono">${_batteryIcon(battery)}</td>
+                    <td>${_rssiBar(rssi)}</td>
+                </tr>`;
             }).join('');
 
             // Click handler: expand node detail
-            nodeListEl.querySelectorAll('.fleet-node-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    const deviceId = item.dataset.deviceId;
+            deviceTbodyEl.querySelectorAll('.fleet-device-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    const deviceId = row.dataset.deviceId;
                     if (selectedNodeId === deviceId) {
                         selectedNodeId = null;
                         if (nodeDetailEl) nodeDetailEl.style.display = 'none';
@@ -233,7 +342,7 @@ export const FleetPanelDef = {
             updateStatusBar();
         }
 
-        // --- Node detail ---
+        // --- Node detail (expanded view) ---
         function showNodeDetail(deviceId) {
             if (!nodeDetailEl) return;
             const n = nodes[deviceId];
@@ -244,6 +353,128 @@ export const FleetPanelDef = {
 
             const status = _nodeStatus(n);
             const rssi = n.rssi !== undefined ? n.rssi : (n.wifi_rssi !== undefined ? n.wifi_rssi : null);
+            const hrNode = healthReportNodes[deviceId] || {};
+            const classification = hrNode.classification || 'unknown';
+            const healthClr = _healthColor(classification);
+
+            // --- Health snapshot section ---
+            let healthSnapshotHtml = `
+                <div class="panel-section-label" style="color:${healthClr}">HEALTH: ${_esc(classification.toUpperCase())}</div>
+                <div class="panel-stat-row"><span class="panel-stat-label">DEVICE ID</span><span class="panel-stat-value mono">${_esc(n.device_id || n.id || '--')}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">STATUS</span><span class="panel-stat-value" style="color:${status === 'online' ? 'var(--green)' : status === 'stale' ? 'var(--yellow, #fcee0a)' : 'var(--magenta)'}">${_statusLabel(status)}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">LAST SEEN</span><span class="panel-stat-value mono">${_timeAgo(n._last_seen_ts)}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">IP</span><span class="panel-stat-value mono">${_esc(n.ip || '--')}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">MAC</span><span class="panel-stat-value mono">${_esc(n.mac || '--')}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">FIRMWARE</span><span class="panel-stat-value mono">${_esc(n.version || n.firmware || '--')}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">BOARD</span><span class="panel-stat-value mono">${_esc(n.board || '--')}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">WIFI RSSI</span><span class="panel-stat-value">${_rssiBar(rssi)}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">UPTIME</span><span class="panel-stat-value mono">${_formatUptime(n.uptime_s || n.uptime)}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">FREE HEAP</span><span class="panel-stat-value mono">${_formatBytes(n.free_heap)}</span></div>
+                <div class="panel-stat-row"><span class="panel-stat-label">PARTITION</span><span class="panel-stat-value mono">${_esc(n.partition || '--')}</span></div>
+            `;
+
+            // Battery if available
+            const battery = n.battery_pct ?? n.sensors?.power?.battery_pct;
+            if (battery !== undefined && battery !== null) {
+                healthSnapshotHtml += `<div class="panel-stat-row"><span class="panel-stat-label">BATTERY</span><span class="panel-stat-value mono">${_batteryIcon(battery)}</span></div>`;
+            }
+
+            // Health report extra fields (from fleet:health_report per-node data)
+            if (hrNode.score !== undefined) {
+                const scorePct = Math.round(hrNode.score * 100);
+                const scoreClr = scorePct >= 80 ? 'var(--green)' : scorePct >= 50 ? 'var(--yellow, #fcee0a)' : 'var(--magenta)';
+                healthSnapshotHtml += `<div class="panel-stat-row"><span class="panel-stat-label">HEALTH SCORE</span><span class="panel-stat-value mono" style="color:${scoreClr}">${scorePct}%</span></div>`;
+            }
+
+            // --- Diagnostics section ---
+            const diag = n._diagnostics || {};
+            const health = diag.health || {};
+            let diagHtml = '';
+            if (Object.keys(health).length > 0) {
+                diagHtml += '<div class="panel-section-label">DIAGNOSTICS</div>';
+                if (health.cpu_temp_c) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">CPU TEMP</span><span class="panel-stat-value mono">${health.cpu_temp_c.toFixed(1)}C</span></div>`;
+                if (health.min_free_heap) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MIN HEAP</span><span class="panel-stat-value mono">${_formatBytes(health.min_free_heap)}</span></div>`;
+                if (health.loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LOOP TIME</span><span class="panel-stat-value mono">${health.loop_time_us} us</span></div>`;
+                if (health.max_loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX LOOP</span><span class="panel-stat-value mono">${health.max_loop_time_us} us</span></div>`;
+                if (health.display?.frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">FRAME TIME</span><span class="panel-stat-value mono">${health.display.frame_us} us</span></div>`;
+                if (health.display?.max_frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX FRAME</span><span class="panel-stat-value mono">${health.display.max_frame_us} us</span></div>`;
+                if (health.i2c_errors) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">I2C ERRORS</span><span class="panel-stat-value mono" style="color:${health.i2c_errors > 0 ? 'var(--magenta)' : 'inherit'}">${health.i2c_errors}</span></div>`;
+                if (health.wifi_disconnects) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">WiFi DROPS</span><span class="panel-stat-value mono">${health.wifi_disconnects}</span></div>`;
+                if (health.reboot_count !== undefined) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">REBOOTS</span><span class="panel-stat-value mono">${health.reboot_count}</span></div>`;
+                if (health.reset_reason) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LAST RESET</span><span class="panel-stat-value mono">${_esc(health.reset_reason)}</span></div>`;
+            }
+
+            // --- I2C slave health table ---
+            const i2cSlaves = diag.i2c_slaves || health.i2c_slaves || hrNode.i2c_slaves || [];
+            let i2cHtml = '';
+            if (i2cSlaves.length > 0) {
+                i2cHtml += '<div class="panel-section-label">I2C BUS HEALTH</div>';
+                i2cHtml += '<table class="fleet-i2c-table"><thead><tr><th>ADDR</th><th>OK</th><th>NACK</th><th>TIMEOUT</th><th>RATE</th><th>LAT</th></tr></thead><tbody>';
+                i2cHtml += i2cSlaves.map(s => {
+                    const total = (s.ok || 0) + (s.nack || 0) + (s.timeout || 0);
+                    const rate = total > 0 ? (s.ok || 0) / total : 0;
+                    const pct = Math.round(rate * 100);
+                    const color = pct === 100 ? 'var(--green)' : pct > 95 ? 'var(--yellow, #fcee0a)' : 'var(--magenta)';
+                    return `<tr>
+                        <td class="mono">${_esc(s.addr || s.address || '--')}</td>
+                        <td class="mono">${s.ok || 0}</td>
+                        <td class="mono" style="color:${(s.nack || 0) > 0 ? 'var(--magenta)' : 'inherit'}">${s.nack || 0}</td>
+                        <td class="mono" style="color:${(s.timeout || 0) > 0 ? 'var(--magenta)' : 'inherit'}">${s.timeout || 0}</td>
+                        <td class="mono" style="color:${color}">${pct}%</td>
+                        <td class="mono">${s.lat_us !== undefined ? s.lat_us + 'us' : '--'}</td>
+                    </tr>`;
+                }).join('');
+                i2cHtml += '</tbody></table>';
+            }
+
+            // --- Diagnostic events (recent) ---
+            const diagEvents = diag.events || n._diag_events || hrNode.events || [];
+            let eventsHtml = '';
+            if (diagEvents.length > 0) {
+                eventsHtml += '<div class="panel-section-label">RECENT EVENTS</div>';
+                eventsHtml += '<div class="fleet-detail-events">';
+                eventsHtml += diagEvents.slice(0, 10).map(evt => {
+                    const ts = evt.timestamp ? _timeAgo(evt.timestamp) : '';
+                    const sevColor = evt.severity === 'critical' ? 'var(--magenta)'
+                        : evt.severity === 'warning' ? 'var(--yellow, #fcee0a)'
+                        : 'var(--text-dim)';
+                    return `<div class="fleet-event-row">
+                        <span class="mono" style="color:${sevColor};min-width:60px">${_esc((evt.severity || 'info').toUpperCase())}</span>
+                        <span class="mono" style="flex:1">${_esc(evt.message || evt.description || evt.type || '--')}</span>
+                        <span class="mono" style="color:var(--text-dim);font-size:0.8em">${ts}</span>
+                    </div>`;
+                }).join('');
+                eventsHtml += '</div>';
+            }
+
+            // --- Active anomalies ---
+            const anomalies = n._anomalies || diag.anomalies || hrNode.anomalies || [];
+            let anomalyHtml = '';
+            if (anomalies.length > 0) {
+                anomalyHtml = '<div class="panel-section-label" style="color:var(--magenta)">ACTIVE ANOMALIES (' + anomalies.length + ')</div>';
+                anomalyHtml += anomalies.map(a => {
+                    const sev = a.severity_score !== undefined ? Math.round(a.severity_score * 100) + '%' : '';
+                    const subsys = _esc(a.subsystem || a.type || 'UNKNOWN');
+                    const desc = _esc(a.description || a.message || '');
+                    const since = a.first_seen ? `since ${_timeAgo(a.first_seen)}` : '';
+                    return `<div class="panel-stat-row" style="color:var(--magenta)">
+                        <span class="panel-stat-label">${subsys}</span>
+                        <span class="panel-stat-value mono">${desc} ${sev} <span style="color:var(--text-dim);font-size:0.8em">${since}</span></span>
+                    </div>`;
+                }).join('');
+            }
+
+            // --- Sensor summary ---
+            const sensors = n.sensors || {};
+            let sensorHtml = '';
+            for (const [sType, sData] of Object.entries(sensors)) {
+                if (sType === 'ble_scanner') continue;
+                const val = typeof sData === 'object' ? JSON.stringify(sData) : String(sData);
+                sensorHtml += `<div class="panel-stat-row">
+                    <span class="panel-stat-label">${_esc(sType.toUpperCase())}</span>
+                    <span class="panel-stat-value mono">${_esc(val)}</span>
+                </div>`;
+            }
 
             // BLE devices list
             const bleDevices = n.sensors?.ble_scanner?.devices
@@ -261,84 +492,35 @@ export const FleetPanelDef = {
                 }).join('');
             }
 
-            // Sensor summary
-            const sensors = n.sensors || {};
-            let sensorHtml = '';
-            for (const [sType, sData] of Object.entries(sensors)) {
-                if (sType === 'ble_scanner') continue;
-                const val = typeof sData === 'object' ? JSON.stringify(sData) : String(sData);
-                sensorHtml += `<div class="panel-stat-row">
-                    <span class="panel-stat-label">${_esc(sType.toUpperCase())}</span>
-                    <span class="panel-stat-value mono">${_esc(val)}</span>
-                </div>`;
-            }
-
-            // Diagnostics section
-            const diag = n._diagnostics || {};
-            const health = diag.health || {};
-            const anomalies = n._anomalies || diag.anomalies || [];
-            let diagHtml = '';
-            if (Object.keys(health).length > 0) {
-                diagHtml += '<div class="panel-section-label">DIAGNOSTICS</div>';
-                if (health.cpu_temp_c) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">CPU TEMP</span><span class="panel-stat-value mono">${health.cpu_temp_c.toFixed(1)}°C</span></div>`;
-                if (health.min_free_heap) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MIN HEAP</span><span class="panel-stat-value mono">${Math.round(health.min_free_heap / 1024)} KB</span></div>`;
-                if (health.loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LOOP TIME</span><span class="panel-stat-value mono">${health.loop_time_us} μs</span></div>`;
-                if (health.max_loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX LOOP</span><span class="panel-stat-value mono">${health.max_loop_time_us} μs</span></div>`;
-                if (health.display?.frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">FRAME TIME</span><span class="panel-stat-value mono">${health.display.frame_us} μs</span></div>`;
-                if (health.display?.max_frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX FRAME</span><span class="panel-stat-value mono">${health.display.max_frame_us} μs</span></div>`;
-                if (health.i2c_errors) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">I2C ERRORS</span><span class="panel-stat-value mono" style="color:${health.i2c_errors > 0 ? 'var(--magenta)' : 'inherit'}">${health.i2c_errors}</span></div>`;
-                if (health.wifi_disconnects) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">WiFi DROPS</span><span class="panel-stat-value mono">${health.wifi_disconnects}</span></div>`;
-                if (health.reboot_count !== undefined) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">REBOOTS</span><span class="panel-stat-value mono">${health.reboot_count}</span></div>`;
-                if (health.reset_reason) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LAST RESET</span><span class="panel-stat-value mono">${_esc(health.reset_reason)}</span></div>`;
-            }
-            // I2C bus per-slave health
-            const i2cSlaves = diag.i2c_slaves || health.i2c_slaves || [];
-            let i2cHtml = '';
-            if (i2cSlaves.length > 0) {
-                i2cHtml += '<div class="panel-section-label">I2C BUS HEALTH</div>';
-                i2cHtml += i2cSlaves.map(s => {
-                    const total = (s.ok || 0) + (s.nack || 0) + (s.timeout || 0);
-                    const rate = total > 0 ? (s.ok || 0) / total : 0;
-                    const pct = Math.round(rate * 100);
-                    const color = pct === 100 ? 'var(--green)' : pct > 95 ? 'var(--yellow, #fcee0a)' : 'var(--magenta)';
-                    return `<div class="panel-stat-row">
-                        <span class="panel-stat-label mono">${_esc(s.addr || '--')}</span>
-                        <span class="panel-stat-value mono" style="color:${color}">${pct}% <span style="color:var(--text-dim);font-size:0.85em">NACK:${s.nack || 0} TO:${s.timeout || 0} ${s.lat_us !== undefined ? s.lat_us + 'μs' : ''}</span></span>
-                    </div>`;
-                }).join('');
-            }
-            let anomalyHtml = '';
-            if (anomalies.length > 0) {
-                anomalyHtml = '<div class="panel-section-label" style="color:var(--magenta)">ANOMALIES (' + anomalies.length + ')</div>';
-                anomalyHtml += anomalies.map(a => {
-                    const sev = a.severity_score !== undefined ? Math.round(a.severity_score * 100) + '%' : '';
-                    return `<div class="panel-stat-row" style="color:var(--magenta)">
-                        <span class="panel-stat-label">${_esc(a.subsystem || a.type || 'UNKNOWN')}</span>
-                        <span class="panel-stat-value mono">${_esc(a.description || '')} ${sev}</span>
-                    </div>`;
-                }).join('');
-            }
+            // --- Close button ---
+            const closeBtn = `<button class="panel-action-btn fleet-detail-close" data-action="close-detail" title="Close detail">X</button>`;
 
             nodeDetailEl.style.display = '';
             nodeDetailEl.innerHTML = `
-                <div class="panel-section-label">NODE DETAIL</div>
-                <div class="panel-stat-row"><span class="panel-stat-label">DEVICE ID</span><span class="panel-stat-value mono">${_esc(n.device_id || n.id || '--')}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">STATUS</span><span class="panel-stat-value" style="color:${status === 'online' ? 'var(--green)' : status === 'stale' ? 'var(--yellow, #fcee0a)' : 'var(--magenta)'}">${_statusLabel(status)}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">IP</span><span class="panel-stat-value mono">${_esc(n.ip || '--')}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">MAC</span><span class="panel-stat-value mono">${_esc(n.mac || '--')}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">FIRMWARE</span><span class="panel-stat-value mono">${_esc(n.version || n.firmware || '--')}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">BOARD</span><span class="panel-stat-value mono">${_esc(n.board || '--')}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">WIFI RSSI</span><span class="panel-stat-value">${_rssiBar(rssi)}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">UPTIME</span><span class="panel-stat-value mono">${_formatUptime(n.uptime_s || n.uptime)}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">FREE HEAP</span><span class="panel-stat-value mono">${n.free_heap ? Math.round(n.free_heap / 1024) + ' KB' : '--'}</span></div>
-                <div class="panel-stat-row"><span class="panel-stat-label">PARTITION</span><span class="panel-stat-value mono">${_esc(n.partition || '--')}</span></div>
+                <div class="fleet-detail-header">
+                    <div class="panel-section-label" style="flex:1">NODE DETAIL</div>
+                    ${closeBtn}
+                </div>
+                ${healthSnapshotHtml}
                 ${diagHtml}
                 ${i2cHtml}
+                ${eventsHtml}
                 ${anomalyHtml}
                 ${sensorHtml ? '<div class="panel-section-label">SENSORS</div>' + sensorHtml : ''}
                 <div class="panel-section-label">BLE DEVICES (${bleDevices.length})</div>
                 ${bleHtml}
             `;
+
+            // Close button handler
+            const closeBtnEl = nodeDetailEl.querySelector('[data-action="close-detail"]');
+            if (closeBtnEl) {
+                closeBtnEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectedNodeId = null;
+                    nodeDetailEl.style.display = 'none';
+                    renderNodes();
+                });
+            }
         }
 
         // --- Data fetch ---
@@ -359,8 +541,19 @@ export const FleetPanelDef = {
                         _online: n._online !== undefined ? n._online : true,
                     };
                 }
+                lastRefreshTs = Date.now() / 1000;
+                updateRefreshIndicator();
                 renderNodes();
                 if (selectedNodeId) showNodeDetail(selectedNodeId);
+            } catch (_) {}
+        }
+
+        async function fetchHealthReport() {
+            try {
+                const res = await fetch('/api/fleet/health-report');
+                if (!res.ok) return;
+                const data = await res.json();
+                onHealthReport(data);
             } catch (_) {}
         }
 
@@ -513,6 +706,46 @@ export const FleetPanelDef = {
             if (healthBar && !healthScoreEl?.textContent?.includes('%')) {
                 healthBar.style.display = '';
             }
+
+            // Populate per-node health classifications from report
+            const reportNodes = data.nodes || [];
+            for (const rn of reportNodes) {
+                const id = rn.device_id || rn.id;
+                if (!id) continue;
+                healthReportNodes[id] = {
+                    classification: rn.classification || rn.status || 'unknown',
+                    score: rn.score ?? rn.health_score,
+                    anomalies: rn.anomalies || [],
+                    events: rn.events || rn.recent_events || [],
+                    i2c_slaves: rn.i2c_slaves || [],
+                };
+                // Also update anomaly count on the main node if present
+                if (nodes[id] && rn.anomalies) {
+                    nodes[id]._anomaly_count = rn.anomalies.length;
+                    nodes[id]._anomalies = rn.anomalies;
+                }
+            }
+
+            // Update fleet-level anomaly count
+            if (data.anomaly_count !== undefined && healthAlertsEl) {
+                const crit = data.critical ?? 0;
+                const warn = data.warning ?? 0;
+                if (crit > 0) {
+                    healthAlertsEl.textContent = `${crit} critical / ${data.anomaly_count} total`;
+                    healthAlertsEl.style.color = 'var(--magenta)';
+                }
+            }
+
+            // Update health node counts
+            if (healthNodesEl && data.total_nodes !== undefined) {
+                const healthy = data.healthy ?? 0;
+                const warn = data.warning ?? 0;
+                const crit = data.critical ?? 0;
+                healthNodesEl.innerHTML = `<span style="color:var(--green)">${healthy}</span> / <span style="color:var(--yellow, #fcee0a)">${warn}</span> / <span style="color:var(--magenta)">${crit}</span>`;
+            }
+
+            renderNodes();
+            if (selectedNodeId) showNodeDetail(selectedNodeId);
         }
 
         async function fetchConfigSync() {
@@ -565,17 +798,26 @@ export const FleetPanelDef = {
             EventBus.on('fleet:anomalies', onFleetAnomalies),
         );
 
-        // Refresh button
+        // Refresh button — fetch all data sources
         if (refreshBtn) {
-            refreshBtn.addEventListener('click', () => fetchNodes());
+            refreshBtn.addEventListener('click', () => {
+                fetchNodes();
+                fetchHealthReport();
+                fetchDashboard();
+                fetchConfigSync();
+            });
         }
 
         // Auto-refresh every 10s
-        const refreshInterval = setInterval(fetchNodes, 10000);
+        const refreshInterval = setInterval(() => {
+            fetchNodes();
+            fetchHealthReport();
+        }, 10000);
         panel._unsubs.push(() => clearInterval(refreshInterval));
 
         // Initial fetch
         fetchNodes();
+        fetchHealthReport();
         fetchConfigSync();
         fetchDashboard();
         updateStatusBar();

@@ -2883,3 +2883,142 @@
     font-size: 0.75em;
     color: var(--text-dim, #888);
 }
+
+/* Fleet refresh indicator */
+.fleet-refresh-indicator {
+    font-size: 0.7em;
+    color: var(--text-dim, #888);
+    margin-left: auto;
+    margin-right: 6px;
+}
+
+/* Fleet device table */
+.fleet-device-table-wrap {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+.fleet-device-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78em;
+}
+.fleet-device-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--panel-bg, rgba(10, 12, 18, 0.95));
+    color: var(--cyan, #00f0ff);
+    font-size: 0.72em;
+    font-weight: 600;
+    text-align: left;
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--border, rgba(0,240,255,0.15));
+    white-space: nowrap;
+    letter-spacing: 0.05em;
+}
+.fleet-device-row {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.fleet-device-row:hover {
+    background: rgba(0, 240, 255, 0.06);
+}
+.fleet-device-row.active {
+    background: rgba(0, 240, 255, 0.12);
+    border-left: 2px solid var(--cyan, #00f0ff);
+}
+.fleet-device-row td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.fleet-device-id-cell {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.85em;
+}
+
+/* Fleet health classification colors */
+.fleet-health-healthy { color: var(--green); }
+.fleet-health-warning { color: var(--yellow, #fcee0a); }
+.fleet-health-critical { color: var(--magenta); }
+.fleet-health-unknown { color: var(--text-dim, #888); }
+
+/* Fleet detail header with close button */
+.fleet-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.fleet-detail-close {
+    font-size: 0.7em;
+    padding: 1px 6px;
+    cursor: pointer;
+}
+
+/* Fleet I2C slave health table */
+.fleet-i2c-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82em;
+    margin: 4px 0;
+}
+.fleet-i2c-table th {
+    color: var(--cyan, #00f0ff);
+    font-size: 0.72em;
+    font-weight: 600;
+    text-align: left;
+    padding: 2px 5px;
+    border-bottom: 1px solid var(--border, rgba(0,240,255,0.15));
+    letter-spacing: 0.04em;
+}
+.fleet-i2c-table td {
+    padding: 2px 5px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.9em;
+}
+
+/* Fleet diagnostic event rows */
+.fleet-detail-events {
+    max-height: 120px;
+    overflow-y: auto;
+    margin: 2px 0;
+}
+.fleet-event-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 0.82em;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+/* Fleet map placeholder */
+.fleet-map-section {
+    border-top: 1px solid var(--border, rgba(0,240,255,0.15));
+    padding: 4px 8px;
+}
+.fleet-map-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 8px;
+    border: 1px dashed var(--border, rgba(0,240,255,0.15));
+    border-radius: 4px;
+    color: var(--text-dim, #888);
+    font-size: 0.8em;
+    gap: 4px;
+}
+.fleet-map-icon {
+    font-size: 1.6em;
+    color: var(--cyan, #00f0ff);
+    opacity: 0.5;
+}
+.fleet-map-count {
+    font-size: 0.85em;
+    color: var(--cyan, #00f0ff);
+    opacity: 0.7;
+}

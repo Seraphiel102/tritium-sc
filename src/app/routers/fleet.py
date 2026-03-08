@@ -222,3 +222,34 @@ async def fleet_node_detail(request: Request, device_id: str):
         result["sensors_detail"] = sensors_data
 
     return result
+
+
+@router.get("/node/{device_id}/diag")
+async def fleet_node_diag(request: Request, device_id: str):
+    """GET /api/fleet/node/{device_id}/diag — diagnostics for a specific edge node.
+
+    Proxies to the fleet server /api/devices/{id}/diag endpoint for full
+    health snapshot, I2C slave data, recent events, and active anomalies.
+    Falls back to cached diagnostics from FleetBridge when unreachable.
+    """
+    base = _get_fleet_url(request)
+    data = _proxy_get(f"{base}/api/devices/{device_id}/diag")
+
+    if data is not None:
+        return {**data, "device_id": device_id, "source": "live"}
+
+    # Fallback: cached diagnostics from bridge
+    bridge = getattr(request.app.state, "fleet_bridge", None)
+    if bridge is not None:
+        cached = getattr(bridge, "node_diag", {}).get(device_id)
+        if cached:
+            return {**cached, "device_id": device_id, "source": "cached"}
+
+    return {
+        "device_id": device_id,
+        "health": {},
+        "i2c_slaves": [],
+        "events": [],
+        "anomalies": [],
+        "source": "unavailable",
+    }
