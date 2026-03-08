@@ -5,6 +5,7 @@ description = "Nerf battle management with AI Commander Amy"
 requires-python = ">=3.12"
 dependencies = [
     "influxdb-client>=1.36.0",
+    "tritium-lib @ file:///home/scubasonar/Code/tritium-lib",
 ]
 
 [tool.setuptools.packages.find]
