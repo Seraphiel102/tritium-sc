@@ -284,10 +284,28 @@ export const FleetPanelDef = {
                 if (health.min_free_heap) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MIN HEAP</span><span class="panel-stat-value mono">${Math.round(health.min_free_heap / 1024)} KB</span></div>`;
                 if (health.loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LOOP TIME</span><span class="panel-stat-value mono">${health.loop_time_us} μs</span></div>`;
                 if (health.max_loop_time_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX LOOP</span><span class="panel-stat-value mono">${health.max_loop_time_us} μs</span></div>`;
+                if (health.display?.frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">FRAME TIME</span><span class="panel-stat-value mono">${health.display.frame_us} μs</span></div>`;
+                if (health.display?.max_frame_us) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">MAX FRAME</span><span class="panel-stat-value mono">${health.display.max_frame_us} μs</span></div>`;
                 if (health.i2c_errors) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">I2C ERRORS</span><span class="panel-stat-value mono" style="color:${health.i2c_errors > 0 ? 'var(--magenta)' : 'inherit'}">${health.i2c_errors}</span></div>`;
                 if (health.wifi_disconnects) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">WiFi DROPS</span><span class="panel-stat-value mono">${health.wifi_disconnects}</span></div>`;
                 if (health.reboot_count !== undefined) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">REBOOTS</span><span class="panel-stat-value mono">${health.reboot_count}</span></div>`;
                 if (health.reset_reason) diagHtml += `<div class="panel-stat-row"><span class="panel-stat-label">LAST RESET</span><span class="panel-stat-value mono">${_esc(health.reset_reason)}</span></div>`;
+            }
+            // I2C bus per-slave health
+            const i2cSlaves = diag.i2c_slaves || health.i2c_slaves || [];
+            let i2cHtml = '';
+            if (i2cSlaves.length > 0) {
+                i2cHtml += '<div class="panel-section-label">I2C BUS HEALTH</div>';
+                i2cHtml += i2cSlaves.map(s => {
+                    const total = (s.ok || 0) + (s.nack || 0) + (s.timeout || 0);
+                    const rate = total > 0 ? (s.ok || 0) / total : 0;
+                    const pct = Math.round(rate * 100);
+                    const color = pct === 100 ? 'var(--green)' : pct > 95 ? 'var(--yellow, #fcee0a)' : 'var(--magenta)';
+                    return `<div class="panel-stat-row">
+                        <span class="panel-stat-label mono">${_esc(s.addr || '--')}</span>
+                        <span class="panel-stat-value mono" style="color:${color}">${pct}% <span style="color:var(--text-dim);font-size:0.85em">NACK:${s.nack || 0} TO:${s.timeout || 0} ${s.lat_us !== undefined ? s.lat_us + 'μs' : ''}</span></span>
+                    </div>`;
+                }).join('');
             }
             let anomalyHtml = '';
             if (anomalies.length > 0) {
@@ -315,6 +333,7 @@ export const FleetPanelDef = {
                 <div class="panel-stat-row"><span class="panel-stat-label">FREE HEAP</span><span class="panel-stat-value mono">${n.free_heap ? Math.round(n.free_heap / 1024) + ' KB' : '--'}</span></div>
                 <div class="panel-stat-row"><span class="panel-stat-label">PARTITION</span><span class="panel-stat-value mono">${_esc(n.partition || '--')}</span></div>
                 ${diagHtml}
+                ${i2cHtml}
                 ${anomalyHtml}
                 ${sensorHtml ? '<div class="panel-section-label">SENSORS</div>' + sensorHtml : ''}
                 <div class="panel-section-label">BLE DEVICES (${bleDevices.length})</div>
