@@ -313,6 +313,8 @@ export function initMap() {
         EventBus.on('geofence:drawZone', _onGeofenceDrawStart),
         EventBus.on('patrol:drawRoute', _onPatrolDrawStart),
         EventBus.on('rfMotion:update', _onRfMotionUpdate),
+        EventBus.on('map:drawFinish', _onDrawFinish),
+        EventBus.on('map:drawCancel', _onDrawCancel),
     );
 
     // Subscribe to store for selectedUnitId changes (highlight sync)
@@ -3369,6 +3371,18 @@ function _patrolCancel() {
     _state.patrolWaypoints = [];
     _state.canvas.style.cursor = 'crosshair';
     EventBus.emit('toast:show', { message: 'Patrol drawing cancelled', type: 'info' });
+}
+
+// -- Drawing finish/cancel handlers -----------------------------------
+
+function _onDrawFinish() {
+    if (_state.geofenceDrawing) _geofenceFinish();
+    else if (_state.patrolDrawing) _patrolFinish();
+}
+
+function _onDrawCancel() {
+    if (_state.geofenceDrawing) _geofenceCancel();
+    else if (_state.patrolDrawing) _patrolCancel();
 }
 
 // -- RF motion data handler -------------------------------------------
