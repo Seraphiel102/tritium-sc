@@ -25,6 +25,7 @@ Plugins extend the Command Center with new capabilities. Each plugin can registe
 | **acoustic** | `acoustic/` | Audio classification — gunshot/voice/vehicle/animal detection | Active |
 | **graphlings** | `graphlings/` | NPC digital life agents — autonomous AI entities with memory and behavior | Active |
 | **npc_thoughts** | `npc_thoughts.py` | NPC context-aware thought bubble generation and display | Active |
+| **federation** | `federation/` | Multi-site federation — MQTT bridge for cross-site target/dossier sharing | Active |
 
 ## Plugin Architecture
 
