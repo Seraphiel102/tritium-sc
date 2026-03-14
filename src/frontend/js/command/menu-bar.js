@@ -221,6 +221,45 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
         left.appendChild(wrap);
     }
 
+    // Panel search input — filters the quick-access buttons as you type
+    const searchInput = document.createElement('input');
+    searchInput.className = 'command-bar-search';
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search panels...';
+    searchInput.maxLength = 32;
+    searchInput.title = 'Filter panels by name (Ctrl+/)';
+    searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        for (const [id, btn] of panelButtons) {
+            const def = panelManager._registry.get(id);
+            const title = def ? def.title.toLowerCase() : id;
+            btn.style.display = (!q || title.includes(q) || id.includes(q)) ? '' : 'none';
+        }
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            searchInput.value = '';
+            searchInput.dispatchEvent(new Event('input'));
+            searchInput.blur();
+        } else if (e.key === 'Enter') {
+            // Open the first visible panel
+            const q = searchInput.value.trim().toLowerCase();
+            if (q) {
+                for (const [id, btn] of panelButtons) {
+                    if (btn.style.display !== 'none') {
+                        panelManager.toggle(id);
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input'));
+                        searchInput.blur();
+                        break;
+                    }
+                }
+            }
+        }
+        e.stopPropagation();
+    });
+    right.appendChild(searchInput);
+
     // Right side: quick-access panel toggle buttons
     const panelButtons = new Map();
     for (const p of panelManager.getRegisteredPanels()) {
@@ -234,6 +273,14 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
         right.appendChild(btn);
         panelButtons.set(p.id, btn);
     }
+
+    // Ctrl+/ shortcut to focus panel search
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
 
     // Hidden save input (activated by Save Layout... or Ctrl+Shift+S)
     const saveInput = document.createElement('input');

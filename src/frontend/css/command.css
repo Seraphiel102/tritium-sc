@@ -3178,6 +3178,29 @@ body.v2 {
     color: var(--text-ghost);
 }
 
+/* Panel search input in menu bar */
+.command-bar-search {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    color: var(--text-primary);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    width: 120px;
+    outline: none;
+    transition: border-color var(--transition-fast), width var(--transition-fast);
+}
+
+.command-bar-search:focus {
+    border-color: rgba(0, 240, 255, 0.4);
+    width: 160px;
+}
+
+.command-bar-search::placeholder {
+    color: var(--text-ghost);
+}
+
 /* ========================================
    Menu Bar (dropdown menus)
    ======================================== */

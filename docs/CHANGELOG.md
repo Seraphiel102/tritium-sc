@@ -14,6 +14,22 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 39: Panel Search, Test Baseline
+
+### Panel Search (Build Verified)
+- Search input in menu bar right section filters 48 panel toggle buttons as you type
+- Ctrl+/ keyboard shortcut focuses search input
+- Enter key toggles the first visible matching panel
+- Escape clears search and returns focus
+- CSS: `.command-bar-search` with focus width expansion animation
+
+### Test Baseline (Wave 39)
+- 8352 pytest passed, 79 skipped, 6 warnings
+- 92/94 JS test tiers pass (test_websocket.js and test_map_render.js are known pre-existing failures)
+- 120 test infrastructure tests, 125 ROS2 robot tests — all pass
+
+---
+
 ## 2026-03-14 — Wave 38: Multi-Camera, Target Merge, Amy Monologue, Export Scheduler
 
 ### Multi-Camera View Panel (Build Verified)
