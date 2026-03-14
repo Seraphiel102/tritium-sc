@@ -56,6 +56,7 @@ import { RfMotionPanelDef } from './panels/rf-motion.js';
 import { SystemHealthPanelDef } from './panels/system-health.js';
 import { QuickStartPanelDef } from './panels/quick-start.js';
 import { BookmarksPanelDef } from './panels/bookmarks.js';
+import { MissionsPanelDef } from './panels/missions.js';
 import { TargetComparePanelDef } from './panels/target-compare.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
@@ -441,6 +442,42 @@ function init() {
                     audioMgr.play('escalation_siren');
                 });
 
+                // ---- Notification sound effects ----
+                // Play subtle audio cues for critical notifications.
+                // Respects a mute toggle stored in TritiumStore.
+                EventBus.on('notification:new', (data) => {
+                    if (TritiumStore.get('notifications.muted')) return;
+                    const severity = data.severity || data.level || 'info';
+                    const source = data.source || '';
+                    // Map notification types to appropriate sounds
+                    if (source === 'geofence' || severity === 'critical') {
+                        audioMgr.play('perimeter_breach');
+                    } else if (source === 'threat' || source === 'escalation') {
+                        audioMgr.play('hostile_detected');
+                    } else if (source === 'suspicious_device' || source === 'new_device') {
+                        audioMgr.play('sensor_triggered');
+                    } else if (severity === 'warning') {
+                        audioMgr.play('alert_tone');
+                    } else if (severity === 'error') {
+                        audioMgr.play('alert_critical');
+                    }
+                    // info-level notifications are silent by default
+                });
+
+                // Geofence breach gets its own dedicated sound
+                EventBus.on('geofence:breach', () => {
+                    if (!TritiumStore.get('notifications.muted')) {
+                        audioMgr.play('perimeter_breach');
+                    }
+                });
+
+                // Threat escalation sound
+                EventBus.on('threat:escalated', () => {
+                    if (!TritiumStore.get('notifications.muted')) {
+                        audioMgr.play('escalation_siren');
+                    }
+                });
+
                 console.log('[TRITIUM] Audio initialized + combat events wired');
             } catch (e) {
                 console.warn('[TRITIUM] Audio init failed:', e);
@@ -505,6 +542,7 @@ function initPanelSystem(container) {
     panelManager.register(QuickStartPanelDef);
     panelManager.register(BookmarksPanelDef);
     panelManager.register(TargetComparePanelDef);
+    panelManager.register(MissionsPanelDef);
 
     // panel:request-open — allows map click to open panels by id
     EventBus.on('panel:request-open', (data) => {
@@ -1409,6 +1447,17 @@ function initKeyboard() {
             case 'L':
                 if (panelManager) panelManager.toggle('layers');
                 break;
+            case 'x':
+            case 'X': {
+                // Toggle notification sound mute
+                const muted = !TritiumStore.get('notifications.muted');
+                TritiumStore.set('notifications.muted', muted);
+                EventBus.emit('toast:show', {
+                    message: muted ? 'Notification sounds MUTED' : 'Notification sounds UNMUTED',
+                    type: 'info',
+                });
+                break;
+            }
             case 'Tab':
                 if (panelManager) {
                     e.preventDefault();

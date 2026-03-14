@@ -14,6 +14,48 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 33: Mission Management, Context Menu, Notification Sounds
+
+### Mission Management Panel (Integration Tested)
+- New `/api/missions` REST API — full CRUD with 10 endpoints
+  - Create, update, delete missions with objectives, assets, geofence zones
+  - Lifecycle transitions: start, pause, complete, abort
+  - Individual objective completion tracking
+  - Filter by status and type
+  - Uses `Mission` model from tritium-lib
+- New `missions` panel in Command Center frontend
+  - List view with status badges, type labels, progress bars
+  - Create/edit form with all mission fields
+  - Detail view with lifecycle buttons and objective completion
+- Wired into main.js panel system
+
+### Map Right-Click Context Menu Enhancements (Integration Tested)
+- Added 5 new context menu items for empty map right-click:
+  - CREATE GEOFENCE ZONE HERE — opens geofence panel with zone at click
+  - PLACE SENSOR HERE — opens asset panel for sensor placement
+  - ADD PATROL WAYPOINT HERE — emits patrol:addWaypoint event
+  - MEASURE FROM HERE — initiates measurement tool
+  - CREATE BOOKMARK HERE — prompts for name, saves via /api/bookmarks
+- Updated test_context_menu.js to match new item counts (233 tests passing)
+
+### Notification Sound Effects (Integration Tested)
+- Wired notification:new, geofence:breach, threat:escalated events to audio system
+- Maps notification severity/source to appropriate sfx/ sounds
+  - geofence breach -> perimeter_breach.wav
+  - threat escalation -> escalation_siren.wav
+  - suspicious device -> sensor_triggered.wav
+  - warning -> alert_tone.wav, error -> alert_critical.wav
+- Mute toggle: press X to mute/unmute notification sounds
+- Stored in TritiumStore as notifications.muted
+
+### Keyboard Shortcut Overlay Enhancement (Integration Tested)
+- Reorganized help overlay (?) into 9 categories with 2-column layout:
+  - General, Map Modes, Map Navigation, Map Layers, Panels, Targets, Drawing, Layouts, Game
+- Added missing shortcuts (X=mute, Enter/ESC for drawing)
+- Added right-click context menu documentation
+
+---
+
 ## 2026-03-14 — Wave 32: Security + Skepticism Audit
 
 ### Security — innerHTML XSS Audit (Unit Tested)

@@ -53,6 +53,11 @@ function getMenuItems(selectedUnitId) {
         });
     } else {
         items.push({ label: 'DROP MARKER',              action: 'marker',              icon: 'x' });
+        items.push({ label: 'CREATE GEOFENCE ZONE HERE', action: 'geofence_here',      icon: '#' });
+        items.push({ label: 'PLACE SENSOR HERE',        action: 'place_sensor',        icon: '=' });
+        items.push({ label: 'ADD PATROL WAYPOINT HERE', action: 'patrol_waypoint',     icon: '>' });
+        items.push({ label: 'MEASURE FROM HERE',        action: 'measure_start',       icon: '~' });
+        items.push({ label: 'CREATE BOOKMARK HERE',     action: 'bookmark_here',       icon: '*' });
         items.push({ label: 'SUGGEST TO AMY: INVESTIGATE', action: 'suggest_investigate', icon: '?' });
     }
     items.push({ label: 'CANCEL', action: 'cancel', icon: '-' });
@@ -183,6 +188,67 @@ function handleAction(action, gamePos, selectedUnitId) {
                 x: gamePos.x,
                 y: gamePos.y,
             });
+            break;
+
+        case 'geofence_here':
+            EventBus.emit('geofence:createAtPoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Geofence zone started at click position', type: 'info' });
+            // Open geofence panel if available
+            EventBus.emit('panel:request-open', { id: 'geofence' });
+            break;
+
+        case 'place_sensor':
+            EventBus.emit('asset:placeAtPoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+                type: 'sensor',
+            });
+            EventBus.emit('toast:show', { message: 'Sensor placement mode', type: 'info' });
+            EventBus.emit('panel:request-open', { id: 'assets' });
+            break;
+
+        case 'patrol_waypoint':
+            EventBus.emit('patrol:addWaypoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Patrol waypoint added', type: 'info' });
+            break;
+
+        case 'measure_start':
+            EventBus.emit('map:measureStart', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Measurement started -- click to add points, Enter to finish', type: 'info' });
+            break;
+
+        case 'bookmark_here':
+            {
+                const name = prompt('Bookmark name:');
+                if (name) {
+                    fetch('/api/bookmarks', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name,
+                            x: gamePos.x,
+                            y: gamePos.y,
+                        }),
+                    }).then(resp => {
+                        if (resp.ok) {
+                            EventBus.emit('toast:show', { message: `Bookmark "${name}" created`, type: 'info' });
+                        } else {
+                            EventBus.emit('toast:show', { message: 'Bookmark save failed', type: 'alert' });
+                        }
+                    }).catch(() => {
+                        EventBus.emit('toast:show', { message: 'Failed to save bookmark', type: 'alert' });
+                    });
+                }
+            }
             break;
 
         case 'suggest_dispatch': {

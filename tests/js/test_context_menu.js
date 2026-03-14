@@ -747,12 +747,12 @@ console.log('\n--- getMenuItems falsy/edge values ---');
 
 (function testMenuItemCountWithUnit() {
     const items = ContextMenu.getMenuItems('rover-01');
-    assert(items.length === 4, 'Selected unit menu has exactly 4 items, got ' + items.length);
+    assert(items.length === 5, 'Selected unit menu has exactly 5 items, got ' + items.length);
 })();
 
 (function testMenuItemCountNoUnit() {
     const items = ContextMenu.getMenuItems(null);
-    assert(items.length === 3, 'No-selection menu has exactly 3 items, got ' + items.length);
+    assert(items.length === 8, 'No-selection menu has exactly 8 items, got ' + items.length);
 })();
 
 (function testCancelIsAlwaysLast() {
