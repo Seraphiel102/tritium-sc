@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -201,5 +202,82 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
     async def get_stats():
         """Get automation engine statistics."""
         return plugin.get_stats()
+
+    # -- Export / Import ---------------------------------------------------
+
+    @router.get("/export")
+    async def export_rules():
+        """Export all automation rules as a portable JSON package.
+
+        Returns a JSON object with metadata and an array of rules,
+        suitable for saving to a file and importing into another
+        Tritium installation.
+        """
+        rules = plugin.engine.list_rules()
+        import time
+
+        package = {
+            "format": "tritium_automation_rules",
+            "version": "1.0.0",
+            "exported_at": time.time(),
+            "rule_count": len(rules),
+            "rules": [r.to_dict() for r in rules],
+        }
+        return JSONResponse(
+            content=package,
+            headers={
+                "Content-Disposition": 'attachment; filename="tritium_automation_rules.json"',
+            },
+        )
+
+    @router.post("/import")
+    async def import_rules(req: dict):
+        """Import automation rules from a previously exported JSON package.
+
+        Expects the body to contain either:
+          - A full export package (with "format" and "rules" keys)
+          - A bare array of rule dicts
+
+        Rules with duplicate IDs will be skipped unless overwrite=true
+        is passed in the body.
+        """
+        overwrite = req.get("overwrite", False)
+
+        # Accept both full package and bare array
+        if isinstance(req.get("rules"), list):
+            rule_dicts = req["rules"]
+        elif isinstance(req, list):
+            rule_dicts = req
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Expected 'rules' array in request body",
+            )
+
+        imported = 0
+        skipped = 0
+        errors = []
+
+        for rd in rule_dicts:
+            try:
+                rule = AutomationRule.from_dict(rd)
+                existing = plugin.engine.get_rule(rule.rule_id)
+                if existing and not overwrite:
+                    skipped += 1
+                    continue
+                if existing:
+                    plugin.engine.remove_rule(rule.rule_id)
+                plugin.engine.add_rule(rule)
+                imported += 1
+            except Exception as exc:
+                errors.append(f"Rule '{rd.get('name', '?')}': {exc}")
+
+        plugin._save_rules()
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+            "total_rules": len(plugin.engine.list_rules()),
+        }
 
     return router

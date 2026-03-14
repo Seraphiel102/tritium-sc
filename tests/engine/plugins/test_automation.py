@@ -577,3 +577,73 @@ class TestPluginActionExecutors:
         action = ActionSpec(action_type="alert", params={})
         result = plugin._execute_alert(action, {"type": "test", "data": {}})
         assert result["success"] is False
+
+
+@pytest.mark.unit
+class TestRuleExportImport:
+    """Verify rule export and import roundtrip."""
+
+    def test_export_format(self):
+        from plugins.automation.rules import AutomationRule, create_example_rules
+
+        rules = create_example_rules()
+        export_data = [r.to_dict() for r in rules]
+        package = {
+            "format": "tritium_automation_rules",
+            "version": "1.0.0",
+            "rule_count": len(rules),
+            "rules": export_data,
+        }
+        assert package["format"] == "tritium_automation_rules"
+        assert package["rule_count"] == 3
+        assert len(package["rules"]) == 3
+
+    def test_import_roundtrip(self):
+        from plugins.automation.rules import AutomationRule, create_example_rules
+
+        # Export
+        original_rules = create_example_rules()
+        export_data = [r.to_dict() for r in original_rules]
+
+        # Import
+        imported = [AutomationRule.from_dict(d) for d in export_data]
+        assert len(imported) == len(original_rules)
+        for orig, imp in zip(original_rules, imported):
+            assert orig.rule_id == imp.rule_id
+            assert orig.name == imp.name
+            assert orig.trigger == imp.trigger
+            assert len(orig.conditions) == len(imp.conditions)
+            assert len(orig.actions) == len(imp.actions)
+
+    def test_import_preserves_all_fields(self):
+        from plugins.automation.rules import (
+            ActionSpec,
+            AutomationRule,
+            TriggerCondition,
+        )
+        rule = AutomationRule(
+            rule_id="export-test",
+            name="Export Test",
+            trigger="ble:*",
+            conditions=[
+                TriggerCondition(field="rssi", operator="gt", value=-60),
+                TriggerCondition(field="name", operator="contains", value="Watch"),
+            ],
+            actions=[
+                ActionSpec(action_type="alert", params={"severity": "high"}),
+                ActionSpec(action_type="tag", params={"tag": "strong_signal"}),
+            ],
+            enabled=False,
+            cooldown_seconds=45.0,
+            description="Test all fields survive export/import",
+        )
+        d = rule.to_dict()
+        restored = AutomationRule.from_dict(d)
+        assert restored.rule_id == "export-test"
+        assert restored.enabled is False
+        assert restored.cooldown_seconds == 45.0
+        assert restored.description == "Test all fields survive export/import"
+        assert len(restored.conditions) == 2
+        assert len(restored.actions) == 2
+        assert restored.conditions[1].value == "Watch"
+        assert restored.actions[1].params["tag"] == "strong_signal"

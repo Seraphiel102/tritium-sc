@@ -22,6 +22,7 @@ from engine.plugins.base import EventDrainPlugin, PluginContext
 log = logging.getLogger("fleet-dashboard")
 
 PRUNE_TIMEOUT_S = 300  # 5 minutes
+TARGET_HISTORY_MAXLEN = 60  # Keep 60 data points per device (1 per minute = 1 hour)
 
 
 class FleetDashboardPlugin(EventDrainPlugin):
@@ -34,6 +35,9 @@ class FleetDashboardPlugin(EventDrainPlugin):
         # device_id -> device info dict
         self._devices: dict[str, dict] = {}
         self._lock = threading.Lock()
+
+        # Target count history per device: device_id -> list of {ts, count}
+        self._target_history: dict[str, list[dict]] = {}
 
     # -- PluginInterface identity ------------------------------------------
 
@@ -118,6 +122,16 @@ class FleetDashboardPlugin(EventDrainPlugin):
                 entry["status"] = "online"
             return entry
 
+    def get_target_history(self, device_id: str) -> list[dict]:
+        """Return target count history for sparkline rendering."""
+        with self._lock:
+            return list(self._target_history.get(device_id, []))
+
+    def get_all_target_histories(self) -> dict[str, list[dict]]:
+        """Return target count histories for all devices."""
+        with self._lock:
+            return {did: list(h) for did, h in self._target_history.items()}
+
     def get_summary(self) -> dict:
         """Return fleet summary: counts by status, avg battery, total sightings."""
         devices = self.get_devices()
@@ -168,6 +182,16 @@ class FleetDashboardPlugin(EventDrainPlugin):
                 "last_seen": now,
             })
             self._devices[device_id] = existing
+
+            # Record target count for sparkline history
+            target_count = existing.get("ble_count", 0) + existing.get("wifi_count", 0)
+            if device_id not in self._target_history:
+                self._target_history[device_id] = []
+            history = self._target_history[device_id]
+            history.append({"ts": now, "count": target_count})
+            # Trim to max length
+            if len(history) > TARGET_HISTORY_MAXLEN:
+                self._target_history[device_id] = history[-TARGET_HISTORY_MAXLEN:]
 
     def _on_ble_update(self, data: dict) -> None:
         """Handle edge:ble_update — update BLE counts for relevant devices."""

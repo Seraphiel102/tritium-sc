@@ -104,6 +104,11 @@ const warState = {
     // Last group key press (for double-tap center)
     _lastGroupKey: null,
     _lastGroupTime: 0,
+    // Measurement tool state
+    measuring: false,
+    measureStart: null,   // { x, y } in world coords
+    measureEnd: null,     // { x, y } in world coords (live cursor)
+    measurements: [],     // persisted lines: [{ start, end, distance }]
 };
 
 // Alliance colors
@@ -497,6 +502,7 @@ function render() {
         warCombatDrawEffects(ctx, worldToScreen, canvas.width, canvas.height);
     }
     drawBoxSelect(ctx);
+    drawMeasurements(ctx);
     drawPlacingGhost(ctx);
     // Editor overlays (FOV cones, ghost, selection) — drawn over targets
     if (typeof warEditorDraw === 'function') warEditorDraw(ctx);
@@ -1039,6 +1045,72 @@ function drawPlacingGhost(ctx) {
     // Ghost rendering handled by war-editor.js _drawGhost() via warEditorDraw(ctx)
 }
 
+function drawMeasurements(ctx) {
+    // Draw all persisted measurement lines
+    for (const m of warState.measurements) {
+        _drawMeasureLine(ctx, m.start, m.end, m.distance, 'rgba(252, 238, 10, 0.7)');
+    }
+    // Draw active measurement being drawn
+    if (warState.measuring && warState.measureStart && warState.measureEnd) {
+        const dx = warState.measureEnd.x - warState.measureStart.x;
+        const dy = warState.measureEnd.y - warState.measureStart.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        _drawMeasureLine(ctx, warState.measureStart, warState.measureEnd, dist, '#fcee0a');
+    }
+}
+
+function _drawMeasureLine(ctx, start, end, distance, color) {
+    const s1 = worldToScreen(start.x, start.y);
+    const s2 = worldToScreen(end.x, end.y);
+
+    // Line
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.moveTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // End markers
+    const markerR = 4;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(s1.x, s1.y, markerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(s2.x, s2.y, markerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Distance label at midpoint
+    const mx = (s1.x + s2.x) / 2;
+    const my = (s1.y + s2.y) / 2;
+    let label;
+    if (distance >= 1000) {
+        label = (distance / 1000).toFixed(2) + ' km';
+    } else {
+        label = distance.toFixed(1) + ' m';
+    }
+
+    ctx.font = '12px monospace';
+    const tw = ctx.measureText(label).width;
+    // Background
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+    ctx.fillRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
+    // Border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
+    // Text
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, mx, my);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+}
+
 function drawMinimap(ctx) {
     const mmSize = 150;
     const mmPad = 12;
@@ -1300,6 +1372,30 @@ function onCanvasMouseDown(e) {
     if (e.button === 0) {
         // Left click
 
+        // Measurement tool: first click sets start, second click sets end
+        if (warState.measuring) {
+            const wp = screenToWorld(sx, sy);
+            if (!warState.measureStart) {
+                warState.measureStart = wp;
+                warState.measureEnd = wp;
+            } else {
+                // Complete measurement
+                const dx = wp.x - warState.measureStart.x;
+                const dy = wp.y - warState.measureStart.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                warState.measurements.push({
+                    start: warState.measureStart,
+                    end: wp,
+                    distance: dist,
+                });
+                let label = dist >= 1000 ? (dist / 1000).toFixed(2) + ' km' : dist.toFixed(1) + ' m';
+                warAddAlert('Measured: ' + label, 'info');
+                warState.measureStart = null;
+                warState.measureEnd = null;
+            }
+            return;
+        }
+
         // Enhanced minimap click-to-pan (bottom-right, via war-fog.js)
         if (!warState.use3D && typeof fogMinimapHitTest === 'function') {
             const mmHit = fogMinimapHitTest(sx, sy, warState.canvas.width, warState.canvas.height, warState.mapMin, warState.mapMax);
@@ -1387,6 +1483,11 @@ function onCanvasMouseMove(e) {
         warState.boxSelect.endX = sx;
         warState.boxSelect.endY = sy;
         return;
+    }
+
+    // Live-update measurement end point
+    if (warState.measuring && warState.measureStart) {
+        warState.measureEnd = screenToWorld(sx, sy);
     }
 
     // Editor hover (placed asset overlays)
@@ -1548,6 +1649,19 @@ function warKeyHandler(e) {
 
     switch (e.key) {
         case 'Escape':
+            // Cancel active measurement or clear measurement mode
+            if (warState.measuring) {
+                if (warState.measureStart) {
+                    // Cancel current in-progress measurement
+                    warState.measureStart = null;
+                    warState.measureEnd = null;
+                } else {
+                    // Exit measurement mode entirely
+                    warState.measuring = false;
+                    warAddAlert('Measure: OFF', 'info');
+                }
+                break;
+            }
             // Editor handles ESC for placement cancel via warEditorKey()
             warState.selectedTargets = [];
             updateUnitInfo();
@@ -1571,6 +1685,11 @@ function warKeyHandler(e) {
             centerOnSelected();
             break;
         case 'Delete':
+            if (warState.measuring && warState.measurements.length > 0) {
+                warState.measurements = [];
+                warAddAlert('Measurements cleared', 'info');
+                break;
+            }
             if (warState.mode === 'setup') {
                 removeSelectedSetup();
             }
@@ -1609,6 +1728,20 @@ function warKeyHandler(e) {
                 if (typeof warFxAddEvent === 'function') {
                     warFxAddEvent(fogState.fogEnabled ? 'FOG OF WAR ENGAGED' : 'FOG OF WAR DISABLED', '#00f0ff');
                 }
+            }
+            break;
+        case 'x':
+        case 'X':
+            // Toggle measurement tool
+            warState.measuring = !warState.measuring;
+            if (!warState.measuring) {
+                warState.measureStart = null;
+                warState.measureEnd = null;
+            }
+            warAddAlert('Measure: ' + (warState.measuring ? 'ON (click two points)' : 'OFF'), 'info');
+            // Update cursor
+            if (warState._eventCanvas) {
+                warState._eventCanvas.style.cursor = warState.measuring ? 'crosshair' : 'default';
             }
             break;
         case 'n':
@@ -2694,3 +2827,5 @@ window.warHandleModeChange = warHandleModeChange;
 window.warToggleMute = warToggleMute;
 window.warSetVolume = warSetVolume;
 window.warTogglePip = warTogglePip;
+// Measurement tool
+window.drawMeasurements = drawMeasurements;

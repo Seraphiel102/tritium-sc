@@ -37,4 +37,25 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
         """Fleet summary: online/offline/stale counts, avg battery, totals."""
         return plugin.get_summary()
 
+    @router.get("/devices/{device_id}/sparkline")
+    async def get_device_sparkline(device_id: str):
+        """Get target count history for a device, suitable for sparkline rendering.
+
+        Returns an array of {ts, count} entries over the last hour.
+        """
+        history = plugin.get_target_history(device_id)
+        return {"device_id": device_id, "history": history, "count": len(history)}
+
+    @router.get("/sparklines")
+    async def get_all_sparklines():
+        """Get target count sparkline data for all devices."""
+        histories = plugin.get_all_target_histories()
+        return {
+            "sparklines": {
+                did: {"history": h, "count": len(h)}
+                for did, h in histories.items()
+            },
+            "device_count": len(histories),
+        }
+
     return router
