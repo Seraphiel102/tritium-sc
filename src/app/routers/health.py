@@ -86,6 +86,15 @@ def _subsystem_status(request: Request) -> dict[str, str]:
     if mesh is not None:
         checks["meshtastic"] = "connected"
 
+    # Ollama LLM service
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            checks["ollama"] = "running"
+    except Exception:
+        checks["ollama"] = "unreachable"
+
     return checks
 
 

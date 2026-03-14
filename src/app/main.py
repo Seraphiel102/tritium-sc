@@ -89,6 +89,9 @@ from app.routers.correlations import router as correlations_router
 from app.routers.voice import router as voice_router
 from app.routers.self_test import router as self_test_router
 from app.routers.deployment import router as deployment_router
+from app.routers.picture_of_day import router as picture_of_day_router
+from app.routers.nearby_targets import router as nearby_targets_router
+from app.routers.ollama_health import router as ollama_health_router
 
 
 # ---------------------------------------------------------------------------
@@ -1151,6 +1154,9 @@ app.include_router(correlations_router)
 app.include_router(voice_router)
 app.include_router(self_test_router)
 app.include_router(deployment_router)
+app.include_router(picture_of_day_router)
+app.include_router(nearby_targets_router)
+app.include_router(ollama_health_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"
