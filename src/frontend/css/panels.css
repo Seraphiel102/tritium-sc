@@ -1152,7 +1152,8 @@
 .tak-panel-inner,
 .videos-panel-inner,
 .zones-panel-inner,
-.unit-inspector-inner {
+.unit-inspector-inner,
+.timeline-panel-inner {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -3496,4 +3497,108 @@
 .ge-expand-btn {
     margin-top: 8px;
     width: 100%;
+}
+
+
+/* ========================================
+   Target Timeline Panel
+   ======================================== */
+
+.timeline-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    flex-shrink: 0;
+}
+
+.timeline-target {
+    flex: 1;
+    font-size: 0.75rem;
+    color: #00f0ff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.timeline-filter {
+    font-size: 0.7rem;
+    background: var(--surface, #12121a);
+    color: var(--text, #e0e0e0);
+    border: 1px solid var(--border, rgba(255,255,255,0.1));
+    border-radius: 3px;
+    padding: 2px 4px;
+}
+
+.timeline-list {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 2px;
+}
+
+.timeline-card {
+    border-left: 3px solid #888;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 0 4px 4px 0;
+    transition: background 0.15s;
+}
+
+.timeline-card-clickable {
+    cursor: pointer;
+}
+
+.timeline-card-clickable:hover {
+    background: rgba(0, 240, 255, 0.08);
+}
+
+.timeline-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 2px;
+}
+
+.timeline-card-ts {
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    color: var(--text-dim, #8892b0);
+    width: 5.5em;
+}
+
+.timeline-card-badge {
+    flex-shrink: 0;
+    width: 1.4em;
+    text-align: center;
+    border: 1px solid;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    line-height: 1.4;
+}
+
+.timeline-card-type {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.timeline-card-detail {
+    font-size: 0.7rem;
+    color: var(--text-secondary, #a0a0b0);
+    padding-left: 7.5em;
+    word-break: break-word;
+}
+
+.timeline-status {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    color: var(--text-dim, #8892b0);
+    text-align: right;
+    padding: 2px 4px;
+    border-top: 1px solid var(--border, rgba(255,255,255,0.1));
 }

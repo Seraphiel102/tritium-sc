@@ -46,6 +46,7 @@ import { GeofencePanelDef } from './panels/geofence.js';
 import { TargetSearchPanelDef } from './panels/target-search.js';
 import { DossiersPanelDef } from './panels/dossiers.js';
 import { GraphExplorerPanelDef } from './panels/graph-explorer.js';
+import { TimelinePanelDef } from './panels/timeline.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 
 // Make available on window for console debugging
@@ -467,6 +468,7 @@ function initPanelSystem(container) {
     panelManager.register(TargetSearchPanelDef);
     panelManager.register(DossiersPanelDef);
     panelManager.register(GraphExplorerPanelDef);
+    panelManager.register(TimelinePanelDef);
 
     // panel:request-open — allows map click to open panels by id
     EventBus.on('panel:request-open', (data) => {
