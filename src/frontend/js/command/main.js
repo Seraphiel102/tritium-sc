@@ -32,6 +32,7 @@ import { BattleStatsPanelDef } from './panels/stats.js';
 import { SensorNetPanelDef } from './panels/sensors.js';
 import { UnitInspectorPanelDef } from './panels/unit-inspector.js';
 import { CamerasPanelDef } from './panels/cameras.js';
+import { CameraFeedsPanelDef } from './panels/camera-feeds.js';
 import { SearchPanelDef } from './panels/search.js';
 import { TakPanelDef } from './panels/tak.js';
 import { VideosPanelDef } from './panels/videos.js';
@@ -40,6 +41,7 @@ import { LayersPanelDef } from './panels/layers.js';
 import { FleetPanelDef } from './panels/fleet.js';
 import { EdgeTrackerPanelDef } from './panels/edge-tracker.js';
 import { AssetsPanelDef } from './panels/assets.js';
+import { FleetDashboardPanelDef } from './panels/fleet-dashboard.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 
 // Make available on window for console debugging
@@ -447,6 +449,7 @@ function initPanelSystem(container) {
     panelManager.register(SensorNetPanelDef);
     panelManager.register(UnitInspectorPanelDef);
     panelManager.register(CamerasPanelDef);
+    panelManager.register(CameraFeedsPanelDef);
     panelManager.register(SearchPanelDef);
     panelManager.register(TakPanelDef);
     panelManager.register(VideosPanelDef);

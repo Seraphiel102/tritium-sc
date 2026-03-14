@@ -1139,6 +1139,7 @@
 }
 
 .audio-panel-inner,
+.camera-feeds-panel-inner,
 .cameras-panel-inner,
 .escalation-panel-inner,
 .events-panel-inner,
@@ -3086,4 +3087,243 @@
 .edge-tracker-wifi-track-btn:hover {
     color: var(--cyan, #00f0ff);
     border-color: var(--cyan, #00f0ff);
+}
+
+
+/* ========================================
+   Camera Feeds Panel — Live MJPEG Grid
+   ======================================== */
+
+.cf-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px;
+}
+
+.cf-count {
+    font-size: 0.8rem;
+    color: var(--text-dim, #8892b0);
+}
+
+.cf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding: 2px;
+}
+
+.cf-card {
+    background: var(--surface-1, #0e0e14);
+    border: 1px solid var(--border, rgba(255,255,255,0.08));
+    border-radius: 4px;
+    cursor: pointer;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    position: relative;
+}
+
+.cf-card:hover {
+    border-color: var(--cyan, #00f0ff);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.15), inset 0 0 12px rgba(0, 240, 255, 0.03);
+}
+
+.cf-card[data-status="streaming"] {
+    border-color: rgba(5, 255, 161, 0.25);
+}
+
+.cf-card[data-status="connecting"] {
+    border-color: rgba(252, 238, 10, 0.25);
+}
+
+.cf-card[data-status="offline"] {
+    border-color: rgba(255, 42, 109, 0.15);
+    opacity: 0.7;
+}
+
+.cf-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    background: var(--surface-2, #12121a);
+    border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+}
+
+.cf-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 4px currentColor;
+}
+
+.cf-card[data-status="streaming"] .cf-status-dot {
+    animation: cf-pulse 2s ease-in-out infinite;
+}
+
+@keyframes cf-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.cf-card-name {
+    font-size: 0.7rem;
+    color: var(--text, #ccd6f6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cf-card-thumb {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: clip;
+    background: var(--surface-0, #0a0a0f);
+}
+
+.cf-thumb-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.cf-thumb-offline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-size: 0.65rem;
+    color: var(--magenta, #ff2a6d);
+    letter-spacing: 0.1em;
+    opacity: 0.6;
+}
+
+/* Scanline effect on thumbnails */
+.cf-card-thumb::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 2px,
+        rgba(0, 0, 0, 0.06) 2px,
+        rgba(0, 0, 0, 0.06) 4px
+    );
+}
+
+.cf-card-detection {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    background: var(--surface-2, #12121a);
+    border-top: 1px solid var(--border, rgba(255,255,255,0.06));
+    font-size: 0.6rem;
+    min-height: 18px;
+}
+
+.cf-det-class {
+    color: var(--cyan, #00f0ff);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.cf-det-conf {
+    color: var(--green, #05ffa1);
+}
+
+.cf-det-time {
+    color: var(--text-dim, #8892b0);
+    margin-left: auto;
+    font-size: 0.55rem;
+}
+
+/* Full-size overlay */
+.cf-overlay {
+    position: absolute;
+    inset: 0;
+    background: var(--surface-0, #0a0a0f);
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+}
+
+.cf-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    background: var(--surface-2, #12121a);
+    border-bottom: 1px solid var(--cyan, #00f0ff);
+}
+
+.cf-overlay-name {
+    font-size: 0.8rem;
+    color: var(--cyan, #00f0ff);
+}
+
+.cf-overlay-close {
+    font-size: 1.2rem;
+    color: var(--text-dim, #8892b0);
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+
+.cf-overlay-close:hover {
+    color: var(--magenta, #ff2a6d);
+}
+
+.cf-overlay-video {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: clip;
+    background: #000;
+}
+
+.cf-overlay-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+/* Scanline on overlay */
+.cf-overlay-video::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 3px,
+        rgba(0, 0, 0, 0.04) 3px,
+        rgba(0, 0, 0, 0.04) 6px
+    );
+}
+
+.cf-overlay-detection {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #8892b0);
+    background: var(--surface-2, #12121a);
+    border-top: 1px solid var(--border, rgba(255,255,255,0.06));
+    min-height: 20px;
 }
