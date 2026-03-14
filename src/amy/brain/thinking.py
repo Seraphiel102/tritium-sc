@@ -47,6 +47,8 @@ RECENT THOUGHTS:
 
 {goals}
 
+{edge_sensors}
+
 {tactical_situation}
 
 Respond with a Lua function call. For complex situations, you may chain 2-3 actions:
@@ -444,6 +446,18 @@ class ThinkingThread:
         from ..commander import build_tactical_context
         tactical_ctx = build_tactical_context(commander)
 
+        # Edge sensor context (BLE + Mesh)
+        edge_parts: list[str] = []
+        ble_ctx = commander.sensorium.ble_context()
+        if ble_ctx:
+            edge_parts.append(ble_ctx)
+        mesh_ctx = commander.sensorium.mesh_context()
+        if mesh_ctx:
+            edge_parts.append(mesh_ctx)
+        edge_sensors_ctx = ""
+        if edge_parts:
+            edge_sensors_ctx = "EDGE SENSORS:\n" + "\n".join(edge_parts)
+
         system = THINKING_SYSTEM_PROMPT.format(
             narrative=narrative,
             battlespace=battlespace_ctx,
@@ -455,6 +469,7 @@ class ThinkingThread:
             time_of_day=f"It is currently {tod} ({datetime.now().strftime('%H:%M')})",
             war_mode=war_mode_ctx,
             tactical_situation=tactical_ctx,
+            edge_sensors=edge_sensors_ctx,
         )
 
         messages = [

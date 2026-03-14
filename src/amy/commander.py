@@ -2248,6 +2248,13 @@ class Commander:
                         f"Battle simulation ended: {result}. Final score: {score}.",
                         importance=1.0,
                     )
+                # ── Edge sensor events ─────────────────────────
+                elif msg_type == "fleet.ble_presence":
+                    data = msg.get("data", {})
+                    self.sensorium.update_ble(data)
+                elif msg_type == "meshtastic:nodes_updated":
+                    data = msg.get("data", {})
+                    self.sensorium.update_mesh(data)
                 elif msg_type == "auto_dispatch_speech":
                     data = msg.get("data", {})
                     text = data.get("text", "")

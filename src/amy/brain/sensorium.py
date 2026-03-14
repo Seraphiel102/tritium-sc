@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -50,7 +50,41 @@ _SOURCE_LABELS = {
     "audio": "Audio",
     "motor": "Movement",
     "thought": "Thought",
+    "ble": "BLE",
+    "mesh": "Mesh",
 }
+
+
+@dataclass
+class BLEDeviceSnapshot:
+    """Snapshot of BLE devices from the latest scan."""
+
+    total: int = 0
+    known: int = 0
+    unknown: int = 0
+    devices: list[dict] = field(default_factory=list)
+    timestamp: float = 0.0
+
+    @property
+    def age(self) -> float:
+        if self.timestamp == 0.0:
+            return float("inf")
+        return time.monotonic() - self.timestamp
+
+
+@dataclass
+class MeshNodeSnapshot:
+    """Snapshot of Meshtastic mesh nodes from the latest update."""
+
+    count: int = 0
+    nodes: list[dict] = field(default_factory=list)
+    timestamp: float = 0.0
+
+    @property
+    def age(self) -> float:
+        if self.timestamp == 0.0:
+            return float("inf")
+        return time.monotonic() - self.timestamp
 
 
 class Sensorium:
@@ -73,6 +107,12 @@ class Sensorium:
 
         # Battlespace summary callback (set by Commander when target tracker exists)
         self._battlespace_fn: callable | None = None
+
+        # BLE and Mesh awareness
+        self._ble_snapshot = BLEDeviceSnapshot()
+        self._mesh_snapshot = MeshNodeSnapshot()
+        self._ble_new_devices: list[dict] = []  # recently appeared devices
+        self._ble_known_macs: set[str] = set()  # MACs seen across all scans
 
         # Dimensional mood model: valence (-1..1) and arousal (0..1)
         self._mood_valence: float = 0.0   # negative=unpleasant, positive=pleasant
@@ -237,6 +277,16 @@ class Sensorium:
         if source == "thought":
             da -= 0.02
 
+        # BLE new device → curiosity spike
+        if source == "ble" and "new" in text_lower:
+            dv += 0.05
+            da += 0.08
+
+        # Mesh low battery → mild concern
+        if source == "mesh" and "low battery" in text_lower:
+            dv -= 0.03
+            da += 0.05
+
         # Apply with natural decay toward baseline (0.0, 0.3)
         self._mood_valence = max(-1.0, min(1.0, self._mood_valence * 0.95 + dv))
         self._mood_arousal = max(0.0, min(1.0, self._mood_arousal * 0.95 + da))
@@ -306,6 +356,121 @@ class Sensorium:
                 if e.source == "thought" and e.age < 120
             ]
         return thoughts[-8:]
+
+    # ------------------------------------------------------------------
+    # BLE / Mesh awareness
+    # ------------------------------------------------------------------
+
+    def update_ble(self, data: dict) -> None:
+        """Process a BLE scan update from the event bus.
+
+        Expected *data* keys:
+        - ``devices``: list of dicts with ``addr``, ``name``, ``rssi``, ``type``
+        - ``count``: total device count
+        - ``node_id``: reporting scanner id (optional)
+        """
+        now = time.monotonic()
+        devices = data.get("devices", [])
+        count = data.get("count", len(devices))
+
+        known = [d for d in devices if d.get("name")]
+        unknown = [d for d in devices if not d.get("name")]
+
+        # Detect newly appeared devices (MACs not seen before)
+        current_macs = {d.get("addr", "") for d in devices}
+        new_macs = current_macs - self._ble_known_macs
+        new_devices = [d for d in devices if d.get("addr") in new_macs and d.get("name")]
+
+        with self._lock:
+            self._ble_snapshot = BLEDeviceSnapshot(
+                total=count,
+                known=len(known),
+                unknown=len(unknown),
+                devices=devices,
+                timestamp=now,
+            )
+            self._ble_new_devices = new_devices[-5:]  # keep last 5 new
+            self._ble_known_macs.update(current_macs)
+
+        # Push a sensorium event for significant changes
+        if new_devices:
+            names = ", ".join(d.get("name", "?") for d in new_devices[:3])
+            extra = f" (+{len(new_devices) - 3} more)" if len(new_devices) > 3 else ""
+            self.push("ble", f"New BLE device(s): {names}{extra}", importance=0.6)
+        elif count > 0:
+            self.push("ble", f"BLE scan: {count} devices ({len(known)} known, {len(unknown)} unknown)", importance=0.3)
+
+    def update_mesh(self, data: dict) -> None:
+        """Process a Meshtastic nodes_updated event from the event bus.
+
+        Expected *data* keys:
+        - ``nodes``: list of dicts with ``node_id``, ``long_name``, ``short_name``,
+          ``battery``, ``snr``, ``position``
+        - ``count``: node count
+        """
+        now = time.monotonic()
+        nodes = data.get("nodes", [])
+        count = data.get("count", len(nodes))
+
+        with self._lock:
+            self._mesh_snapshot = MeshNodeSnapshot(
+                count=count,
+                nodes=nodes,
+                timestamp=now,
+            )
+
+        # Push a sensorium event
+        if count > 0:
+            low_battery = [n for n in nodes if n.get("battery", 100) < 30]
+            if low_battery:
+                names = ", ".join(n.get("short_name", n.get("node_id", "?")) for n in low_battery[:2])
+                self.push("mesh", f"Mesh: {count} nodes online. Low battery: {names}", importance=0.6)
+            else:
+                self.push("mesh", f"Mesh: {count} nodes online", importance=0.3)
+
+    @property
+    def ble_snapshot(self) -> BLEDeviceSnapshot:
+        """Current BLE device snapshot (thread-safe read)."""
+        with self._lock:
+            return self._ble_snapshot
+
+    @property
+    def mesh_snapshot(self) -> MeshNodeSnapshot:
+        """Current Meshtastic node snapshot (thread-safe read)."""
+        with self._lock:
+            return self._mesh_snapshot
+
+    def ble_context(self) -> str:
+        """Build a BLE awareness string for the thinking prompt."""
+        snap = self.ble_snapshot
+        if snap.total == 0 or snap.age > 120:
+            return ""
+        line = f"BLE: {snap.total} devices detected ({snap.known} known, {snap.unknown} unknown)."
+        with self._lock:
+            new_devs = list(self._ble_new_devices)
+        if new_devs:
+            names = ", ".join(d.get("name", "?") for d in new_devs[:3])
+            line += f" New: {names}."
+        return line
+
+    def mesh_context(self) -> str:
+        """Build a Meshtastic mesh awareness string for the thinking prompt."""
+        snap = self.mesh_snapshot
+        if snap.count == 0 or snap.age > 120:
+            return ""
+        parts = [f"Mesh: {snap.count} nodes online."]
+        for node in snap.nodes[:5]:
+            name = node.get("short_name") or node.get("long_name") or node.get("node_id", "?")
+            batt = node.get("battery")
+            snr = node.get("snr")
+            details = []
+            if batt is not None:
+                details.append(f"battery {batt:.0f}%")
+            if snr is not None:
+                details.append(f"SNR {snr:.1f}")
+            if details:
+                parts.append(f"  {name}: {', '.join(details)}")
+        return "\n".join(parts)
 
     def rich_narrative(self, max_events: int = 15, min_importance: float = 0.3) -> str:
         """Importance-weighted narrative with mood transitions and grouping."""
@@ -384,6 +549,16 @@ class Sensorium:
             header_lines.append("[Recent speech activity]")
         elif sss < float("inf") and sss < 300:
             header_lines.append(f"[Last speech: {int(sss)}s ago]")
+
+        # BLE / Mesh awareness
+        ble_ctx = self.ble_context()
+        if ble_ctx:
+            header_lines.append(f"[{ble_ctx}]")
+        mesh_ctx = self.mesh_context()
+        if mesh_ctx:
+            # mesh_context may be multiline; wrap each line
+            for mline in mesh_ctx.split("\n"):
+                header_lines.append(f"[{mline.strip()}]")
 
         # Battlespace summary from target tracker
         if self._battlespace_fn is not None:
