@@ -50,6 +50,7 @@ import { TimelinePanelDef } from './panels/timeline.js';
 import { NotificationsPanelDef } from './panels/notifications.js';
 import { HeatmapPanelDef } from './panels/heatmap.js';
 import { TestingPanelDef } from './panels/testing.js';
+import { DeviceManagerPanelDef } from './panels/device-manager.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 
 // Make available on window for console debugging
@@ -475,6 +476,7 @@ function initPanelSystem(container) {
     panelManager.register(NotificationsPanelDef);
     panelManager.register(HeatmapPanelDef);
     panelManager.register(TestingPanelDef);
+    panelManager.register(DeviceManagerPanelDef);
 
     // panel:request-open — allows map click to open panels by id
     EventBus.on('panel:request-open', (data) => {
