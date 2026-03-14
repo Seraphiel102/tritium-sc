@@ -239,6 +239,69 @@ class TestFingerprints:
         assert resp.json()["cleared"] >= 1
 
 
+class TestFloorPlanUploadSecurity:
+    """Security tests for floor plan image upload."""
+
+    def test_upload_rejects_unsupported_format(self, client):
+        """Should reject non-image file types."""
+        import io
+        resp = client.post(
+            "/api/floorplans/upload",
+            files={"file": ("malicious.exe", io.BytesIO(b"MZ\x90"), "application/octet-stream")},
+            data={"name": "Test"},
+        )
+        assert resp.status_code == 400
+        assert "Unsupported format" in resp.json()["detail"]
+
+    def test_upload_rejects_html(self, client):
+        """Should reject HTML files (XSS risk)."""
+        import io
+        resp = client.post(
+            "/api/floorplans/upload",
+            files={"file": ("xss.html", io.BytesIO(b"<script>alert(1)</script>"), "text/html")},
+            data={"name": "XSS"},
+        )
+        assert resp.status_code == 400
+
+    def test_upload_rejects_oversized_file(self, client):
+        """Should reject files over 10 MB."""
+        import io
+        big_file = io.BytesIO(b"\x00" * (10 * 1024 * 1024 + 1))
+        resp = client.post(
+            "/api/floorplans/upload",
+            files={"file": ("huge.png", big_file, "image/png")},
+            data={"name": "Huge"},
+        )
+        assert resp.status_code == 413
+
+    def test_upload_ignores_path_traversal_in_filename(self, client):
+        """User-supplied filenames with path traversal must not affect storage."""
+        import io
+        resp = client.post(
+            "/api/floorplans/upload",
+            files={"file": ("../../etc/passwd.png", io.BytesIO(b"\x89PNG\r\n"), "image/png")},
+            data={"name": "Traversal"},
+        )
+        # Should succeed — filename is replaced with UUID
+        assert resp.status_code == 200
+        plan = resp.json()["floorplan"]
+        # Image path should be a safe UUID-based name, not the malicious path
+        assert ".." not in plan.get("image_path", "")
+
+    def test_upload_accepts_valid_png(self, client):
+        """Valid PNG upload should work."""
+        import io
+        # Minimal valid PNG header
+        png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        resp = client.post(
+            "/api/floorplans/upload",
+            files={"file": ("floor1.png", io.BytesIO(png_data), "image/png")},
+            data={"name": "Floor 1"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["floorplan"]["name"] == "Floor 1"
+
+
 class TestFloorPlanStore:
     """Direct store tests."""
 

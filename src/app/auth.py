@@ -15,6 +15,7 @@ Usage:
 """
 
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -40,6 +41,185 @@ _security = HTTPBearer(auto_error=False)
 # In-memory user store for MVP (replace with database in production)
 _users: dict[str, dict] = {}
 _refresh_tokens: dict[str, dict] = {}  # token -> {sub, exp}
+
+
+# ---------------------------------------------------------------------------
+# API Key Store — supports dynamic key management and rotation with grace
+# ---------------------------------------------------------------------------
+
+class APIKeyStore:
+    """Thread-safe in-memory store for API keys with rotation support.
+
+    Keys can be created, rotated, and revoked.  On rotation, the old key
+    remains valid for a configurable grace period (default 1 hour).
+    All mutations are logged to an in-memory audit trail.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # key_id -> {key_id, key_hash, name, role, created_at, expires_at, revoked}
+        self._keys: dict[str, dict] = {}
+        # Plaintext key -> key_id (for fast lookup; only live keys)
+        self._key_index: dict[str, str] = {}
+        # Grace-period keys: plaintext -> {key_id, expires_at}
+        self._grace_keys: dict[str, dict] = {}
+        # Audit log: list of {ts, action, key_id, detail}
+        self._audit: list[dict] = []
+        self._max_audit = 1000
+
+    def _audit_log(self, action: str, key_id: str, detail: str = "") -> None:
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": action,
+            "key_id": key_id,
+            "detail": detail,
+        }
+        self._audit.append(entry)
+        if len(self._audit) > self._max_audit:
+            self._audit = self._audit[-self._max_audit:]
+        logger.info("API key audit: %s key_id=%s %s", action, key_id, detail)
+
+    def create_key(self, name: str = "default", role: str = "admin",
+                   expires_in_days: int = 0) -> dict:
+        """Create a new API key. Returns dict with plaintext key (shown once)."""
+        key_id = f"ak_{secrets.token_hex(8)}"
+        plaintext = f"trk_{secrets.token_urlsafe(32)}"
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(days=expires_in_days)).isoformat() if expires_in_days > 0 else None
+
+        entry = {
+            "key_id": key_id,
+            "name": name,
+            "role": role,
+            "created_at": now.isoformat(),
+            "expires_at": expires_at,
+            "revoked": False,
+            "prefix": plaintext[:8],  # For identification without exposing full key
+        }
+
+        with self._lock:
+            self._keys[key_id] = entry
+            self._key_index[plaintext] = key_id
+            self._audit_log("create", key_id, f"name={name}")
+
+        return {"key_id": key_id, "api_key": plaintext, "name": name,
+                "expires_at": expires_at}
+
+    def rotate_key(self, key_id: str, grace_period_seconds: int = 3600) -> Optional[dict]:
+        """Rotate an API key: generate new key, old key valid for grace period.
+
+        Returns dict with new plaintext key, or None if key_id not found.
+        """
+        with self._lock:
+            old_entry = self._keys.get(key_id)
+            if old_entry is None or old_entry["revoked"]:
+                return None
+
+            # Find old plaintext key
+            old_plaintext = None
+            for pt, kid in self._key_index.items():
+                if kid == key_id:
+                    old_plaintext = pt
+                    break
+
+            # Generate new key
+            new_plaintext = f"trk_{secrets.token_urlsafe(32)}"
+            now = datetime.now(timezone.utc)
+
+            # Move old key to grace period
+            if old_plaintext:
+                del self._key_index[old_plaintext]
+                grace_expires = now + timedelta(seconds=grace_period_seconds)
+                self._grace_keys[old_plaintext] = {
+                    "key_id": key_id,
+                    "expires_at": grace_expires.isoformat(),
+                    "expires_ts": grace_expires.timestamp(),
+                }
+
+            # Install new key
+            self._key_index[new_plaintext] = key_id
+            old_entry["prefix"] = new_plaintext[:8]
+            old_entry["rotated_at"] = now.isoformat()
+            self._audit_log("rotate", key_id,
+                            f"grace_period={grace_period_seconds}s")
+
+        return {"key_id": key_id, "api_key": new_plaintext,
+                "grace_period_seconds": grace_period_seconds}
+
+    def revoke_key(self, key_id: str) -> bool:
+        """Revoke an API key immediately (no grace period)."""
+        with self._lock:
+            entry = self._keys.get(key_id)
+            if entry is None:
+                return False
+            entry["revoked"] = True
+            # Remove from active index
+            to_remove = [pt for pt, kid in self._key_index.items() if kid == key_id]
+            for pt in to_remove:
+                del self._key_index[pt]
+            # Remove from grace keys
+            to_remove_grace = [pt for pt, g in self._grace_keys.items() if g["key_id"] == key_id]
+            for pt in to_remove_grace:
+                del self._grace_keys[pt]
+            self._audit_log("revoke", key_id)
+            return True
+
+    def validate(self, api_key: str) -> Optional[dict]:
+        """Validate an API key. Returns user dict or None.
+
+        Checks active keys first, then grace-period keys.
+        Expired grace keys are cleaned up lazily.
+        """
+        with self._lock:
+            # Check active keys
+            key_id = self._key_index.get(api_key)
+            if key_id:
+                entry = self._keys.get(key_id, {})
+                if entry.get("revoked"):
+                    return None
+                # Check expiry
+                if entry.get("expires_at"):
+                    exp = datetime.fromisoformat(entry["expires_at"])
+                    if datetime.now(timezone.utc) > exp:
+                        entry["revoked"] = True
+                        return None
+                return {"sub": f"apikey:{entry.get('name', key_id)}",
+                        "role": entry.get("role", "admin"),
+                        "key_id": key_id,
+                        "auth_method": "api_key"}
+
+            # Check grace-period keys
+            grace = self._grace_keys.get(api_key)
+            if grace:
+                now = time.time()
+                if now > grace["expires_ts"]:
+                    del self._grace_keys[api_key]
+                    return None
+                entry = self._keys.get(grace["key_id"], {})
+                if entry.get("revoked"):
+                    return None
+                return {"sub": f"apikey:{entry.get('name', grace['key_id'])}",
+                        "role": entry.get("role", "admin"),
+                        "key_id": grace["key_id"],
+                        "auth_method": "api_key_grace"}
+
+        return None
+
+    def list_keys(self) -> list[dict]:
+        """List all API keys (without plaintext values)."""
+        with self._lock:
+            return [
+                {k: v for k, v in entry.items()}
+                for entry in self._keys.values()
+            ]
+
+    def get_audit_log(self, limit: int = 100) -> list[dict]:
+        """Return recent audit log entries."""
+        return self._audit[-limit:]
+
+
+# Singleton instance
+api_key_store = APIKeyStore()
 
 
 def _get_secret_key() -> str:
@@ -116,11 +296,19 @@ def decode_token(token: str) -> dict:
 
 
 def _validate_api_key(api_key: str) -> Optional[dict]:
-    """Validate an API key against configured keys.
+    """Validate an API key against configured keys and the dynamic key store.
 
     Returns user dict if valid, None otherwise.
-    API keys are configured via API_KEYS env var (comma-separated).
+    Checks:
+    1. Dynamic API key store (supports rotation with grace periods)
+    2. Static keys from API_KEYS env var (comma-separated, legacy support)
     """
+    # Check dynamic key store first
+    result = api_key_store.validate(api_key)
+    if result is not None:
+        return result
+
+    # Fall back to static env-var keys
     if not settings.api_keys:
         return None
 

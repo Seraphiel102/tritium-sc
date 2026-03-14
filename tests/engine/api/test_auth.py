@@ -86,6 +86,111 @@ class TestAuthModule:
             _users.clear()
 
 
+class TestAPIKeyStore:
+    """Test the in-memory API key store with rotation and grace periods."""
+
+    def test_create_key(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        result = store.create_key(name="test-key", role="admin")
+        assert result["key_id"].startswith("ak_")
+        assert result["api_key"].startswith("trk_")
+        assert result["name"] == "test-key"
+
+    def test_validate_key(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        result = store.create_key(name="validate-test")
+        user = store.validate(result["api_key"])
+        assert user is not None
+        assert user["role"] == "admin"
+        assert user["key_id"] == result["key_id"]
+
+    def test_validate_invalid_key(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        assert store.validate("trk_nonexistent") is None
+
+    def test_rotate_key(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        created = store.create_key(name="rotate-test")
+        old_key = created["api_key"]
+
+        rotated = store.rotate_key(created["key_id"], grace_period_seconds=3600)
+        assert rotated is not None
+        new_key = rotated["api_key"]
+        assert new_key != old_key
+
+        # New key works
+        assert store.validate(new_key) is not None
+        # Old key still works during grace period
+        assert store.validate(old_key) is not None
+
+    def test_rotate_key_not_found(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        assert store.rotate_key("ak_nonexistent") is None
+
+    def test_rotate_expired_grace(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        created = store.create_key(name="grace-test")
+        old_key = created["api_key"]
+
+        # Rotate with 0-second grace period (immediately expired)
+        rotated = store.rotate_key(created["key_id"], grace_period_seconds=0)
+        assert rotated is not None
+        # Old key should be expired immediately
+        assert store.validate(old_key) is None
+
+    def test_revoke_key(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        created = store.create_key(name="revoke-test")
+        assert store.validate(created["api_key"]) is not None
+
+        ok = store.revoke_key(created["key_id"])
+        assert ok is True
+        assert store.validate(created["api_key"]) is None
+
+    def test_revoke_nonexistent(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        assert store.revoke_key("ak_nonexistent") is False
+
+    def test_list_keys(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        store.create_key(name="key-1")
+        store.create_key(name="key-2")
+        keys = store.list_keys()
+        assert len(keys) == 2
+        names = {k["name"] for k in keys}
+        assert names == {"key-1", "key-2"}
+
+    def test_audit_log(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        created = store.create_key(name="audit-test")
+        store.rotate_key(created["key_id"])
+        store.revoke_key(created["key_id"])
+
+        log = store.get_audit_log()
+        actions = [e["action"] for e in log]
+        assert "create" in actions
+        assert "rotate" in actions
+        assert "revoke" in actions
+
+    def test_key_with_expiry(self):
+        from app.auth import APIKeyStore
+        store = APIKeyStore()
+        result = store.create_key(name="expiry-test", expires_in_days=30)
+        assert result["expires_at"] is not None
+        # Key should be valid now
+        assert store.validate(result["api_key"]) is not None
+
+
 class TestAuthRouter:
     """Test auth API router."""
 
@@ -99,3 +204,69 @@ class TestAuthRouter:
         import asyncio
         result = asyncio.get_event_loop().run_until_complete(auth_status())
         assert "auth_enabled" in result
+
+
+class TestAPIKeyEndpoints:
+    """Test the API key management HTTP endpoints."""
+
+    def _make_client(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from app.routers.auth import router
+        from app.auth import require_admin
+
+        app = FastAPI()
+        # Override auth to always return admin
+        app.dependency_overrides[require_admin] = lambda: {"sub": "admin", "role": "admin"}
+        app.include_router(router)
+        return TestClient(app)
+
+    def test_create_api_key(self):
+        client = self._make_client()
+        resp = client.post("/api/auth/api-keys", json={"name": "test-key"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["key_id"].startswith("ak_")
+        assert data["api_key"].startswith("trk_")
+
+    def test_list_api_keys(self):
+        client = self._make_client()
+        client.post("/api/auth/api-keys", json={"name": "list-test"})
+        resp = client.get("/api/auth/api-keys")
+        assert resp.status_code == 200
+        assert resp.json()["count"] >= 0
+
+    def test_rotate_api_key(self):
+        client = self._make_client()
+        created = client.post("/api/auth/api-keys", json={"name": "rotate-ep"}).json()
+        resp = client.post("/api/auth/api-keys/rotate", json={
+            "key_id": created["key_id"],
+            "grace_period_seconds": 3600,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["api_key"] != created["api_key"]
+        assert data["grace_period_seconds"] == 3600
+
+    def test_rotate_nonexistent_key(self):
+        client = self._make_client()
+        resp = client.post("/api/auth/api-keys/rotate", json={
+            "key_id": "ak_nonexistent",
+        })
+        assert resp.status_code == 404
+
+    def test_revoke_api_key(self):
+        client = self._make_client()
+        created = client.post("/api/auth/api-keys", json={"name": "revoke-ep"}).json()
+        resp = client.post("/api/auth/api-keys/revoke", json={
+            "key_id": created["key_id"],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["revoked"] is True
+
+    def test_audit_log_endpoint(self):
+        client = self._make_client()
+        client.post("/api/auth/api-keys", json={"name": "audit-ep"})
+        resp = client.get("/api/auth/api-keys/audit")
+        assert resp.status_code == 200
+        assert resp.json()["count"] >= 0

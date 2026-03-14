@@ -10,9 +10,12 @@ for spatial overlay rendering.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
+
+from app.auth import optional_auth
 
 router = APIRouter(prefix="/api/targets", tags=["ar-export"])
 
@@ -38,6 +41,7 @@ async def ar_export(
     alliance: Optional[str] = Query(None, description="Filter by alliance: friendly, hostile, unknown"),
     max_targets: int = Query(100, ge=1, le=1000, description="Max targets to return"),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0, description="Min position confidence"),
+    user: Optional[dict] = Depends(optional_auth),
 ):
     """Export target data formatted for AR overlay apps.
 
@@ -73,6 +77,10 @@ async def ar_export(
     # Limit count
     all_targets = all_targets[:max_targets]
 
+    # Authenticated users see full data; unauthenticated get sanitized output.
+    # threat_score and raw internal IDs (MAC addresses, etc.) are sensitive.
+    is_authenticated = user is not None
+
     # Build simplified AR payload
     ar_targets = []
     for t in all_targets:
@@ -97,8 +105,16 @@ async def ar_export(
         elif "vehicle" in asset_type:
             alt = 1.5
 
-        ar_targets.append({
-            "id": t.get("target_id", ""),
+        # Sanitize target ID for unauthenticated requests:
+        # Hash internal IDs (MAC addresses, etc.) to prevent leaking identifiers
+        raw_id = t.get("target_id", "")
+        if is_authenticated:
+            display_id = raw_id
+        else:
+            display_id = f"t_{hashlib.sha256(raw_id.encode()).hexdigest()[:12]}"
+
+        entry = {
+            "id": display_id,
             "name": t.get("name", t.get("target_id", "")),
             "type": asset_type,
             "alliance": (t.get("alliance", "") or "unknown").lower(),
@@ -108,9 +124,14 @@ async def ar_export(
             "heading": t.get("heading", 0.0) or 0.0,
             "speed": t.get("speed", 0.0) or 0.0,
             "confidence": t.get("position_confidence", 0.0) or 0.0,
-            "threat_score": t.get("threat_score", 0.0) or 0.0,
             "status": (t.get("status", "") or "active").lower(),
-        })
+        }
+
+        # Only include threat_score for authenticated users
+        if is_authenticated:
+            entry["threat_score"] = t.get("threat_score", 0.0) or 0.0
+
+        ar_targets.append(entry)
 
     return {
         "version": "1.0",

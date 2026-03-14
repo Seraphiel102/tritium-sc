@@ -160,12 +160,16 @@ class TestMeshtasticPlugin:
         assert config.enabled is False
 
     def test_connect_without_meshtastic_package_returns_false(self):
+        from unittest.mock import patch
         from plugins.meshtastic.plugin import MeshtasticPlugin
         plugin = MeshtasticPlugin()
         plugin._logger = __import__("logging").getLogger("test")
         plugin._config.enabled = True
-        # _connect tries to import meshtastic which isn't installed in test env
-        result = plugin._connect()
+        # Mock the import to simulate meshtastic not installed
+        with patch.dict("sys.modules", {"meshtastic": None}):
+            # Force re-execution of the import inside _connect
+            import importlib
+            result = plugin._connect()
         assert result is False
 
     def test_start_disabled_stays_healthy(self):

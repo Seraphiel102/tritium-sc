@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.routers.ar_export import router
+from app.auth import optional_auth
 
 
 # ---------------------------------------------------------------------------
@@ -19,8 +20,14 @@ from app.routers.ar_export import router
 # ---------------------------------------------------------------------------
 
 def _make_app(tracker=None, engine=None, amy=None):
-    """Create FastAPI app with ar_export router and optional state."""
+    """Create FastAPI app with ar_export router and optional state.
+
+    Overrides optional_auth to return an admin user so tests get full data
+    (including threat_score and raw target IDs).
+    """
     app = FastAPI()
+    # Override auth dependency so tests run as authenticated admin
+    app.dependency_overrides[optional_auth] = lambda: {"sub": "admin", "role": "admin"}
     app.include_router(router)
 
     if amy is not None:
@@ -184,3 +191,61 @@ class TestARExport:
         data = resp.json()
         assert data["target_count"] == 1
         assert data["targets"][0]["id"] == "sim_1"
+
+    def test_authenticated_includes_threat_score(self):
+        """Authenticated users receive threat_score in response."""
+        t1 = _mock_target("r1", "hostile", "Hostile", "person", threat_score=0.9)
+        tracker = _mock_tracker([t1])
+        amy = _amy_with_tracker(tracker)
+        app = _make_app(amy=amy)
+        client = TestClient(app)
+
+        resp = client.get("/api/targets/ar-export")
+        data = resp.json()
+        assert "threat_score" in data["targets"][0]
+        assert data["targets"][0]["threat_score"] == 0.9
+
+    def test_authenticated_shows_raw_target_id(self):
+        """Authenticated users see real target IDs."""
+        t1 = _mock_target("ble_AA:BB:CC:DD:EE:FF", "friendly", "Phone", "ble_device")
+        tracker = _mock_tracker([t1])
+        amy = _amy_with_tracker(tracker)
+        app = _make_app(amy=amy)
+        client = TestClient(app)
+
+        resp = client.get("/api/targets/ar-export")
+        data = resp.json()
+        assert data["targets"][0]["id"] == "ble_AA:BB:CC:DD:EE:FF"
+
+    def test_unauthenticated_excludes_threat_score(self):
+        """Unauthenticated users do NOT receive threat_score."""
+        t1 = _mock_target("r1", "hostile", "Hostile", "person", threat_score=0.9)
+        tracker = _mock_tracker([t1])
+        amy = _amy_with_tracker(tracker)
+        # Build app WITHOUT auth override to simulate unauthenticated
+        app = FastAPI()
+        app.dependency_overrides[optional_auth] = lambda: None
+        app.include_router(router)
+        app.state.amy = amy
+        client = TestClient(app)
+
+        resp = client.get("/api/targets/ar-export")
+        data = resp.json()
+        assert "threat_score" not in data["targets"][0]
+
+    def test_unauthenticated_hashes_target_id(self):
+        """Unauthenticated users see hashed target IDs (no MAC leakage)."""
+        t1 = _mock_target("ble_AA:BB:CC:DD:EE:FF", "friendly", "Phone", "ble_device")
+        tracker = _mock_tracker([t1])
+        amy = _amy_with_tracker(tracker)
+        app = FastAPI()
+        app.dependency_overrides[optional_auth] = lambda: None
+        app.include_router(router)
+        app.state.amy = amy
+        client = TestClient(app)
+
+        resp = client.get("/api/targets/ar-export")
+        data = resp.json()
+        target_id = data["targets"][0]["id"]
+        assert target_id.startswith("t_")
+        assert "AA:BB:CC" not in target_id

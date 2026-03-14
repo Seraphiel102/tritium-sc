@@ -106,6 +106,9 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         )
         return {"floorplan": plan}
 
+    # Maximum upload size: 10 MB
+    MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
     @router.post("/upload")
     async def upload_floorplan(
         file: UploadFile = File(...),
@@ -115,27 +118,36 @@ def create_router(store: FloorPlanStore) -> APIRouter:
     ):
         """Upload a floor plan image and create metadata.
 
-        Accepts PNG, SVG, or JPG files.
+        Accepts PNG, SVG, or JPG files (max 10 MB).
         """
         if not file.filename:
             raise HTTPException(status_code=400, detail="No file provided")
 
-        # Validate file type
-        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        # Validate file type — strip path components to prevent traversal
+        safe_name = file.filename.replace("\\", "/").split("/")[-1]
+        ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
         if ext not in ("png", "svg", "jpg", "jpeg"):
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported format: {ext}. Use PNG, SVG, or JPG.",
             )
 
+        # Enforce max file size by reading up to limit + 1 byte
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+            )
+
         fmt = "jpg" if ext == "jpeg" else ext
         filename = f"{uuid.uuid4().hex[:12]}.{fmt}"
 
-        # Save the image file
+        # Save the image file (content already read for size check)
         dest = store.image_dir / filename
         try:
             with dest.open("wb") as f:
-                shutil.copyfileobj(file.file, f)
+                f.write(content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500,

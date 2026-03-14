@@ -14,6 +14,21 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 75: Security Hardening
+
+| Change | Verification |
+|--------|-------------|
+| Fix meshtastic test that assumed package not installed (mock import properly) | Integration Tested |
+| Floorplan upload: enforce 10 MB max file size (HTTP 413), strip path traversal from filenames | Integration Tested (5 security tests) |
+| AR export: exclude threat_score for unauthenticated users, hash internal target IDs to prevent MAC/UUID leakage | Integration Tested (4 new tests) |
+| AR export: add optional_auth dependency for authenticated vs public access control | Unit Tested |
+| API key rotation: APIKeyStore with create/rotate/revoke/list, grace period support (old key valid 1hr default) | Unit Tested (12 tests) |
+| API key rotation endpoints: POST /api/auth/api-keys, /api-keys/rotate, /api-keys/revoke, GET /api-keys, /api-keys/audit | Integration Tested (6 endpoint tests) |
+| API key audit log: tracks all create/rotate/revoke events with timestamps | Unit Tested |
+| Full test suite: 97 passed, 0 failed (./test.sh fast) | Integration Tested |
+
+---
+
 ## 2026-03-14 — Wave 74: Advanced 3D Visualization
 
 | Change | Verification |
