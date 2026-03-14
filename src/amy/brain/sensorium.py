@@ -52,6 +52,7 @@ _SOURCE_LABELS = {
     "thought": "Thought",
     "ble": "BLE",
     "mesh": "Mesh",
+    "rf_anomaly": "RF Anomaly",
 }
 
 
@@ -113,6 +114,10 @@ class Sensorium:
         self._mesh_snapshot = MeshNodeSnapshot()
         self._ble_new_devices: list[dict] = []  # recently appeared devices
         self._ble_known_macs: set[str] = set()  # MACs seen across all scans
+
+        # Anomaly baseline awareness
+        self._anomaly_alerts: list[dict] = []  # recent anomaly alerts for narrative
+        self._anomaly_summary: str = ""        # cached anomaly context string
 
         # Dimensional mood model: valence (-1..1) and arousal (0..1)
         self._mood_valence: float = 0.0   # negative=unpleasant, positive=pleasant
@@ -287,6 +292,11 @@ class Sensorium:
             dv -= 0.03
             da += 0.05
 
+        # RF anomaly → vigilance
+        if source == "rf_anomaly":
+            dv -= 0.08
+            da += 0.12
+
         # Apply with natural decay toward baseline (0.0, 0.3)
         self._mood_valence = max(-1.0, min(1.0, self._mood_valence * 0.95 + dv))
         self._mood_arousal = max(0.0, min(1.0, self._mood_arousal * 0.95 + da))
@@ -453,6 +463,83 @@ class Sensorium:
             line += f" New: {names}."
         return line
 
+    def update_anomalies(self, anomalies: list[dict]) -> None:
+        """Process anomaly alerts from the AnomalyBaselineCollector.
+
+        Expected *anomalies*: list of dicts with ``metric_name``,
+        ``current_value``, ``baseline_mean``, ``baseline_std``,
+        ``deviation_sigma``, ``direction``, ``severity``, ``description``.
+        """
+        if not anomalies:
+            return
+
+        with self._lock:
+            # Keep last 10 anomalies
+            self._anomaly_alerts = (self._anomaly_alerts + anomalies)[-10:]
+
+        # Build narrative-friendly summary
+        parts: list[str] = []
+        for a in anomalies:
+            metric = a.get("metric_name", "unknown")
+            direction = a.get("direction", "")
+            sigma = a.get("deviation_sigma", 0.0)
+            current = a.get("current_value", 0)
+            baseline_mean = a.get("baseline_mean", 0)
+            severity = a.get("severity", "low")
+
+            # Human-readable metric names
+            metric_labels = {
+                "ble_device_count": "BLE device count",
+                "wifi_network_count": "WiFi network count",
+                "rssi_mean": "average RSSI",
+                "device_churn_new": "new device arrivals",
+                "device_churn_departed": "device departures",
+                "total_sightings": "total sightings",
+            }
+            label = metric_labels.get(metric, metric)
+
+            if metric == "ble_device_count" and direction == "below":
+                pct = round((1.0 - current / max(baseline_mean, 1)) * 100)
+                parts.append(
+                    f"{pct}% fewer BLE devices than normal baseline "
+                    f"({int(current)} vs {int(baseline_mean)} avg)"
+                )
+            elif metric == "ble_device_count" and direction == "above":
+                pct = round((current / max(baseline_mean, 1) - 1.0) * 100)
+                parts.append(
+                    f"{pct}% more BLE devices than normal ({int(current)} vs {int(baseline_mean)} avg)"
+                )
+            else:
+                parts.append(
+                    f"{label} is {sigma:.1f} sigma {direction} normal "
+                    f"({current:.1f} vs {baseline_mean:.1f})"
+                )
+
+        summary = "; ".join(parts)
+        with self._lock:
+            self._anomaly_summary = summary
+
+        # Push a sensorium event for significant anomalies
+        high_count = sum(1 for a in anomalies if a.get("severity") in ("high", "medium"))
+        importance = 0.7 if high_count else 0.5
+        self.push("rf_anomaly", f"RF anomaly: {summary}", importance=importance)
+
+    def anomaly_context(self) -> str:
+        """Build an anomaly awareness string for the thinking prompt."""
+        with self._lock:
+            summary = self._anomaly_summary
+            alerts = list(self._anomaly_alerts)
+        if not summary:
+            return ""
+
+        # Only show if anomalies are recent (within 30 minutes)
+        if alerts:
+            latest_ts = max(a.get("timestamp", 0) for a in alerts)
+            if latest_ts > 0 and (time.time() - latest_ts) > 1800:
+                return ""
+
+        return f"RF ANOMALY ALERT: {summary}"
+
     def mesh_context(self) -> str:
         """Build a Meshtastic mesh awareness string for the thinking prompt."""
         snap = self.mesh_snapshot
@@ -559,6 +646,11 @@ class Sensorium:
             # mesh_context may be multiline; wrap each line
             for mline in mesh_ctx.split("\n"):
                 header_lines.append(f"[{mline.strip()}]")
+
+        # Anomaly baseline awareness
+        anomaly_ctx = self.anomaly_context()
+        if anomaly_ctx:
+            header_lines.append(f"[{anomaly_ctx}]")
 
         # Battlespace summary from target tracker
         if self._battlespace_fn is not None:

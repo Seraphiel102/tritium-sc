@@ -456,6 +456,9 @@ class ThinkingThread:
         mesh_ctx = commander.sensorium.mesh_context()
         if mesh_ctx:
             edge_parts.append(mesh_ctx)
+        anomaly_ctx = commander.sensorium.anomaly_context()
+        if anomaly_ctx:
+            edge_parts.append(anomaly_ctx)
         edge_sensors_ctx = ""
         if edge_parts:
             edge_sensors_ctx = "EDGE SENSORS:\n" + "\n".join(edge_parts)
