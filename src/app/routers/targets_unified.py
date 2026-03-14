@@ -131,6 +131,112 @@ async def get_target_trail(
     }
 
 
+@router.get("/targets/clusters")
+async def get_target_clusters(
+    request: Request,
+    zoom: float = Query(16.0, ge=1, le=22, description="Map zoom level"),
+    cell_size: Optional[float] = Query(
+        None, ge=0.00001, le=1.0,
+        description="Override grid cell size in degrees (auto if omitted)",
+    ),
+):
+    """Return targets grouped into spatial clusters for map readability.
+
+    At high zoom levels, returns all targets as singles with no clusters.
+    At lower zoom levels, nearby targets are merged into cluster objects
+    showing count, center position, and dominant alliance/type.
+    """
+    tracker = _get_tracker(request)
+    all_targets: list[dict] = []
+
+    if tracker is not None:
+        all_targets = [t.to_dict() for t in tracker.get_all()]
+    else:
+        engine = _get_sim_engine(request)
+        if engine is not None:
+            all_targets = [t.to_dict() for t in engine.get_targets()]
+
+    # Determine cell size from zoom if not overridden
+    if cell_size is None:
+        if zoom >= 18:
+            cell_size = 0.0
+        elif zoom >= 17:
+            cell_size = 0.0002
+        elif zoom >= 16:
+            cell_size = 0.0005
+        elif zoom >= 15:
+            cell_size = 0.001
+        elif zoom >= 14:
+            cell_size = 0.002
+        elif zoom >= 13:
+            cell_size = 0.005
+        else:
+            cell_size = 0.01
+
+    if cell_size == 0.0 or not all_targets:
+        return {
+            "singles": all_targets,
+            "clusters": [],
+            "total_targets": len(all_targets),
+            "zoom": zoom,
+        }
+
+    # Grid-based spatial clustering
+    import math
+
+    grid: dict[str, list[dict]] = {}
+    no_position: list[dict] = []
+
+    for t in all_targets:
+        lat = t.get("lat", 0.0) or 0.0
+        lng = t.get("lng", 0.0) or 0.0
+        if lat == 0.0 and lng == 0.0:
+            no_position.append(t)
+            continue
+        cx = math.floor(lng / cell_size)
+        cy = math.floor(lat / cell_size)
+        key = f"{cx}:{cy}"
+        grid.setdefault(key, []).append(t)
+
+    singles = list(no_position)
+    clusters = []
+
+    for key, members in grid.items():
+        if len(members) < 2:
+            singles.extend(members)
+            continue
+
+        sum_lat = sum(m.get("lat", 0.0) or 0.0 for m in members)
+        sum_lng = sum(m.get("lng", 0.0) or 0.0 for m in members)
+        count = len(members)
+
+        # Compute dominant alliance and type
+        alliance_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        for m in members:
+            a = m.get("alliance", "unknown") or "unknown"
+            alliance_counts[a] = alliance_counts.get(a, 0) + 1
+            at = m.get("asset_type", "unknown") or "unknown"
+            type_counts[at] = type_counts.get(at, 0) + 1
+
+        clusters.append({
+            "cluster_id": f"cluster_{len(clusters)}",
+            "lat": sum_lat / count,
+            "lng": sum_lng / count,
+            "count": count,
+            "dominant_alliance": max(alliance_counts, key=alliance_counts.get),
+            "dominant_type": max(type_counts, key=type_counts.get),
+            "target_ids": [m.get("target_id", "") for m in members],
+        })
+
+    return {
+        "singles": singles,
+        "clusters": clusters,
+        "total_targets": len(all_targets),
+        "zoom": zoom,
+    }
+
+
 @router.post("/sighting")
 async def report_sighting(request: Request):
     """Accept a sighting report from camera or robot."""
