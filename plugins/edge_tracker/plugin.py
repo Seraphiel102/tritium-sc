@@ -25,6 +25,12 @@ try:
 except ImportError:  # pragma: no cover
     BleStore = None  # type: ignore[assignment,misc]
 
+# DeviceClassifier import — multi-signal BLE/WiFi device type classification.
+try:
+    from tritium_lib.classifier import DeviceClassifier
+except ImportError:  # pragma: no cover
+    DeviceClassifier = None  # type: ignore[assignment,misc]
+
 from engine.tactical.ble_classifier import BLEClassifier
 from engine.tactical.trilateration import TrilaterationEngine
 
@@ -46,6 +52,7 @@ class EdgeTrackerPlugin(PluginInterface):
         self._logger: Optional[logging.Logger] = None
         self._store: Any = None
         self._ble_classifier: Optional[BLEClassifier] = None
+        self._device_classifier: Any = None
         self._trilateration: Optional[TrilaterationEngine] = None
 
         self._running = False
@@ -96,6 +103,16 @@ class EdgeTrackerPlugin(PluginInterface):
         if self._event_bus is not None:
             self._ble_classifier = BLEClassifier(event_bus=self._event_bus)
             self._logger.info("BLE classifier initialized")
+
+        # Initialize DeviceClassifier for multi-signal device type classification
+        if DeviceClassifier is not None:
+            self._device_classifier = DeviceClassifier()
+            self._logger.info("DeviceClassifier initialized (tritium-lib)")
+        else:
+            self._logger.warning(
+                "tritium_lib.classifier not available — "
+                "DeviceClassifier disabled"
+            )
 
         # Initialize trilateration engine for multi-node position estimation
         self._trilateration = TrilaterationEngine()
@@ -356,6 +373,19 @@ class EdgeTrackerPlugin(PluginInterface):
                             trilat_pos = est.to_dict()
                             dev["position"] = trilat_pos
 
+                    # Classify device type using DeviceClassifier
+                    device_type = None
+                    if self._device_classifier is not None:
+                        classification = self._device_classifier.classify_ble(
+                            mac=mac,
+                            name=dev.get("name", ""),
+                            company_id=dev.get("company_id"),
+                            appearance=dev.get("appearance"),
+                            service_uuids=dev.get("service_uuids"),
+                        )
+                        if classification.device_type != "unknown":
+                            device_type = classification.device_type
+
                     self._tracker.update_from_ble({
                         "mac": mac,
                         "name": dev.get("name", ""),
@@ -363,6 +393,7 @@ class EdgeTrackerPlugin(PluginInterface):
                         "node_id": node_id,
                         "node_position": node_pos,
                         "trilateration": trilat_pos,
+                        "device_type": device_type,
                     })
         except Exception as exc:
             log.error("Failed to emit BLE update: %s", exc)

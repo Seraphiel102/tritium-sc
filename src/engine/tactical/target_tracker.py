@@ -214,7 +214,8 @@ class TargetTracker:
 
         Args:
             sighting: Dict with keys: mac, name, rssi, node_id,
-                      and optionally position (x, y) from trilateration.
+                      and optionally position (x, y) from trilateration
+                      and device_type from DeviceClassifier.
         """
         mac = sighting.get("mac", "")
         if not mac:
@@ -224,6 +225,10 @@ class TargetTracker:
         tid = f"ble_{mac.replace(':', '').lower()}"
         name = sighting.get("name") or mac
         rssi = sighting.get("rssi", -100)
+
+        # Device type from DeviceClassifier (phone, watch, laptop, etc.)
+        # Falls back to generic "ble_device" if not classified.
+        asset_type = sighting.get("device_type") or "ble_device"
 
         # RSSI → confidence: -30dBm=1.0, -60dBm=0.7, -90dBm=0.1
         confidence = max(0.0, min(1.0, (rssi + 100) / 70))
@@ -251,12 +256,15 @@ class TargetTracker:
                 if pos_source != "unknown":
                     t.position = position
                     t.position_source = pos_source
+                # Update asset_type if we got a specific classification
+                if asset_type != "ble_device":
+                    t.asset_type = asset_type
             else:
                 self._targets[tid] = TrackedTarget(
                     target_id=tid,
                     name=name,
                     alliance="unknown",
-                    asset_type="ble_device",
+                    asset_type=asset_type,
                     position=position,
                     last_seen=time.monotonic(),
                     source="ble",

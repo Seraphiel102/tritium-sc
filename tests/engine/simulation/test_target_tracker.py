@@ -348,3 +348,79 @@ class TestEnhancedSummary:
         })
         summary = tracker.summary()
         assert "Hostile sectors" in summary
+
+
+class TestUpdateFromBle:
+    """Test update_from_ble with device_type from DeviceClassifier."""
+
+    def test_new_ble_device_default_type(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Unknown-Device",
+            "rssi": -60,
+        })
+        targets = tracker.get_all()
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.target_id == "ble_aabbccddeeff"
+        assert t.asset_type == "ble_device"
+        assert t.source == "ble"
+
+    def test_new_ble_device_with_device_type(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "iPhone 15",
+            "rssi": -50,
+            "device_type": "phone",
+        })
+        targets = tracker.get_all()
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.asset_type == "phone"
+
+    def test_update_existing_ble_upgrades_type(self):
+        """If device_type becomes available later, it should update."""
+        tracker = TargetTracker()
+        # First sighting — no classification yet
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Unknown",
+            "rssi": -70,
+        })
+        t = tracker.get_all()[0]
+        assert t.asset_type == "ble_device"
+
+        # Second sighting — now classified as a watch
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Apple Watch",
+            "rssi": -50,
+            "device_type": "watch",
+        })
+        t = tracker.get_all()[0]
+        assert t.asset_type == "watch"
+
+    def test_update_existing_ble_keeps_type_if_generic(self):
+        """If subsequent sighting has no classification, keep existing type."""
+        tracker = TargetTracker()
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "iPhone 15",
+            "rssi": -50,
+            "device_type": "phone",
+        })
+        # Second sighting without device_type
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "iPhone 15",
+            "rssi": -55,
+        })
+        t = tracker.get_all()[0]
+        assert t.asset_type == "phone"  # Should NOT revert to ble_device
+
+    def test_empty_mac_ignored(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({"mac": "", "rssi": -60})
+        assert len(tracker.get_all()) == 0

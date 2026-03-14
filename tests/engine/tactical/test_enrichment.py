@@ -17,6 +17,7 @@ from engine.tactical.enrichment import (
     _oui_lookup,
     _wifi_fingerprint,
     _ble_device_class,
+    _device_classifier_provider,
 )
 
 
@@ -427,3 +428,79 @@ class TestAutoEnrichment:
         """stop() should cleanly shut down the listener thread."""
         pipeline_with_bus.stop()
         assert pipeline_with_bus._running is False
+
+
+# ---------------------------------------------------------------------------
+# DeviceClassifier provider tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeviceClassifierProvider:
+    """Test the device_classifier enrichment provider backed by tritium-lib."""
+
+    @pytest.mark.asyncio
+    async def test_ble_device_by_name(self):
+        """BLE device with a known name should be classified."""
+        result = await _device_classifier_provider(
+            "ble_aabbccddee",
+            {"mac": "AC:BC:32:AA:BB:CC", "name": "iPhone 15"},
+        )
+        assert result is not None
+        assert result.provider == "device_classifier"
+        assert result.enrichment_type == "device_classification"
+        assert result.data["device_type"] == "phone"
+        assert result.confidence >= 0.9
+
+    @pytest.mark.asyncio
+    async def test_ble_device_by_appearance(self):
+        """BLE device with GAP appearance should be classified."""
+        result = await _device_classifier_provider(
+            "ble_112233445566",
+            {"mac": "11:22:33:44:55:66", "appearance": 0x00C0},
+        )
+        assert result is not None
+        assert result.data["device_type"] == "watch"
+
+    @pytest.mark.asyncio
+    async def test_wifi_device_by_ssid(self):
+        """WiFi device with known SSID pattern should be classified."""
+        result = await _device_classifier_provider(
+            "wifi_aabbccddee",
+            {"ssid": "iPhone-Matt", "bssid": "AA:BB:CC:DD:EE:FF"},
+        )
+        assert result is not None
+        assert result.data["device_type"] == "phone"
+
+    @pytest.mark.asyncio
+    async def test_unknown_device(self):
+        """Unknown device returns None."""
+        result = await _device_classifier_provider(
+            "ble_ffffffffffff",
+            {"mac": "FF:FF:FF:FF:FF:FF"},
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_identifiers(self):
+        """Empty identifiers returns None."""
+        result = await _device_classifier_provider("unknown", {})
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_registered_in_pipeline(self, pipeline: EnrichmentPipeline):
+        """device_classifier provider should be registered by default."""
+        assert "device_classifier" in pipeline.get_provider_names()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_includes_device_classification(
+        self, pipeline: EnrichmentPipeline
+    ):
+        """Full pipeline enrichment should include device_classifier results."""
+        results = await pipeline.enrich("ble_3ce072aabbcc", {
+            "mac": "3C:E0:72:AA:BB:CC",
+            "name": "iPhone 15",
+        })
+        providers = {r.provider for r in results}
+        assert "device_classifier" in providers
+        dc_result = [r for r in results if r.provider == "device_classifier"][0]
+        assert dc_result.data["device_type"] == "phone"

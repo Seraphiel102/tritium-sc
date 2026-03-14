@@ -8,6 +8,10 @@ runs all registered providers in parallel to gather additional intelligence:
 OUI manufacturer lookup, WiFi fingerprinting, BLE device classification, and
 any custom providers registered at runtime.
 
+The ``device_classifier`` provider delegates to tritium-lib's DeviceClassifier
+for multi-signal BLE/WiFi classification using GAP appearance, service UUIDs,
+company IDs, Apple continuity data, Google Fast Pair, and name patterns.
+
 Results are cached per (target_id, provider) to avoid redundant queries.
 The pipeline subscribes to EventBus for ``ble:new_device`` events and
 auto-enriches new targets as they appear.
@@ -27,6 +31,15 @@ if TYPE_CHECKING:
     from ..comms.event_bus import EventBus
 
 logger = logging.getLogger("enrichment")
+
+# Singleton DeviceClassifier — loaded once at import time.
+_device_classifier = None
+try:
+    from tritium_lib.classifier import DeviceClassifier as _DC
+    _device_classifier = _DC()
+    logger.info("DeviceClassifier loaded from tritium-lib")
+except ImportError:
+    logger.debug("tritium_lib.classifier not available — DeviceClassifier disabled")
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +260,56 @@ async def _ble_device_class(target_id: str, identifiers: dict) -> EnrichmentResu
     return None
 
 
+async def _device_classifier_provider(
+    target_id: str, identifiers: dict
+) -> EnrichmentResult | None:
+    """Classify device using tritium-lib DeviceClassifier with all available signals.
+
+    Accepts identifiers dict with optional keys:
+        mac, name, company_id, appearance, service_uuids,
+        fast_pair_model_id, apple_device_class, ssid, bssid, probed_ssids
+    """
+    if _device_classifier is None:
+        return None
+
+    # Determine if this is a BLE or WiFi target
+    mac = identifiers.get("mac", "")
+    name = identifiers.get("name", "")
+    ssid = identifiers.get("ssid", "")
+    bssid = identifiers.get("bssid", "")
+
+    classification = None
+
+    if mac or name or identifiers.get("company_id") is not None:
+        # BLE classification with all available signals
+        classification = _device_classifier.classify_ble(
+            mac=mac,
+            name=name,
+            company_id=identifiers.get("company_id"),
+            appearance=identifiers.get("appearance"),
+            service_uuids=identifiers.get("service_uuids"),
+            fast_pair_model_id=identifiers.get("fast_pair_model_id"),
+            apple_device_class=identifiers.get("apple_device_class"),
+        )
+    elif ssid or bssid or identifiers.get("probed_ssids"):
+        # WiFi classification
+        classification = _device_classifier.classify_wifi(
+            ssid=ssid,
+            bssid=bssid,
+            probed_ssids=identifiers.get("probed_ssids"),
+        )
+
+    if classification is None or classification.device_type == "unknown":
+        return None
+
+    return EnrichmentResult(
+        provider="device_classifier",
+        enrichment_type="device_classification",
+        data=classification.to_dict(),
+        confidence=classification.confidence,
+    )
+
+
 # ---------------------------------------------------------------------------
 # EnrichmentPipeline
 # ---------------------------------------------------------------------------
@@ -272,6 +335,7 @@ class EnrichmentPipeline:
         self.register_provider("oui_lookup", _oui_lookup)
         self.register_provider("wifi_fingerprint", _wifi_fingerprint)
         self.register_provider("ble_device_class", _ble_device_class)
+        self.register_provider("device_classifier", _device_classifier_provider)
 
         # Auto-subscribe to EventBus if provided
         if event_bus is not None:
