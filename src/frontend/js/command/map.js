@@ -530,6 +530,9 @@ function _draw() {
         meshDrawNodes(ctx, worldToScreen, meshTargets, _state.showMesh);
     }
 
+    // Layer 4.9: Sensor coverage overlays (circles/cones for placed assets)
+    _drawSensorCoverage(ctx);
+
     // Layer 5: Targets (shapes only — labels handled separately)
     _drawTargets(ctx);
 
@@ -1311,6 +1314,127 @@ function _drawCrowdDensity(ctx) {
 }
 
 // ============================================================
+// Layer 4.9: Sensor Coverage Overlays
+// ============================================================
+
+/**
+ * Color map for sensor coverage by asset class.
+ * BLE=cyan, WiFi/sensor=blue, camera=green, mesh_radio/RF=yellow, gateway=magenta
+ */
+const COVERAGE_COLORS = {
+    camera:     { fill: 'rgba(5, 255, 161, 0.08)',  stroke: 'rgba(5, 255, 161, 0.4)'  },  // green
+    sensor:     { fill: 'rgba(0, 120, 255, 0.08)',   stroke: 'rgba(0, 120, 255, 0.4)'   },  // blue
+    mesh_radio: { fill: 'rgba(252, 238, 10, 0.08)',  stroke: 'rgba(252, 238, 10, 0.4)'  },  // yellow
+    gateway:    { fill: 'rgba(255, 42, 109, 0.08)',  stroke: 'rgba(255, 42, 109, 0.4)'  },  // magenta
+    ble:        { fill: 'rgba(0, 240, 255, 0.08)',   stroke: 'rgba(0, 240, 255, 0.4)'   },  // cyan
+};
+
+const COVERAGE_DEFAULT = { fill: 'rgba(0, 240, 255, 0.06)', stroke: 'rgba(0, 240, 255, 0.3)' };
+
+function _drawSensorCoverage(ctx) {
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    for (const [id, unit] of units) {
+        const assetType = (unit.asset_type || unit.type || '').toLowerCase();
+        // Only draw coverage for fixed/sensor-type assets that have coverage data
+        if (assetType !== 'fixed' && !assetType.includes('sensor') && !assetType.includes('camera')) continue;
+
+        const coverageRadius = unit.coverage_radius_meters;
+        if (!coverageRadius || coverageRadius <= 0) continue;
+
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        const sp = worldToScreen(pos.x, pos.y);
+        // Convert radius from meters (world units) to screen pixels
+        const radiusPx = coverageRadius * _state.cam.zoom;
+
+        const assetClass = (unit.asset_class || assetType || '').toLowerCase();
+        const colors = COVERAGE_COLORS[assetClass] || COVERAGE_DEFAULT;
+
+        const coneAngle = unit.coverage_cone_angle || 360;
+        const heading = unit.heading || 0;
+
+        if (coneAngle >= 360) {
+            // Omnidirectional: draw full circle with radial gradient
+            const gradient = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, radiusPx);
+            gradient.addColorStop(0, colors.fill.replace(/[\d.]+\)$/, '0.18)'));
+            gradient.addColorStop(0.6, colors.fill);
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Outer ring
+            ctx.strokeStyle = colors.stroke;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        } else {
+            // Directional cone: draw arc sector
+            // heading 0=north, clockwise. Canvas 0=east, counter-clockwise.
+            const halfAngle = (coneAngle / 2) * (Math.PI / 180);
+            const headingRad = -(heading - 90) * (Math.PI / 180);  // convert to canvas coords
+            const startAngle = headingRad - halfAngle;
+            const endAngle = headingRad + halfAngle;
+
+            // Gradient within cone
+            const gradient = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, radiusPx);
+            gradient.addColorStop(0, colors.fill.replace(/[\d.]+\)$/, '0.22)'));
+            gradient.addColorStop(0.5, colors.fill);
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            ctx.arc(sp.x, sp.y, radiusPx, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Cone outline
+            ctx.strokeStyle = colors.stroke;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Height indicator: small altitude label next to sensor icon
+        const heightM = unit.height_meters;
+        if (heightM != null && heightM > 0) {
+            const labelText = `${heightM}m`;
+            ctx.font = `bold 9px "Share Tech Mono", monospace`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const labelX = sp.x + 12;
+            const labelY = sp.y - 8;
+
+            // Background pill
+            const tw = ctx.measureText(labelText).width;
+            ctx.fillStyle = 'rgba(6, 6, 9, 0.85)';
+            ctx.fillRect(labelX - 2, labelY - 6, tw + 4, 12);
+
+            // Vertical bar indicator (proportional to height, capped at 20px)
+            const barH = Math.min(20, Math.max(4, heightM * 1.5));
+            ctx.fillStyle = colors.stroke;
+            ctx.fillRect(labelX - 5, labelY + 6 - barH, 2, barH);
+
+            // Text
+            ctx.fillStyle = colors.stroke;
+            ctx.fillText(labelText, labelX, labelY);
+        }
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
 // Layer 5: Targets
 // ============================================================
 
@@ -1669,6 +1793,14 @@ function _drawTooltip(ctx) {
     if (uType === 'mesh_radio' || uType === 'meshtastic') {
         if (u.snr !== undefined) lines.push('SNR: ' + u.snr + ' dB');
         if (u.channel) lines.push('CH: ' + u.channel);
+    }
+    // Fixed sensor 3D placement info
+    if (uType === 'fixed' || uType === 'sensor' || uType === 'camera') {
+        if (u.height_meters != null) lines.push('ALT: ' + u.height_meters + 'm');
+        if (u.floor_level != null) lines.push('FLOOR: ' + u.floor_level);
+        if (u.mounting_type) lines.push('MOUNT: ' + u.mounting_type.toUpperCase());
+        if (u.coverage_radius_meters) lines.push('RANGE: ' + u.coverage_radius_meters + 'm');
+        if (u.coverage_cone_angle && u.coverage_cone_angle < 360) lines.push('FOV: ' + u.coverage_cone_angle + '\u00B0');
     }
 
     ctx.save();

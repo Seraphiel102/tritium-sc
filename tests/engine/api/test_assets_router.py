@@ -738,3 +738,169 @@ class TestQuickActions:
             assert data["target_id"] == "TRACK-42"
         finally:
             cleanup()
+
+
+# ---------------------------------------------------------------------------
+# 3D Sensor Placement
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSensor3DPlacement:
+    """Tests for 3D sensor placement fields: height, floor, mounting, coverage."""
+
+    def test_create_asset_with_3d_fields(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            resp = client.post("/api/assets", json={
+                "asset_id": "SENSOR-01",
+                "name": "Front Camera",
+                "asset_type": "fixed",
+                "asset_class": "camera",
+                "capabilities": ["patrol", "loiter", "recall"],
+                "home_x": 10.0,
+                "home_y": 20.0,
+                "height_meters": 3.5,
+                "floor_level": 1,
+                "mounting_type": "wall",
+                "coverage_radius_meters": 15.0,
+                "coverage_cone_angle": 90.0,
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["height_meters"] == pytest.approx(3.5)
+            assert data["floor_level"] == 1
+            assert data["mounting_type"] == "wall"
+            assert data["coverage_radius_meters"] == pytest.approx(15.0)
+            assert data["coverage_cone_angle"] == pytest.approx(90.0)
+        finally:
+            cleanup()
+
+    def test_create_asset_without_3d_fields_defaults_none(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            data = _seed_asset(client, asset_id="SENSOR-02")
+            assert data["height_meters"] is None
+            assert data["floor_level"] is None
+            assert data["mounting_type"] is None
+            assert data["coverage_radius_meters"] is None
+            assert data["coverage_cone_angle"] is None
+        finally:
+            cleanup()
+
+    def test_update_asset_3d_fields(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            _seed_asset(client)
+            resp = client.patch("/api/assets/UNIT-01", json={
+                "height_meters": 5.0,
+                "floor_level": 2,
+                "mounting_type": "ceiling",
+                "coverage_radius_meters": 25.0,
+                "coverage_cone_angle": 120.0,
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["height_meters"] == pytest.approx(5.0)
+            assert data["floor_level"] == 2
+            assert data["mounting_type"] == "ceiling"
+            assert data["coverage_radius_meters"] == pytest.approx(25.0)
+            assert data["coverage_cone_angle"] == pytest.approx(120.0)
+        finally:
+            cleanup()
+
+    def test_update_partial_3d_fields(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            _seed_asset(client)
+            # Set initial values
+            client.patch("/api/assets/UNIT-01", json={
+                "height_meters": 3.0,
+                "mounting_type": "pole",
+            })
+            # Update only one field
+            resp = client.patch("/api/assets/UNIT-01", json={
+                "height_meters": 6.0,
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["height_meters"] == pytest.approx(6.0)
+            assert data["mounting_type"] == "pole"  # unchanged
+        finally:
+            cleanup()
+
+    def test_get_asset_includes_3d_fields(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            client.post("/api/assets", json={
+                "asset_id": "SENSOR-03",
+                "name": "Pole Sensor",
+                "asset_type": "fixed",
+                "asset_class": "sensor",
+                "capabilities": ["patrol", "loiter", "recall"],
+                "height_meters": 8.0,
+                "floor_level": 0,
+                "mounting_type": "pole",
+                "coverage_radius_meters": 30.0,
+                "coverage_cone_angle": 360.0,
+            })
+            resp = client.get("/api/assets/SENSOR-03")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["height_meters"] == pytest.approx(8.0)
+            assert data["mounting_type"] == "pole"
+            assert data["coverage_radius_meters"] == pytest.approx(30.0)
+            assert data["coverage_cone_angle"] == pytest.approx(360.0)
+        finally:
+            cleanup()
+
+    def test_list_assets_includes_3d_fields(self):
+        client, cleanup = _make_app_and_client()
+        try:
+            client.post("/api/assets", json={
+                "asset_id": "SENSOR-04",
+                "name": "Ground Sensor",
+                "asset_type": "fixed",
+                "asset_class": "sensor",
+                "capabilities": ["patrol", "loiter", "recall"],
+                "height_meters": 0.5,
+                "mounting_type": "ground",
+                "coverage_radius_meters": 10.0,
+                "coverage_cone_angle": 360.0,
+            })
+            resp = client.get("/api/assets")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["height_meters"] == pytest.approx(0.5)
+            assert data[0]["mounting_type"] == "ground"
+        finally:
+            cleanup()
+
+    def test_asset_create_model_3d_fields_optional(self):
+        a = AssetCreate(asset_id="S-01", name="Test", asset_type="fixed")
+        assert a.height_meters is None
+        assert a.floor_level is None
+        assert a.mounting_type is None
+        assert a.coverage_radius_meters is None
+        assert a.coverage_cone_angle is None
+
+    def test_asset_create_model_3d_fields_set(self):
+        a = AssetCreate(
+            asset_id="S-02", name="Test", asset_type="fixed",
+            height_meters=4.0, floor_level=2, mounting_type="ceiling",
+            coverage_radius_meters=20.0, coverage_cone_angle=180.0,
+        )
+        assert a.height_meters == pytest.approx(4.0)
+        assert a.floor_level == 2
+        assert a.mounting_type == "ceiling"
+        assert a.coverage_radius_meters == pytest.approx(20.0)
+        assert a.coverage_cone_angle == pytest.approx(180.0)
+
+    def test_asset_update_model_3d_fields(self):
+        u = AssetUpdate(
+            height_meters=7.0, mounting_type="wall",
+            coverage_radius_meters=12.0, coverage_cone_angle=90.0,
+        )
+        assert u.height_meters == pytest.approx(7.0)
+        assert u.mounting_type == "wall"
+        assert u.floor_level is None  # not set

@@ -56,6 +56,23 @@ export const AssetsPanelDef = {
                         <input type="number" id="asset-height" class="panel-input" data-bind="height" value="3" min="0" max="100" step="0.1" />
                     </div>
                     <div class="panel-stat-row">
+                        <label class="panel-stat-label" for="asset-floor">FLOOR LEVEL</label>
+                        <input type="number" id="asset-floor" class="panel-input" data-bind="floor" value="0" min="-5" max="200" step="1" />
+                    </div>
+                    <div class="panel-stat-row">
+                        <label class="panel-stat-label" for="asset-mounting">MOUNTING</label>
+                        <select id="asset-mounting" class="panel-input" data-bind="mounting">
+                            <option value="wall">Wall</option>
+                            <option value="ceiling">Ceiling</option>
+                            <option value="pole">Pole</option>
+                            <option value="ground">Ground</option>
+                        </select>
+                    </div>
+                    <div class="panel-stat-row">
+                        <label class="panel-stat-label" for="asset-coverage-radius">RANGE (m)</label>
+                        <input type="number" id="asset-coverage-radius" class="panel-input" data-bind="coverage_radius" value="15" min="0" max="500" step="1" />
+                    </div>
+                    <div class="panel-stat-row">
                         <label class="panel-stat-label" for="asset-fov">FOV (deg)</label>
                         <input type="number" id="asset-fov" class="panel-input" data-bind="fov" value="90" min="1" max="360" step="1" />
                     </div>
@@ -92,6 +109,9 @@ export const AssetsPanelDef = {
         const nameInput = bodyEl.querySelector('[data-bind="name"]');
         const typeSelect = bodyEl.querySelector('[data-bind="type"]');
         const heightInput = bodyEl.querySelector('[data-bind="height"]');
+        const floorInput = bodyEl.querySelector('[data-bind="floor"]');
+        const mountingSelect = bodyEl.querySelector('[data-bind="mounting"]');
+        const coverageRadiusInput = bodyEl.querySelector('[data-bind="coverage_radius"]');
         const fovInput = bodyEl.querySelector('[data-bind="fov"]');
         const rotationInput = bodyEl.querySelector('[data-bind="rotation"]');
 
@@ -116,11 +136,15 @@ export const AssetsPanelDef = {
                 const posStr = (a.home_x != null && a.home_y != null)
                     ? `${a.home_x.toFixed(1)}, ${a.home_y.toFixed(1)}`
                     : '--';
+                const heightStr = a.height_meters != null ? `${a.height_meters}m` : '';
+                const floorStr = a.floor_level != null ? `F${a.floor_level}` : '';
+                const mountStr = a.mounting_type ? a.mounting_type.toUpperCase() : '';
+                const altLabel = [heightStr, floorStr, mountStr].filter(Boolean).join(' ');
                 return `<li class="panel-list-item asset-item" data-asset-id="${_esc(a.asset_id)}" role="option">
                     <span class="panel-icon-badge" style="color:${info.color};border-color:${info.color}">${info.icon}</span>
                     <span class="asset-item-info">
                         <span class="asset-item-name">${_esc(a.name)}</span>
-                        <span class="asset-item-meta mono" style="font-size:0.45rem;color:var(--text-ghost)">${_esc(info.label)} | ${posStr}</span>
+                        <span class="asset-item-meta mono" style="font-size:0.45rem;color:var(--text-ghost)">${_esc(info.label)} | ${posStr}${altLabel ? ' | ' + _esc(altLabel) : ''}</span>
                     </span>
                     <button class="panel-btn" data-action="edit-asset" data-asset-id="${_esc(a.asset_id)}" title="Edit">&#x270E;</button>
                     <button class="panel-btn" data-action="delete-asset" data-asset-id="${_esc(a.asset_id)}" title="Delete">&times;</button>
@@ -170,11 +194,12 @@ export const AssetsPanelDef = {
                 if (editorTitleEl) editorTitleEl.textContent = 'EDIT ASSET';
                 if (nameInput) nameInput.value = asset.name || '';
                 if (typeSelect) typeSelect.value = asset.asset_class || asset.asset_type || 'camera';
-                // Parse parameters for height/fov/rotation
-                const params = asset.current_task?.parameters || {};
-                if (heightInput) heightInput.value = params.height ?? 3;
-                if (fovInput) fovInput.value = params.fov ?? 90;
-                if (rotationInput) rotationInput.value = params.rotation ?? 0;
+                if (heightInput) heightInput.value = asset.height_meters ?? 3;
+                if (floorInput) floorInput.value = asset.floor_level ?? 0;
+                if (mountingSelect) mountingSelect.value = asset.mounting_type || 'wall';
+                if (coverageRadiusInput) coverageRadiusInput.value = asset.coverage_radius_meters ?? 15;
+                if (fovInput) fovInput.value = asset.coverage_cone_angle ?? 90;
+                if (rotationInput) rotationInput.value = asset.heading ?? 0;
                 placementPos = (asset.home_x != null && asset.home_y != null)
                     ? { x: asset.home_x, y: asset.home_y }
                     : null;
@@ -185,6 +210,9 @@ export const AssetsPanelDef = {
                 if (nameInput) nameInput.value = '';
                 if (typeSelect) typeSelect.value = 'camera';
                 if (heightInput) heightInput.value = 3;
+                if (floorInput) floorInput.value = 0;
+                if (mountingSelect) mountingSelect.value = 'wall';
+                if (coverageRadiusInput) coverageRadiusInput.value = 15;
                 if (fovInput) fovInput.value = 90;
                 if (rotationInput) rotationInput.value = 0;
                 placementPos = null;
@@ -243,6 +271,9 @@ export const AssetsPanelDef = {
             const name = nameInput?.value?.trim();
             const type = typeSelect?.value || 'camera';
             const height = parseFloat(heightInput?.value) || 3;
+            const floor = parseInt(floorInput?.value) || 0;
+            const mounting = mountingSelect?.value || 'wall';
+            const coverageRadius = parseFloat(coverageRadiusInput?.value) || 15;
             const fov = parseFloat(fovInput?.value) || 90;
             const rotation = parseFloat(rotationInput?.value) || 0;
 
@@ -265,6 +296,11 @@ export const AssetsPanelDef = {
                             position_x: posX,
                             position_y: posY,
                             heading: rotation,
+                            height_meters: height,
+                            floor_level: floor,
+                            mounting_type: mounting,
+                            coverage_radius_meters: coverageRadius,
+                            coverage_cone_angle: fov,
                         }),
                     });
                     EventBus.emit('toast:show', { message: 'Asset updated', type: 'info' });
@@ -287,6 +323,11 @@ export const AssetsPanelDef = {
                             capabilities: ['patrol', 'loiter', 'recall'],
                             home_x: posX,
                             home_y: posY,
+                            height_meters: height,
+                            floor_level: floor,
+                            mounting_type: mounting,
+                            coverage_radius_meters: coverageRadius,
+                            coverage_cone_angle: fov,
                         }),
                     });
                     if (!resp.ok) {

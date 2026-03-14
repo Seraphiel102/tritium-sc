@@ -39,6 +39,11 @@ class AssetCreate(BaseModel):
     camera_url: Optional[str] = None
     home_x: Optional[float] = 0
     home_y: Optional[float] = 0
+    height_meters: Optional[float] = None
+    floor_level: Optional[int] = None
+    mounting_type: Optional[str] = None
+    coverage_radius_meters: Optional[float] = None
+    coverage_cone_angle: Optional[float] = None
 
 
 class AssetUpdate(BaseModel):
@@ -54,6 +59,11 @@ class AssetUpdate(BaseModel):
     enabled: Optional[bool] = None
     connection_url: Optional[str] = None
     camera_url: Optional[str] = None
+    height_meters: Optional[float] = None
+    floor_level: Optional[int] = None
+    mounting_type: Optional[str] = None
+    coverage_radius_meters: Optional[float] = None
+    coverage_cone_angle: Optional[float] = None
 
 
 class AssetResponse(BaseModel):
@@ -75,6 +85,11 @@ class AssetResponse(BaseModel):
     capabilities: list[str]
     connection_url: Optional[str]
     camera_url: Optional[str]
+    height_meters: Optional[float] = None
+    floor_level: Optional[int] = None
+    mounting_type: Optional[str] = None
+    coverage_radius_meters: Optional[float] = None
+    coverage_cone_angle: Optional[float] = None
     enabled: bool
     last_heartbeat: Optional[datetime]
     current_task: Optional[dict] = None
@@ -175,6 +190,11 @@ async def list_assets(
             "capabilities": json.loads(asset.capabilities) if asset.capabilities else [],
             "connection_url": asset.connection_url,
             "camera_url": asset.camera_url,
+            "height_meters": asset.height_meters,
+            "floor_level": asset.floor_level,
+            "mounting_type": asset.mounting_type,
+            "coverage_radius_meters": asset.coverage_radius_meters,
+            "coverage_cone_angle": asset.coverage_cone_angle,
             "enabled": asset.enabled,
             "last_heartbeat": asset.last_heartbeat,
             "current_task": {
@@ -236,6 +256,11 @@ async def create_asset(asset: AssetCreate, db: AsyncSession = Depends(get_db)):
         home_y=asset.home_y,
         position_x=asset.home_x,
         position_y=asset.home_y,
+        height_meters=asset.height_meters,
+        floor_level=asset.floor_level,
+        mounting_type=asset.mounting_type,
+        coverage_radius_meters=asset.coverage_radius_meters,
+        coverage_cone_angle=asset.coverage_cone_angle,
         status="standby",
     )
 
