@@ -105,3 +105,96 @@ class PluginInterface(ABC):
     def healthy(self) -> bool:
         """Health check. Override to report actual health status."""
         return True
+
+
+class EventDrainPlugin(PluginInterface):
+    """PluginInterface with built-in EventBus subscribe/drain/unsubscribe.
+
+    Subclasses get automatic event queue management:
+    - ``configure()`` stores event_bus, app, and logger references.
+    - ``start()`` subscribes to EventBus and spawns a drain thread.
+    - ``stop()`` tears down the thread and unsubscribes.
+    - Override ``_handle_event(event)`` to process each event.
+    - Override ``_on_configure(ctx)`` for additional setup (route registration, etc.).
+    - Override ``_on_start()`` / ``_on_stop()`` for additional lifecycle work.
+
+    This eliminates ~30 lines of identical boilerplate per plugin.
+    """
+
+    def __init__(self) -> None:
+        import queue as queue_mod
+        self._event_bus: Any = None
+        self._app: Any = None
+        self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+        self._running = False
+        self._event_queue: Any = None  # queue_mod.Queue
+        self._event_thread: Any = None  # threading.Thread
+        self._queue_mod = queue_mod
+
+    # -- Override points ---------------------------------------------------
+
+    def _on_configure(self, ctx: "PluginContext") -> None:
+        """Called after base configure stores references. Override for setup."""
+
+    def _on_start(self) -> None:
+        """Called after event drain thread starts. Override for extra threads."""
+
+    def _on_stop(self) -> None:
+        """Called before event drain thread stops. Override for cleanup."""
+
+    def _handle_event(self, event: dict) -> None:
+        """Process a single EventBus event. Override in subclass."""
+
+    # -- PluginInterface lifecycle -----------------------------------------
+
+    def configure(self, ctx: "PluginContext") -> None:
+        self._event_bus = ctx.event_bus
+        self._app = ctx.app
+        self._logger = ctx.logger or self._logger
+        self._on_configure(ctx)
+
+    def start(self) -> None:
+        import threading
+        if self._running:
+            return
+        self._running = True
+
+        if self._event_bus:
+            self._event_queue = self._event_bus.subscribe()
+            self._event_thread = threading.Thread(
+                target=self._event_drain_loop,
+                daemon=True,
+                name=f"{self.plugin_id}-events",
+            )
+            self._event_thread.start()
+
+        self._on_start()
+
+    def stop(self) -> None:
+        if not self._running:
+            return
+
+        self._on_stop()
+        self._running = False
+
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=2.0)
+
+        if self._event_bus and self._event_queue:
+            self._event_bus.unsubscribe(self._event_queue)
+
+    @property
+    def healthy(self) -> bool:
+        return self._running
+
+    # -- Internal ----------------------------------------------------------
+
+    def _event_drain_loop(self) -> None:
+        while self._running:
+            try:
+                event = self._event_queue.get(timeout=0.5)
+                self._handle_event(event)
+            except self._queue_mod.Empty:
+                pass
+            except Exception as exc:
+                self._logger.error("%s event error: %s", self.plugin_id, exc)

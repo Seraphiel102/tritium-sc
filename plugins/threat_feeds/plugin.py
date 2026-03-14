@@ -15,19 +15,17 @@ from __future__ import annotations
 
 import logging
 import os
-import queue as queue_mod
-import threading
 import time
 from typing import Any, Optional
 
-from engine.plugins.base import PluginContext, PluginInterface
+from engine.plugins.base import EventDrainPlugin, PluginContext
 
 from .feeds import ThreatFeedManager, seed_default_indicators
 
 log = logging.getLogger("threat-feeds")
 
 
-class ThreatFeedPlugin(PluginInterface):
+class ThreatFeedPlugin(EventDrainPlugin):
     """Threat intelligence feed plugin.
 
     Checks BLE/WiFi devices against known-bad indicator feeds.
@@ -35,15 +33,9 @@ class ThreatFeedPlugin(PluginInterface):
     """
 
     def __init__(self) -> None:
-        self._event_bus: Any = None
-        self._app: Any = None
-        self._logger: Optional[logging.Logger] = None
+        super().__init__()
         self._manager: Optional[ThreatFeedManager] = None
         self._enrichment_pipeline: Any = None
-
-        self._running = False
-        self._event_queue: Optional[queue_mod.Queue] = None
-        self._event_thread: Optional[threading.Thread] = None
 
     # -- PluginInterface identity ----------------------------------------------
 
@@ -63,14 +55,10 @@ class ThreatFeedPlugin(PluginInterface):
     def capabilities(self) -> set[str]:
         return {"data_source", "routes", "background"}
 
-    # -- PluginInterface lifecycle ---------------------------------------------
+    # -- EventDrainPlugin overrides --------------------------------------------
 
-    def configure(self, ctx: PluginContext) -> None:
+    def _on_configure(self, ctx: PluginContext) -> None:
         """Initialize ThreatFeedManager, register routes and enrichment."""
-        self._event_bus = ctx.event_bus
-        self._app = ctx.app
-        self._logger = ctx.logger or log
-
         # Initialize manager with data directory
         data_dir = os.path.join(os.getcwd(), "data", "threat_feeds")
         self._manager = ThreatFeedManager(data_dir=data_dir)
@@ -83,7 +71,6 @@ class ThreatFeedPlugin(PluginInterface):
         # Register enrichment provider if pipeline is available
         try:
             from engine.tactical.enrichment import EnrichmentPipeline
-            # The pipeline instance may be on the plugin manager or context
             pm = ctx.plugin_manager
             if pm is not None and hasattr(pm, "enrichment_pipeline"):
                 pipeline = pm.enrichment_pipeline
@@ -105,58 +92,11 @@ class ThreatFeedPlugin(PluginInterface):
             self._manager.count,
         )
 
-    def start(self) -> None:
-        """Start background event listener for BLE/WiFi device events."""
-        if self._running:
-            return
-        self._running = True
-
-        if self._event_bus:
-            self._event_queue = self._event_bus.subscribe()
-            self._event_thread = threading.Thread(
-                target=self._event_drain_loop,
-                daemon=True,
-                name="threat-feed-events",
-            )
-            self._event_thread.start()
-
+    def _on_start(self) -> None:
         self._logger.info("Threat Feed plugin started")
 
-    def stop(self) -> None:
-        """Clean up resources."""
-        if not self._running:
-            return
-        self._running = False
-
-        if self._event_thread and self._event_thread.is_alive():
-            self._event_thread.join(timeout=2.0)
-
-        if self._event_bus and self._event_queue:
-            self._event_bus.unsubscribe(self._event_queue)
-
+    def _on_stop(self) -> None:
         self._logger.info("Threat Feed plugin stopped")
-
-    @property
-    def healthy(self) -> bool:
-        return self._running
-
-    @property
-    def manager(self) -> ThreatFeedManager | None:
-        """Expose manager for direct access (testing, CLI, etc.)."""
-        return self._manager
-
-    # -- Event handling --------------------------------------------------------
-
-    def _event_drain_loop(self) -> None:
-        """Background loop: check new devices against threat feeds."""
-        while self._running:
-            try:
-                event = self._event_queue.get(timeout=0.5)
-                self._handle_event(event)
-            except queue_mod.Empty:
-                pass
-            except Exception as exc:
-                log.error("Threat feed event error: %s", exc)
 
     def _handle_event(self, event: dict) -> None:
         """Process a single EventBus event — check new devices."""
@@ -169,6 +109,15 @@ class ThreatFeedPlugin(PluginInterface):
             self._check_wifi_event(data)
         elif event_type == "fleet.heartbeat":
             self._check_heartbeat(data)
+
+    # -- Properties ------------------------------------------------------------
+
+    @property
+    def manager(self) -> ThreatFeedManager | None:
+        """Expose manager for direct access (testing, CLI, etc.)."""
+        return self._manager
+
+    # -- Threat checking -------------------------------------------------------
 
     def _check_ble_event(self, data: dict) -> None:
         """Check BLE devices against threat feeds."""

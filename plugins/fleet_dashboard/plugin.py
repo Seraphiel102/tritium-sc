@@ -13,29 +13,22 @@ Devices not seen within PRUNE_TIMEOUT_S are pruned automatically.
 from __future__ import annotations
 
 import logging
-import queue as queue_mod
 import threading
 import time
 from typing import Any, Optional
 
-from engine.plugins.base import PluginContext, PluginInterface
+from engine.plugins.base import EventDrainPlugin, PluginContext
 
 log = logging.getLogger("fleet-dashboard")
 
 PRUNE_TIMEOUT_S = 300  # 5 minutes
 
 
-class FleetDashboardPlugin(PluginInterface):
+class FleetDashboardPlugin(EventDrainPlugin):
     """Aggregated fleet device registry with dashboard API."""
 
     def __init__(self) -> None:
-        self._event_bus: Any = None
-        self._app: Any = None
-        self._logger: Optional[logging.Logger] = None
-
-        self._running = False
-        self._event_queue: Optional[queue_mod.Queue] = None
-        self._event_thread: Optional[threading.Thread] = None
+        super().__init__()
         self._prune_thread: Optional[threading.Thread] = None
 
         # device_id -> device info dict
@@ -60,58 +53,34 @@ class FleetDashboardPlugin(PluginInterface):
     def capabilities(self) -> set[str]:
         return {"data_source", "routes", "ui"}
 
-    # -- PluginInterface lifecycle -----------------------------------------
+    # -- EventDrainPlugin overrides ----------------------------------------
 
-    def configure(self, ctx: PluginContext) -> None:
-        self._event_bus = ctx.event_bus
-        self._app = ctx.app
-        self._logger = ctx.logger or log
-
+    def _on_configure(self, ctx: PluginContext) -> None:
         self._register_routes()
         self._logger.info("Fleet Dashboard plugin configured")
 
-    def start(self) -> None:
-        if self._running:
-            return
-        self._running = True
-
-        if self._event_bus:
-            self._event_queue = self._event_bus.subscribe()
-            self._event_thread = threading.Thread(
-                target=self._event_drain_loop,
-                daemon=True,
-                name="fleet-dashboard-events",
-            )
-            self._event_thread.start()
-
+    def _on_start(self) -> None:
         self._prune_thread = threading.Thread(
             target=self._prune_loop,
             daemon=True,
             name="fleet-dashboard-prune",
         )
         self._prune_thread.start()
-
         self._logger.info("Fleet Dashboard plugin started")
 
-    def stop(self) -> None:
-        if not self._running:
-            return
-        self._running = False
-
-        if self._event_thread and self._event_thread.is_alive():
-            self._event_thread.join(timeout=2.0)
-
+    def _on_stop(self) -> None:
         if self._prune_thread and self._prune_thread.is_alive():
             self._prune_thread.join(timeout=2.0)
-
-        if self._event_bus and self._event_queue:
-            self._event_bus.unsubscribe(self._event_queue)
-
         self._logger.info("Fleet Dashboard plugin stopped")
 
-    @property
-    def healthy(self) -> bool:
-        return self._running
+    def _handle_event(self, event: dict) -> None:
+        event_type = event.get("type", event.get("event_type", ""))
+        data = event.get("data", {})
+
+        if event_type == "fleet.heartbeat":
+            self._on_heartbeat(data)
+        elif event_type == "edge:ble_update":
+            self._on_ble_update(data)
 
     # -- Device registry ---------------------------------------------------
 
@@ -176,25 +145,6 @@ class FleetDashboardPlugin(PluginInterface):
         }
 
     # -- Event handling ----------------------------------------------------
-
-    def _event_drain_loop(self) -> None:
-        while self._running:
-            try:
-                event = self._event_queue.get(timeout=0.5)
-                self._handle_event(event)
-            except queue_mod.Empty:
-                pass
-            except Exception as exc:
-                log.error("Fleet dashboard event error: %s", exc)
-
-    def _handle_event(self, event: dict) -> None:
-        event_type = event.get("type", event.get("event_type", ""))
-        data = event.get("data", {})
-
-        if event_type == "fleet.heartbeat":
-            self._on_heartbeat(data)
-        elif event_type == "edge:ble_update":
-            self._on_ble_update(data)
 
     def _on_heartbeat(self, data: dict) -> None:
         device_id = data.get("device_id", data.get("id", data.get("node_id")))
