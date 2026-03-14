@@ -218,6 +218,263 @@ class TestCameraSourceBase:
 
 
 @pytest.mark.unit
+class TestCameraSourceLifecycle:
+    """Test source start/stop lifecycle and frame generation."""
+
+    def test_source_start_stop_idempotent(self):
+        from plugins.camera_feeds.sources import CameraSourceConfig, MQTTSource
+        config = CameraSourceConfig(source_id="idem", source_type="mqtt")
+        source = MQTTSource(config)
+        source.start()
+        source.start()  # double start should be safe
+        assert source.is_running
+        source.stop()
+        source.stop()  # double stop should be safe
+        assert not source.is_running
+
+    def test_synthetic_source_start_stop(self):
+        from plugins.camera_feeds.sources import CameraSourceConfig, SyntheticSource
+        config = CameraSourceConfig(
+            source_id="syn-lc", source_type="synthetic",
+            extra={"scene_type": "bird_eye"},
+        )
+        source = SyntheticSource(config)
+        assert not source.is_running
+        source.start()
+        assert source.is_running
+        source.stop()
+        assert not source.is_running
+
+    def test_synthetic_source_get_frame_returns_ndarray(self):
+        from plugins.camera_feeds.sources import CameraSourceConfig, SyntheticSource
+        config = CameraSourceConfig(
+            source_id="syn-frame", source_type="synthetic",
+            width=320, height=240,
+            extra={"scene_type": "bird_eye"},
+        )
+        source = SyntheticSource(config)
+        source.start()
+        frame = source.get_frame()
+        # Renderer may or may not be available in test env
+        if frame is not None:
+            assert isinstance(frame, np.ndarray)
+            assert frame.shape[1] == 320
+            assert frame.shape[0] == 240
+
+    def test_synthetic_source_increments_frame_count(self):
+        from plugins.camera_feeds.sources import CameraSourceConfig, SyntheticSource
+        config = CameraSourceConfig(
+            source_id="syn-cnt", source_type="synthetic",
+            extra={"scene_type": "bird_eye"},
+        )
+        source = SyntheticSource(config)
+        source.start()
+        frame1 = source.get_frame()
+        if frame1 is not None:
+            assert source._frame_count == 1
+            source.get_frame()
+            assert source._frame_count == 2
+
+    def test_mqtt_source_frame_count_increments(self):
+        import cv2
+        from plugins.camera_feeds.sources import CameraSourceConfig, MQTTSource
+        config = CameraSourceConfig(source_id="cnt", source_type="mqtt")
+        source = MQTTSource(config)
+        source.start()
+        fake = np.zeros((10, 10, 3), dtype=np.uint8)
+        _, jpeg = cv2.imencode(".jpg", fake)
+        source.on_frame(jpeg.tobytes())
+        source.on_frame(jpeg.tobytes())
+        assert source._frame_count == 2
+
+    def test_mqtt_source_corrupt_jpeg_handled(self):
+        from plugins.camera_feeds.sources import CameraSourceConfig, MQTTSource
+        config = CameraSourceConfig(source_id="corrupt", source_type="mqtt")
+        source = MQTTSource(config)
+        source.start()
+        # Feed garbage bytes — should not crash
+        source.on_frame(b"not-a-jpeg")
+        assert source.get_frame() is None
+
+    def test_plugin_start_starts_registered_sources(self):
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.sources import CameraSourceConfig
+        plugin = CameraFeedsPlugin()
+        config = CameraSourceConfig(source_id="pre", source_type="mqtt")
+        source = plugin.register_source(config)
+        assert not source.is_running
+        plugin.start()
+        assert source.is_running
+        plugin.stop()
+        assert not source.is_running
+
+    def test_plugin_stop_stops_all_sources(self):
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.sources import CameraSourceConfig
+        plugin = CameraFeedsPlugin()
+        for i in range(3):
+            plugin.register_source(
+                CameraSourceConfig(source_id=f"s{i}", source_type="mqtt")
+            )
+        plugin.start()
+        for s in plugin._sources.values():
+            assert s.is_running
+        plugin.stop()
+        for s in plugin._sources.values():
+            assert not s.is_running
+
+    def test_remove_source_stops_it(self):
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.sources import CameraSourceConfig
+        plugin = CameraFeedsPlugin()
+        plugin.start()
+        config = CameraSourceConfig(source_id="rm-stop", source_type="mqtt")
+        source = plugin.register_source(config)
+        assert source.is_running
+        plugin.remove_source("rm-stop")
+        assert not source.is_running
+
+
+@pytest.mark.unit
+class TestCameraFeedsRoutes:
+    """Test route response patterns using TestClient."""
+
+    def test_list_sources_empty(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        resp = client.get("/api/camera-feeds/sources")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["sources"] == []
+        assert data["count"] == 0
+
+    def test_add_source_via_route(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        resp = client.post("/api/camera-feeds/sources", json={
+            "source_id": "test-route",
+            "source_type": "mqtt",
+            "name": "Route Camera",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["source_id"] == "test-route"
+        assert data["name"] == "Route Camera"
+
+    def test_add_duplicate_source_returns_409(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        body = {"source_id": "dup-route", "source_type": "mqtt"}
+        client.post("/api/camera-feeds/sources", json=body)
+        resp = client.post("/api/camera-feeds/sources", json=body)
+        assert resp.status_code == 409
+
+    def test_get_source_not_found_returns_404(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        resp = client.get("/api/camera-feeds/sources/nonexistent")
+        assert resp.status_code == 404
+
+    def test_delete_source_via_route(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        client.post("/api/camera-feeds/sources", json={
+            "source_id": "del-me", "source_type": "mqtt",
+        })
+        resp = client.delete("/api/camera-feeds/sources/del-me")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "removed"
+
+    def test_delete_missing_returns_404(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        resp = client.delete("/api/camera-feeds/sources/ghost")
+        assert resp.status_code == 404
+
+    def test_snapshot_no_frame_returns_503(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        client.post("/api/camera-feeds/sources", json={
+            "source_id": "no-frame", "source_type": "mqtt",
+        })
+        resp = client.get("/api/camera-feeds/sources/no-frame/snapshot")
+        assert resp.status_code == 503
+
+    def test_list_source_types(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        client = TestClient(app)
+
+        resp = client.get("/api/camera-feeds/sources/types")
+        assert resp.status_code == 200
+        types = resp.json()["types"]
+        assert "synthetic" in types
+        assert "mqtt" in types
+
+
+@pytest.mark.unit
 class TestCameraFeedsLoader:
     """Test the loader shim."""
 

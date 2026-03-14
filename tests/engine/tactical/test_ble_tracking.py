@@ -135,3 +135,80 @@ class TestBLETracking:
 
         tracker.update_from_ble({"mac": "AA:BB:CC:DD:EE:03"})
         assert tracker.get_target("ble_aabbccddee03").name == "AA:BB:CC:DD:EE:03"
+
+    def test_multiple_nodes_same_device_updates_not_duplicates(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Watch",
+            "rssi": -60,
+            "node_id": "edge-01",
+        })
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Watch",
+            "rssi": -45,
+            "node_id": "edge-02",
+        })
+        targets = tracker.get_all()
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.target_id == "ble_aabbccddeeff"
+        # Second update had stronger signal
+        assert t.position_confidence > 0.7
+
+    def test_mac_normalization_uppercase(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({"mac": "AA:BB:CC:DD:EE:FF", "rssi": -50})
+        assert tracker.get_target("ble_aabbccddeeff") is not None
+
+    def test_mac_normalization_lowercase(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({"mac": "aa:bb:cc:dd:ee:ff", "rssi": -50})
+        assert tracker.get_target("ble_aabbccddeeff") is not None
+
+    def test_mac_normalization_mixed_case_same_target(self):
+        tracker = TargetTracker()
+        tracker.update_from_ble({"mac": "AA:BB:CC:DD:EE:FF", "rssi": -60})
+        tracker.update_from_ble({"mac": "aa:bb:cc:dd:ee:ff", "rssi": -50})
+        assert len(tracker.get_all()) == 1
+
+    def test_rapid_updates_no_duplicates(self):
+        tracker = TargetTracker()
+        for i in range(50):
+            tracker.update_from_ble({
+                "mac": "11:22:33:44:55:66",
+                "name": "Rapid",
+                "rssi": -50 - (i % 20),
+            })
+        targets = tracker.get_all()
+        ble_targets = [t for t in targets if t.target_id == "ble_112233445566"]
+        assert len(ble_targets) == 1
+
+    def test_rapid_updates_different_macs_unique_targets(self):
+        tracker = TargetTracker()
+        for i in range(10):
+            tracker.update_from_ble({
+                "mac": f"AA:BB:CC:DD:EE:{i:02X}",
+                "rssi": -50,
+            })
+        targets = tracker.get_all()
+        assert len(targets) == 10
+
+    def test_ble_update_preserves_position_on_unknown_source(self):
+        tracker = TargetTracker()
+        # First sighting with trilateration position
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "rssi": -50,
+            "position": {"x": 5.0, "y": 10.0},
+        })
+        t = tracker.get_target("ble_aabbccddeeff")
+        assert t.position == (5.0, 10.0)
+        # Second sighting without position — should NOT reset position
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "rssi": -55,
+        })
+        t = tracker.get_target("ble_aabbccddeeff")
+        assert t.position == (5.0, 10.0)
