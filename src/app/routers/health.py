@@ -109,6 +109,14 @@ def _plugin_health(request: Request) -> dict[str, Any]:
         return {"error": "health check failed"}
 
 
+def _plugin_discovery_report(request: Request) -> dict[str, Any]:
+    """Plugin auto-discovery report from boot."""
+    report = getattr(request.app.state, "plugin_discovery_report", None)
+    if report is None:
+        return {}
+    return report
+
+
 @router.get("/api/health")
 async def health_check(request: Request):
     """Comprehensive health check endpoint.
@@ -129,6 +137,9 @@ async def health_check(request: Request):
             all_healthy = False
             break
 
+    # Plugin auto-discovery report (boot-time scan results)
+    discovery = _plugin_discovery_report(request)
+
     return {
         "status": "healthy" if all_healthy else "degraded",
         "version": "0.1.0",
@@ -136,12 +147,13 @@ async def health_check(request: Request):
         "uptime_seconds": round(uptime_seconds, 1),
         "subsystems": subsystems,
         "plugins": plugins,
+        "plugin_discovery": discovery,
         "test_baselines": {
-            "tritium_lib": 1584,
-            "tritium_sc_pytest": 1400,
+            "tritium_lib": 1822,
+            "tritium_sc_pytest": 7800,
             "tritium_sc_js": 281,
-            "tritium_sc_test_files": 565,
-            "tritium_lib_test_files": 81,
+            "tritium_sc_test_files": 672,
+            "tritium_lib_test_files": 89,
             "tritium_edge_warnings": 0,
         },
     }

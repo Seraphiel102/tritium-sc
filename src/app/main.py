@@ -315,11 +315,27 @@ def _start_plugins(app, amy_instance, sim_engine) -> object | None:
 
         mgr = PluginManager()
 
+        # Track discovery report for system health panel
+        discovery_report: dict = {
+            "scan_paths": [],
+            "files_scanned": [],
+            "plugins_found": [],
+            "plugins_registered": [],
+            "plugins_started": [],
+            "plugins_failed": [],
+            "plugins_skipped": [],
+        }
+
         # Register built-in plugins first (so external plugins can depend on them)
         try:
             from engine.simulation.npc_intelligence.plugin import NPCIntelligencePlugin
             npc_intel = NPCIntelligencePlugin()
             mgr.register(npc_intel)
+            discovery_report["plugins_registered"].append({
+                "id": npc_intel.plugin_id,
+                "name": npc_intel.name,
+                "source": "built-in",
+            })
         except Exception as e:
             logger.warning(f"NPC Intelligence plugin failed to register: {e}")
             npc_intel = None
@@ -329,16 +345,39 @@ def _start_plugins(app, amy_instance, sim_engine) -> object | None:
         scan_paths = []
         if plugins_dir.exists():
             scan_paths.append(str(plugins_dir))
+            discovery_report["scan_paths"].append(str(plugins_dir))
+
+            # Log files found in plugins directory
+            for py_file in sorted(plugins_dir.glob("*.py")):
+                if not py_file.name.startswith("_"):
+                    discovery_report["files_scanned"].append(py_file.name)
+
+        # Log scan start
+        logger.info(f"Plugin discovery: scanning {len(scan_paths)} path(s)")
 
         found = mgr.discover(paths=scan_paths)
         for p in found:
+            discovery_report["plugins_found"].append({
+                "id": p.plugin_id,
+                "name": p.name,
+                "version": p.version,
+            })
             try:
                 mgr.register(p)
+                discovery_report["plugins_registered"].append({
+                    "id": p.plugin_id,
+                    "name": p.name,
+                    "source": "directory",
+                })
             except ValueError:
-                pass  # Duplicate — already registered
+                discovery_report["plugins_skipped"].append({
+                    "id": p.plugin_id,
+                    "reason": "duplicate",
+                })
 
         if not mgr.list_plugins() and not found:
             logger.info("No plugins found")
+            app.state.plugin_discovery_report = discovery_report
             return mgr
 
         # Build context factory
@@ -370,8 +409,30 @@ def _start_plugins(app, amy_instance, sim_engine) -> object | None:
 
         started = sum(1 for v in results.values() if v)
         failed = sum(1 for v in results.values() if not v)
+
+        # Build detailed start report
+        for pid, success in results.items():
+            entry = {"id": pid}
+            plugin = mgr.get_plugin(pid)
+            if plugin:
+                entry["name"] = plugin.name
+                entry["version"] = plugin.version
+            if success:
+                discovery_report["plugins_started"].append(entry)
+            else:
+                discovery_report["plugins_failed"].append(entry)
+
+        # Log summary with individual plugin status
         if started > 0 or failed > 0:
-            logger.info(f"Plugins: {started} started, {failed} failed")
+            logger.info(f"Plugins: {started} started, {failed} failed out of {len(results)} total")
+            for pid, success in results.items():
+                status = "OK" if success else "FAILED"
+                plugin = mgr.get_plugin(pid)
+                pname = plugin.name if plugin else pid
+                logger.info(f"  [{status}] {pname} ({pid})")
+
+        # Store report for health panel
+        app.state.plugin_discovery_report = discovery_report
 
         return mgr
 
@@ -503,13 +564,25 @@ def _run_boot_self_test(app: FastAPI) -> dict:
             return {"bridge": "disabled", "broker_reachable": False, "hint": f"Start mosquitto on {host}:{port}"}
     checks.append(_check("mqtt_broker", _mqtt))
 
-    # 4. Plugin manager
+    # 4. Plugin manager + auto-discovery verification
     def _plugins():
         pm = getattr(app.state, "plugin_manager", None)
+        report = getattr(app.state, "plugin_discovery_report", None)
         if pm is not None:
             plugins = pm.list_plugins()
-            running = sum(1 for p in plugins if p.get("running", False))
-            return {"total": len(plugins), "running": running}
+            running = sum(1 for p in plugins if p.get("status") == "running")
+            result = {"total": len(plugins), "running": running}
+            if report:
+                result["files_scanned"] = len(report.get("files_scanned", []))
+                result["found"] = len(report.get("plugins_found", []))
+                result["started"] = len(report.get("plugins_started", []))
+                result["failed"] = len(report.get("plugins_failed", []))
+                # List failed plugins by name for quick diagnosis
+                failed_names = [p.get("name", p.get("id", "?"))
+                                for p in report.get("plugins_failed", [])]
+                if failed_names:
+                    result["failed_plugins"] = failed_names
+            return result
         return {"status": "not_initialized"}
     checks.append(_check("plugins", _plugins))
 

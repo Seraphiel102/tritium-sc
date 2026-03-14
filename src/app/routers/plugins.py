@@ -38,6 +38,20 @@ async def plugin_health(request: Request):
     return mgr.health_check()
 
 
+@router.get("/discovery")
+async def plugin_discovery_report(request: Request):
+    """Plugin auto-discovery report from boot.
+
+    Shows which paths were scanned, which plugin files were found,
+    which plugins were successfully loaded, registered, and started,
+    and which failed. Useful for debugging plugin loading issues.
+    """
+    report = getattr(request.app.state, "plugin_discovery_report", None)
+    if report is None:
+        return {"status": "no_report", "detail": "Plugin discovery has not run yet"}
+    return report
+
+
 @router.get("/dependencies")
 async def plugin_dependencies(request: Request):
     """Plugin dependency graph — which plugins depend on which services.

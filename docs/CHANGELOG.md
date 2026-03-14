@@ -14,6 +14,19 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 78: Maintenance — Plugin Discovery, Docs, Baselines
+
+| Change | Verification |
+|--------|-------------|
+| Plugin auto-discovery verification: detailed boot logging of scan paths, found/registered/started/failed plugins | Code review |
+| Plugin discovery report endpoint: GET /api/plugins/discovery | 2 tests (test_plugin_api.py) |
+| Health endpoint enriched with plugin_discovery boot report | Verified |
+| Boot self-test enhanced: plugin discovery stats (files_scanned, found, started, failed, failed_plugins) | Integrated |
+| Test baselines updated in /api/health response (lib 1822, SC 97 tiers, edge 0 warnings) | Verified |
+| Plugin API tests expanded: 10 tests total (2 new discovery tests) | pytest passing |
+
+---
+
 ## 2026-03-14 — Wave 77: Fleet Operations + Multi-Node Coordination
 
 | Change | Verification |
