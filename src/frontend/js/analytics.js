@@ -6,6 +6,13 @@
  * Detection trends and statistics
  */
 
+function _esc(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
 // Safe notification helper
 function notify(title, message, type = 'info') {
     if (typeof showNotification === 'function') {
@@ -155,14 +162,14 @@ function renderRecentTargets(targets) {
         const type = target.target_type === 'person' ? '👤' : '🚗';
 
         return `
-            <div class="recent-target-card" onclick="viewTargetFromAnalytics('${target.thumbnail_id}')">
-                <img src="${thumbnailUrl}" alt="Target"
+            <div class="recent-target-card" onclick="viewTargetFromAnalytics('${_esc(target.thumbnail_id)}')">
+                <img src="${_esc(thumbnailUrl)}" alt="Target"
                      onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%231a1a2e%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22%2300f0ff%22 font-size=%2230%22>?</text></svg>'">
                 <div class="recent-target-info">
                     <span>${type}</span>
-                    <span class="text-muted">CH${target.channel || '?'}</span>
+                    <span class="text-muted">CH${_esc(target.channel || '?')}</span>
                 </div>
-                ${target.label ? `<div class="recent-target-label">${target.label}</div>` : ''}
+                ${target.label ? `<div class="recent-target-label">${_esc(target.label)}</div>` : ''}
             </div>
         `;
     }).join('');

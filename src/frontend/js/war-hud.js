@@ -196,7 +196,7 @@ function warHudShowWaveBanner(waveNum, waveName, hostileCount, briefingData) {
     const el = document.getElementById('war-wave-banner');
     if (!el) return;
 
-    const name = waveName ? `: ${waveName.toUpperCase()}` : '';
+    const name = waveName ? `: ${_hudEscapeHtml(waveName.toUpperCase())}` : '';
     const hostiles = hostileCount ? ` -- ${hostileCount} HOSTILES INCOMING` : '';
 
     // Mode-specific wave label and color

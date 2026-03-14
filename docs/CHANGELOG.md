@@ -14,6 +14,51 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 32: Security + Skepticism Audit
+
+### Security — innerHTML XSS Audit (Unit Tested)
+- Audited 427 innerHTML occurrences across 43 frontend panels
+- Fixed 6 high-risk unescaped user data injection points:
+  - `map-maplibre.js`: unit name, type, fsmState in tooltip now escaped via `_escFx()`
+  - `map-maplibre.js`: upgraded `_escFx()` to also escape `&` and `"`
+  - `targets.js`: camera name/channel in dropdown now escaped via `escapeHtml()`
+  - `assets.js`: camera_url injection replaced with DOM API (`createElement('img')`) + protocol whitelist
+  - `analytics.js`: added `_esc()` function, escaped target labels and thumbnail IDs
+  - `zones.js`: added `_esc()` function, escaped zone names, types, IDs, monitored objects
+  - `war-hud.js`: wave name now escaped via `_hudEscapeHtml()`
+- Confirmed 20+ panels already use `_esc()` or `escapeHtml()` properly
+- Remaining innerHTML uses are safe (static strings, numeric values, or already-escaped data)
+
+### Security — Rate Limiting Verification (Unit Tested)
+- 5 new tests in `test_rate_limit_http.py` proving middleware works end-to-end:
+  - Sends 20 requests with limit=10, verifies first 10 pass, next 10 get 429
+  - Verifies 429 response includes `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `Retry-After` headers
+  - Confirms `/health`, `/static/*`, `/ws/*` are exempt from rate limiting
+  - Sends 100 rapid requests with limit=20, verifies exactly 20 pass and 80 blocked
+  - Verifies disabled mode allows all requests through
+
+### Skepticism — Demo Mode E2E Pipeline (Unit Tested)
+- 5 new tests in `test_demo_mode_e2e.py` proving full pipeline works:
+  - Synthetic BLE+camera data injected -> TargetTracker confirms 5+ targets
+  - Correlator fuses co-located BLE+camera into dossiers with 2+ signals
+  - DemoController can be imported, started, stopped
+  - DemoController generates targets after 3 seconds of running
+
+### Skepticism — Frontend Panel Audit (Documented)
+- Audited all 43 frontend panels for backend connectivity:
+  - 36 panels have real API backends (via routers or plugins)
+  - 7 panels use EventBus/TritiumStore only (alerts, escalation, events, minimap, sensors, target-compare, unit-inspector)
+  - All panels with API calls point to real endpoints (plugins provide edge_tracker, camera_feeds, rf_motion, automation routes)
+  - No "empty shell" panels found — all panels have functional data sources
+
+### Performance — WebSocket Load Test (Unit Tested)
+- 6 new tests in `test_websocket_load.py`:
+  - 10 concurrent connections receive 50 messages each without drops
+  - Dead connections are removed gracefully without crashing
+  - 100 concurrent broadcasts arrive without corruption
+  - 500 messages to 10 connections completes in <5s
+  - TelemetryBatcher importable
+
 ## 2026-03-14 — Wave 31: Filtering, Command Palette, Comparison, Versioning
 
 ### New Features

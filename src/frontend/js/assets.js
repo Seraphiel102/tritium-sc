@@ -190,7 +190,18 @@ function updateAssetDetail(asset) {
     // Update camera feed if available
     const cameraFeed = document.getElementById('asset-camera-feed');
     if (asset.camera_url) {
-        cameraFeed.innerHTML = `<img src="${asset.camera_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Asset camera">`;
+        // Sanitize URL: only allow http/https/data protocols
+        const safeUrl = /^(https?:|data:image\/)/.test(asset.camera_url) ? asset.camera_url : '';
+        if (safeUrl) {
+            const img = document.createElement('img');
+            img.src = safeUrl;
+            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+            img.alt = 'Asset camera';
+            cameraFeed.innerHTML = '';
+            cameraFeed.appendChild(img);
+        } else {
+            cameraFeed.innerHTML = '<span class="text-muted">Invalid feed URL</span>';
+        }
     } else {
         cameraFeed.innerHTML = '<span class="text-muted">No feed available</span>';
     }

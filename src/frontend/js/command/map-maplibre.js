@@ -3061,11 +3061,11 @@ function _createUnitMarker(id, unit, lngLat) {
         if (u) {
             const hpPct = u.maxHealth ? Math.round((u.health / u.maxHealth) * 100) : '?';
             const hpColor = hpPct > 60 ? 'var(--green)' : hpPct > 30 ? 'var(--amber)' : 'var(--magenta)';
-            const fsm = u.fsmState ? ` <span style="color:var(--text-ghost)">${u.fsmState}</span>` : '';
+            const fsm = u.fsmState ? ` <span style="color:var(--text-ghost)">${_escFx(u.fsmState)}</span>` : '';
             const kills = u.kills ? ` <span style="color:var(--amber)">${u.kills} kills</span>` : '';
             const ammo = (u.ammoCount != null && u.ammoMax) ? ` <span style="color:#aaa">${u.ammoCount}/${u.ammoMax}</span>` : '';
-            tooltip.innerHTML = `<div style="color:${ALLIANCE_COLORS[u.alliance] || 'var(--cyan)'};font-weight:bold">${u.name || id}</div>` +
-                `<div>${u.type || '?'}${fsm}</div>` +
+            tooltip.innerHTML = `<div style="color:${ALLIANCE_COLORS[u.alliance] || 'var(--cyan)'};font-weight:bold">${_escFx(u.name || id)}</div>` +
+                `<div>${_escFx(u.type || '?')}${fsm}</div>` +
                 `<div>HP: <span style="color:${hpColor}">${hpPct}%</span>${kills}${ammo}</div>`;
             tooltip.style.display = 'block';
         }
@@ -5993,7 +5993,7 @@ function _addKillFeedEntry(killerName, targetName, weaponLabel) {
 
 function _escFx(text) {
     if (!text) return '';
-    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function _weaponDisplayName(weaponType) {
