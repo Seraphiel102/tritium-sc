@@ -3700,3 +3700,179 @@
     overflow-y: auto;
     min-height: 0;
 }
+
+/* ===================================================================
+ * System Health Panel
+ * =================================================================== */
+
+.system-health-panel-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.sys-health-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    flex-shrink: 0;
+}
+
+.sys-health-content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 4px 8px;
+}
+
+/* ===================================================================
+ * Quick Start Panel
+ * =================================================================== */
+
+.quick-start-panel-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.qs-hero {
+    text-align: center;
+    padding: 16px 12px 8px;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.15);
+    flex-shrink: 0;
+}
+
+.qs-title {
+    font-family: 'Courier New', monospace;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--cyan, #00f0ff);
+    letter-spacing: 6px;
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+}
+
+.qs-subtitle {
+    font-size: 0.5rem;
+    color: var(--text-ghost, #667);
+    margin-top: 4px;
+    letter-spacing: 1px;
+}
+
+.qs-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 8px 12px;
+}
+
+.qs-section {
+    margin-bottom: 12px;
+}
+
+.qs-section-title {
+    font-size: 0.5rem;
+    font-weight: 700;
+    color: var(--cyan, #00f0ff);
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.1);
+}
+
+.qs-text {
+    font-size: 0.5rem;
+    color: var(--text-dim, #99a);
+    line-height: 1.5;
+    margin: 4px 0;
+}
+
+.qs-text kbd {
+    display: inline-block;
+    padding: 1px 4px;
+    background: rgba(0, 240, 255, 0.1);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    border-radius: 2px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.45rem;
+    color: var(--cyan, #00f0ff);
+}
+
+.qs-step {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 6px 0;
+}
+
+.qs-step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(0, 240, 255, 0.15);
+    color: var(--cyan, #00f0ff);
+    font-size: 0.5rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.qs-step-text {
+    font-size: 0.5rem;
+    color: var(--text-dim, #99a);
+    line-height: 1.4;
+}
+
+.qs-step-text strong {
+    color: var(--text-bright, #dde);
+}
+
+.qs-demo-btn {
+    display: block;
+    margin-top: 4px;
+}
+
+.qs-panel-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.qs-link-btn {
+    padding: 3px 8px;
+    background: rgba(0, 240, 255, 0.08);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    border-radius: 2px;
+    color: var(--cyan, #00f0ff);
+    font-family: 'Courier New', monospace;
+    font-size: 0.45rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.qs-link-btn:hover {
+    background: rgba(0, 240, 255, 0.2);
+    border-color: rgba(0, 240, 255, 0.5);
+}
+
+.qs-footer {
+    padding: 6px 12px;
+    border-top: 1px solid rgba(0, 240, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.qs-dismiss-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.45rem;
+    color: var(--text-ghost, #667);
+    cursor: pointer;
+}
+
+.qs-dismiss-label input[type="checkbox"] {
+    accent-color: var(--cyan, #00f0ff);
+}
