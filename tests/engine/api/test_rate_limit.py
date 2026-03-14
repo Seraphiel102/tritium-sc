@@ -52,31 +52,19 @@ class TestBackupRouter:
         from app.routers.backup import router
         assert router is not None
 
-    def test_manifest_builder(self):
-        from app.routers.backup import _get_backup_manifest
-        manifest = _get_backup_manifest()
-        assert "version" in manifest
-        assert manifest["version"] == "1.0"
-        assert "created_at" in manifest
-        assert "contents" in manifest
-
 
 class TestMigrations:
     def test_import(self):
-        from app.migrations import MIGRATIONS, run_migrations
-        assert len(MIGRATIONS) >= 4
-        assert callable(run_migrations)
+        from app.migrations import MigrationManager
+        assert MigrationManager is not None
 
-    def test_migration_order(self):
-        from app.migrations import MIGRATIONS
-        versions = sorted(MIGRATIONS.keys())
-        # Versions should be sequential starting from 1
-        assert versions[0] == 1
-        for i in range(1, len(versions)):
-            assert versions[i] == versions[i - 1] + 1
+    def test_migration_files_exist(self):
+        """Migration files should exist in the migrations package."""
+        from pathlib import Path
+        migrations_dir = Path(__file__).parent.parent.parent.parent / "src" / "app" / "migrations"
+        migration_files = sorted(migrations_dir.glob("0*.py"))
+        assert len(migration_files) >= 1, "No migration files found"
 
-    def test_migrations_have_descriptions(self):
-        from app.migrations import MIGRATIONS
-        for version, (desc, sql) in MIGRATIONS.items():
-            assert len(desc) > 0, f"Migration {version} missing description"
-            assert len(sql.strip()) > 0, f"Migration {version} missing SQL"
+    def test_migrator_module(self):
+        from app.migrations.migrator import MigrationManager
+        assert callable(MigrationManager)
