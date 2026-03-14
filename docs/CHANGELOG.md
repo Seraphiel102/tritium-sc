@@ -14,6 +14,28 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 59: Screenshot Sharing + Correlation Lines + Plugin Deps
+
+### Screenshot Sharing (Code Reviewed)
+- New `app/routers/screenshots.py` — POST/GET/DELETE /api/screenshots API
+- Base64 upload endpoint for canvas-captured screenshots
+- WebSocket broadcast of screenshot:shared events to other operators
+- Share dialog in map-screenshot.js — DOWNLOAD/SHARE/CANCEL after capture
+
+### Target Correlation Lines (Code Reviewed)
+- New `app/routers/correlations.py` — exposes TargetCorrelator records
+- Map draws dashed lines between correlated targets at Layer 5.02
+- Confidence score label at midpoint (color ranges cyan=high, yellow=low)
+- Auto-fetches correlation data every 5 seconds
+
+### Plugin Dependency Visualization (Code Reviewed)
+- GET /api/plugins/dependencies — returns graph of plugin dependencies/capabilities
+- SVG dependency graph in system health panel with nodes (plugins) and edges
+- Legend showing depends-on vs provides relationships
+- Plugin nodes colored green/red by health status
+
+---
+
 ## 2026-03-14 — Wave 56: RL Deepening + Anomaly Detection + Target Handoff
 
 ### BLE Classification Learner (Unit Tested, 14 tests)

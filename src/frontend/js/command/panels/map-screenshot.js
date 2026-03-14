@@ -77,15 +77,10 @@ export async function captureEnhancedMapScreenshot() {
 
         // Export as PNG
         const dataUrl = compositeCanvas.toDataURL('image/png');
-        const link = document.createElement('a');
         const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        link.download = `tritium-tactical-${ts}.png`;
-        link.href = dataUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
 
-        EventBus.emit('toast:show', { message: `Screenshot saved: tritium-tactical-${ts}.png`, type: 'info' });
+        // Show share dialog — download locally or share with other operators
+        _showShareDialog(dataUrl, ts, rect.width, rect.height);
 
     } catch (err) {
         console.error('[Screenshot] Enhanced capture failed:', err);
@@ -232,6 +227,136 @@ function drawClassificationBanner(ctx, width) {
     // Text
     ctx.fillStyle = 'rgba(252, 238, 10, 0.7)';
     ctx.fillText(label, x, 11);
+}
+
+/**
+ * Show a dialog offering to download or share the screenshot.
+ */
+function _showShareDialog(dataUrl, ts, width, height) {
+    // Remove any existing dialog
+    const old = document.getElementById('screenshot-share-dialog');
+    if (old) old.remove();
+
+    const dialog = document.createElement('div');
+    dialog.id = 'screenshot-share-dialog';
+    dialog.style.cssText = `
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        background: #0e0e14; border: 1px solid rgba(0,240,255,0.3);
+        padding: 20px; border-radius: 4px; z-index: 10000;
+        min-width: 320px; font-family: monospace; color: #ccc;
+        box-shadow: 0 0 30px rgba(0,240,255,0.1);
+    `;
+
+    // Thumbnail preview
+    const preview = document.createElement('img');
+    preview.src = dataUrl;
+    preview.style.cssText = 'width:100%;max-height:180px;object-fit:contain;border:1px solid #1a1a2e;margin-bottom:12px;';
+
+    const title = document.createElement('div');
+    title.textContent = 'MAP SCREENSHOT';
+    title.style.cssText = 'color:#00f0ff;font-size:12px;font-weight:bold;margin-bottom:12px;';
+
+    // Description input
+    const descLabel = document.createElement('div');
+    descLabel.textContent = 'DESCRIPTION';
+    descLabel.style.cssText = 'font-size:9px;color:#666;margin-bottom:4px;';
+
+    const descInput = document.createElement('input');
+    descInput.type = 'text';
+    descInput.placeholder = 'Optional description...';
+    descInput.style.cssText = `
+        width:100%;box-sizing:border-box;background:#12121a;border:1px solid #1a1a2e;
+        color:#ccc;padding:6px 8px;font-family:monospace;font-size:11px;
+        margin-bottom:12px;outline:none;
+    `;
+
+    // Buttons
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;';
+
+    const downloadBtn = document.createElement('button');
+    downloadBtn.textContent = 'DOWNLOAD';
+    downloadBtn.style.cssText = `
+        flex:1;background:#1a1a2e;border:1px solid rgba(0,240,255,0.3);
+        color:#00f0ff;padding:8px;cursor:pointer;font-family:monospace;font-size:11px;
+    `;
+    downloadBtn.onclick = () => {
+        const link = document.createElement('a');
+        link.download = `tritium-tactical-${ts}.png`;
+        link.href = dataUrl;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        dialog.remove();
+        EventBus.emit('toast:show', { message: `Downloaded: tritium-tactical-${ts}.png`, type: 'info' });
+    };
+
+    const shareBtn = document.createElement('button');
+    shareBtn.textContent = 'SHARE';
+    shareBtn.style.cssText = `
+        flex:1;background:#1a1a2e;border:1px solid rgba(5,255,161,0.3);
+        color:#05ffa1;padding:8px;cursor:pointer;font-family:monospace;font-size:11px;
+    `;
+    shareBtn.onclick = async () => {
+        shareBtn.textContent = 'SHARING...';
+        shareBtn.disabled = true;
+        try {
+            const resp = await fetch('/api/screenshots/base64', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    png_base64: dataUrl,
+                    operator: window._tritiumOperator || 'operator',
+                    description: descInput.value || `Tactical screenshot ${ts}`,
+                    width: width,
+                    height: height,
+                }),
+            });
+            if (resp.ok) {
+                const meta = await resp.json();
+                EventBus.emit('toast:show', {
+                    message: `Screenshot shared (${meta.screenshot_id.slice(0, 8)})`,
+                    type: 'info',
+                });
+            } else {
+                EventBus.emit('toast:show', { message: 'Share failed: ' + resp.statusText, type: 'warning' });
+            }
+        } catch (err) {
+            EventBus.emit('toast:show', { message: 'Share failed: ' + err.message, type: 'warning' });
+        }
+        dialog.remove();
+    };
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'CANCEL';
+    cancelBtn.style.cssText = `
+        flex:1;background:#1a1a2e;border:1px solid rgba(255,42,109,0.3);
+        color:#ff2a6d;padding:8px;cursor:pointer;font-family:monospace;font-size:11px;
+    `;
+    cancelBtn.onclick = () => dialog.remove();
+
+    btnRow.appendChild(downloadBtn);
+    btnRow.appendChild(shareBtn);
+    btnRow.appendChild(cancelBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(preview);
+    dialog.appendChild(descLabel);
+    dialog.appendChild(descInput);
+    dialog.appendChild(btnRow);
+    document.body.appendChild(dialog);
+
+    // Auto-focus description
+    descInput.focus();
+
+    // Close on Escape
+    const onKey = (e) => {
+        if (e.key === 'Escape') {
+            dialog.remove();
+            document.removeEventListener('keydown', onKey);
+        }
+    };
+    document.addEventListener('keydown', onKey);
 }
 
 /**

@@ -15,6 +15,128 @@ function _statusDot(healthy) {
     return `<span class="panel-dot ${cls}"></span>`;
 }
 
+/**
+ * Render an SVG dependency graph showing which plugins depend on which
+ * services/capabilities. Nodes are plugins, edges are dependency relationships.
+ */
+function _renderPluginDependencyGraph(plugins) {
+    if (!plugins || plugins.length === 0) return '';
+
+    // Build dependency map: plugin -> deps, plugin -> capabilities
+    const nodes = [];
+    const edges = [];
+    const serviceNodes = new Set();
+
+    for (const p of plugins) {
+        const pid = p.id || p.name || '?';
+        nodes.push({ id: pid, type: 'plugin', healthy: p.healthy });
+
+        // Dependencies (other plugins this one needs)
+        if (p.dependencies && p.dependencies.length > 0) {
+            for (const dep of p.dependencies) {
+                edges.push({ from: pid, to: dep, type: 'depends' });
+                serviceNodes.add(dep);
+            }
+        }
+
+        // Capabilities (services this plugin provides)
+        if (p.capabilities && p.capabilities.length > 0) {
+            for (const cap of p.capabilities) {
+                edges.push({ from: pid, to: cap, type: 'provides' });
+                serviceNodes.add(cap);
+            }
+        }
+    }
+
+    // Add service nodes that aren't also plugins
+    const pluginIds = new Set(nodes.map(n => n.id));
+    for (const svc of serviceNodes) {
+        if (!pluginIds.has(svc)) {
+            nodes.push({ id: svc, type: 'service', healthy: true });
+        }
+    }
+
+    if (edges.length === 0) {
+        return `<div style="color:var(--text-ghost);font-size:0.4rem;padding:2px 0">No dependencies declared</div>`;
+    }
+
+    // Layout: plugins on top row, services on bottom
+    const pluginNodes = nodes.filter(n => n.type === 'plugin');
+    const svcOnlyNodes = nodes.filter(n => n.type === 'service');
+
+    const totalNodes = pluginNodes.length + svcOnlyNodes.length;
+    const svgW = Math.max(300, totalNodes * 55);
+    const svgH = svcOnlyNodes.length > 0 ? 100 : 50;
+
+    // Position plugins evenly on top row
+    const positions = {};
+    const pluginSpacing = svgW / (pluginNodes.length + 1);
+    pluginNodes.forEach((n, i) => {
+        positions[n.id] = { x: pluginSpacing * (i + 1), y: 18 };
+    });
+
+    // Position services evenly on bottom row
+    if (svcOnlyNodes.length > 0) {
+        const svcSpacing = svgW / (svcOnlyNodes.length + 1);
+        svcOnlyNodes.forEach((n, i) => {
+            positions[n.id] = { x: svcSpacing * (i + 1), y: svgH - 18 };
+        });
+    }
+
+    let svg = `<svg width="100%" viewBox="0 0 ${svgW} ${svgH}" style="display:block;max-height:120px;">`;
+    svg += `<defs><marker id="arrow-dep" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="rgba(0,240,255,0.5)"/></marker>`;
+    svg += `<marker id="arrow-prov" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="rgba(5,255,161,0.3)"/></marker></defs>`;
+
+    // Draw edges
+    for (const e of edges) {
+        const from = positions[e.from];
+        const to = positions[e.to];
+        if (!from || !to) continue;
+
+        const color = e.type === 'depends' ? 'rgba(0,240,255,0.4)' : 'rgba(5,255,161,0.25)';
+        const marker = e.type === 'depends' ? 'url(#arrow-dep)' : 'url(#arrow-prov)';
+        const dash = e.type === 'provides' ? ' stroke-dasharray="3,2"' : '';
+        svg += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="1"${dash} marker-end="${marker}"/>`;
+    }
+
+    // Draw nodes
+    for (const n of nodes) {
+        const pos = positions[n.id];
+        if (!pos) continue;
+
+        const isPlugin = n.type === 'plugin';
+        const fill = isPlugin
+            ? (n.healthy ? 'rgba(5,255,161,0.15)' : 'rgba(255,42,109,0.15)')
+            : 'rgba(0,240,255,0.1)';
+        const stroke = isPlugin
+            ? (n.healthy ? 'rgba(5,255,161,0.5)' : 'rgba(255,42,109,0.5)')
+            : 'rgba(0,240,255,0.3)';
+
+        if (isPlugin) {
+            svg += `<rect x="${pos.x - 24}" y="${pos.y - 8}" width="48" height="16" rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`;
+        } else {
+            svg += `<ellipse cx="${pos.x}" cy="${pos.y}" rx="24" ry="8" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`;
+        }
+
+        // Truncate label
+        const label = _esc(n.id.length > 10 ? n.id.slice(0, 9) + '\u2026' : n.id);
+        const textColor = isPlugin ? '#ccc' : '#00f0ff';
+        svg += `<text x="${pos.x}" y="${pos.y + 3}" text-anchor="middle" fill="${textColor}" font-size="7" font-family="monospace">${label}</text>`;
+    }
+
+    svg += '</svg>';
+
+    // Legend
+    svg += `<div style="display:flex;gap:12px;font-size:0.35rem;color:var(--text-ghost);padding:2px 0">`;
+    svg += `<span><span style="color:rgba(0,240,255,0.6)">\u2500\u25B6</span> depends on</span>`;
+    svg += `<span><span style="color:rgba(5,255,161,0.5)">\u2504\u25B6</span> provides</span>`;
+    svg += `<span><span style="display:inline-block;width:8px;height:8px;background:rgba(5,255,161,0.15);border:1px solid rgba(5,255,161,0.5);border-radius:2px;vertical-align:middle"></span> plugin</span>`;
+    svg += `<span><span style="display:inline-block;width:8px;height:8px;background:rgba(0,240,255,0.1);border:1px solid rgba(0,240,255,0.3);border-radius:50%;vertical-align:middle"></span> service</span>`;
+    svg += `</div>`;
+
+    return svg;
+}
+
 export const SystemHealthPanelDef = {
     id: 'system-health',
     title: 'SYSTEM HEALTH',
@@ -116,6 +238,16 @@ export const SystemHealthPanelDef = {
                         <span class="mono" style="font-size:0.4rem;color:var(--text-ghost);margin-right:8px">${_esc(version)}</span>
                         <span class="panel-stat-value" style="color:${statusColor};min-width:30px">${statusText}</span>
                     </div>`;
+                }
+
+                // --- Plugin Dependency Graph ---
+                const hasAnyDeps = plugins.some(p => p.dependencies && p.dependencies.length > 0);
+                const hasAnyCaps = plugins.some(p => p.capabilities && p.capabilities.length > 0);
+                if (hasAnyDeps || hasAnyCaps) {
+                    html += `<div class="panel-section-label">PLUGIN DEPENDENCIES</div>`;
+                    html += `<div style="padding:4px 0;">`;
+                    html += _renderPluginDependencyGraph(plugins);
+                    html += `</div>`;
                 }
             }
 

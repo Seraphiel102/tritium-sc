@@ -559,6 +559,9 @@ function _draw() {
     // Layer 5: Targets (shapes only — labels handled separately)
     _drawTargets(ctx);
 
+    // Layer 5.02: Correlation lines (thin lines between fused targets)
+    _drawCorrelationLines(ctx);
+
     // Layer 5.05: Squad formation lines (thin lines connecting squad members)
     _drawSquadLines(ctx);
 
@@ -1733,6 +1736,107 @@ function _drawTargets(ctx) {
         }
         _drawUnit(ctx, id, unit);
     }
+}
+
+// ============================================================
+// Layer 5.02: Correlation lines between fused targets
+// ============================================================
+
+/**
+ * Draw thin lines between correlated targets with confidence score labels.
+ * Fetches correlation data from /api/correlations periodically.
+ */
+const _correlationState = {
+    records: [],
+    lastFetch: 0,
+    fetchInterval: 5000, // ms
+};
+
+function _drawCorrelationLines(ctx) {
+    const now = Date.now();
+
+    // Periodically fetch correlation data
+    if (now - _correlationState.lastFetch > _correlationState.fetchInterval) {
+        _correlationState.lastFetch = now;
+        fetch('/api/correlations')
+            .then(r => r.ok ? r.json() : { correlations: [] })
+            .then(data => {
+                _correlationState.records = data.correlations || [];
+            })
+            .catch(() => {
+                _correlationState.records = [];
+            });
+    }
+
+    const records = _correlationState.records;
+    if (!records || records.length === 0) return;
+
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    for (const corr of records) {
+        const unitA = units.get(corr.primary_id);
+        const unitB = units.get(corr.secondary_id);
+        if (!unitA || !unitB) continue;
+
+        const posA = unitA.position;
+        const posB = unitB.position;
+        if (!posA || !posB) continue;
+        if (posA.x === undefined || posB.x === undefined) continue;
+
+        const spA = worldToScreen(posA.x, posA.y);
+        const spB = worldToScreen(posB.x, posB.y);
+
+        // Skip if both off-screen
+        const cssW = _state.canvas.width / _state.dpr;
+        const cssH = _state.canvas.height / _state.dpr;
+        if ((spA.x < -50 || spA.x > cssW + 50) && (spB.x < -50 || spB.x > cssW + 50)) continue;
+
+        // Line color based on confidence (cyan=high, yellow=low)
+        const conf = corr.confidence || 0;
+        const r = Math.round(252 * (1 - conf));
+        const g = Math.round(238 * (1 - conf) + 240 * conf);
+        const b = Math.round(10 * (1 - conf) + 255 * conf);
+        const lineColor = `rgba(${r}, ${g}, ${b}, 0.5)`;
+
+        // Draw dashed line
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 1;
+        ctx.moveTo(spA.x, spA.y);
+        ctx.lineTo(spB.x, spB.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw confidence label at midpoint
+        const midX = (spA.x + spB.x) / 2;
+        const midY = (spA.y + spB.y) / 2;
+        const label = `${Math.round(conf * 100)}%`;
+
+        ctx.font = '9px monospace';
+        const metrics = ctx.measureText(label);
+        const pad = 3;
+
+        // Background pill
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.8)';
+        ctx.fillRect(
+            midX - metrics.width / 2 - pad,
+            midY - 5 - pad,
+            metrics.width + pad * 2,
+            12 + pad
+        );
+
+        // Label text
+        ctx.fillStyle = lineColor;
+        ctx.textAlign = 'center';
+        ctx.fillText(label, midX, midY + 3);
+        ctx.textAlign = 'left'; // reset
+    }
+
+    ctx.restore();
 }
 
 // ============================================================
