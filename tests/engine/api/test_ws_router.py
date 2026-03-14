@@ -729,3 +729,179 @@ class TestTakBridgePassthrough:
         finally:
             manager.broadcast = original_broadcast
             loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Tracker Broadcast — BLE and mesh targets via WebSocket
+# ---------------------------------------------------------------------------
+
+
+class TestTrackerBroadcast:
+    """_start_tracker_broadcast — BLE and mesh targets reach WebSocket clients."""
+
+    def test_ble_targets_appear_in_ws_broadcast(self):
+        """BLE targets added to the TargetTracker must be broadcast via
+        WebSocket as part of a sim_telemetry_batch message."""
+        from app.routers.ws import _start_tracker_broadcast, manager
+        from engine.tactical.target_tracker import TargetTracker
+
+        loop = asyncio.new_event_loop()
+        tracker = TargetTracker()
+
+        # Add a BLE target
+        tracker.update_from_ble({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Test BLE Device",
+            "rssi": -50,
+        })
+
+        broadcasts = []
+        original_broadcast = manager.broadcast
+
+        async def capture(msg):
+            broadcasts.append(msg)
+
+        # Add a fake WS connection so the broadcast loop fires
+        fake_ws = AsyncMock()
+        manager.active_connections.add(fake_ws)
+        manager.broadcast = capture
+        try:
+            _start_tracker_broadcast(tracker, loop, interval=0.1)
+            time.sleep(0.4)
+            loop.run_until_complete(asyncio.sleep(0.1))
+
+            telemetry_batches = [
+                m for m in broadcasts
+                if m.get("type") == "amy_sim_telemetry_batch"
+            ]
+            assert len(telemetry_batches) >= 1, (
+                f"Expected amy_sim_telemetry_batch with BLE target, got types: "
+                f"{[m.get('type') for m in broadcasts]}"
+            )
+
+            # Check the BLE target is in the batch
+            batch_data = telemetry_batches[0]["data"]
+            ble_targets = [
+                t for t in batch_data
+                if t.get("source") == "ble"
+            ]
+            assert len(ble_targets) >= 1, "BLE target not found in broadcast batch"
+            assert ble_targets[0]["asset_type"] == "ble_device"
+            assert ble_targets[0]["target_id"] == "ble_aabbccddeeff"
+            assert "position_confidence" in ble_targets[0]
+            assert "position_source" in ble_targets[0]
+        finally:
+            manager.broadcast = original_broadcast
+            manager.active_connections.discard(fake_ws)
+            loop.close()
+
+    def test_mesh_radio_targets_appear_in_ws_broadcast(self):
+        """Mesh radio targets (asset_type=mesh_radio) must be broadcast via
+        WebSocket even though they enter the tracker via update_from_simulation."""
+        from app.routers.ws import _start_tracker_broadcast, manager
+        from engine.tactical.target_tracker import TargetTracker
+
+        loop = asyncio.new_event_loop()
+        tracker = TargetTracker()
+
+        # Add a mesh radio target (same path as meshcore_bridge)
+        tracker.update_from_simulation({
+            "target_id": "meshcore_node1",
+            "name": "MeshCore Node 1",
+            "alliance": "friendly",
+            "asset_type": "mesh_radio",
+            "position": {"x": 5.0, "y": 10.0},
+            "heading": 0,
+            "speed": 0,
+            "battery": 0.85,
+            "status": "active",
+        })
+
+        broadcasts = []
+        original_broadcast = manager.broadcast
+
+        async def capture(msg):
+            broadcasts.append(msg)
+
+        fake_ws = AsyncMock()
+        manager.active_connections.add(fake_ws)
+        manager.broadcast = capture
+        try:
+            _start_tracker_broadcast(tracker, loop, interval=0.1)
+            time.sleep(0.4)
+            loop.run_until_complete(asyncio.sleep(0.1))
+
+            telemetry_batches = [
+                m for m in broadcasts
+                if m.get("type") == "amy_sim_telemetry_batch"
+            ]
+            assert len(telemetry_batches) >= 1
+
+            batch_data = telemetry_batches[0]["data"]
+            mesh_targets = [
+                t for t in batch_data
+                if t.get("asset_type") == "mesh_radio"
+            ]
+            assert len(mesh_targets) >= 1, "mesh_radio target not found in broadcast batch"
+            assert mesh_targets[0]["target_id"] == "meshcore_node1"
+            assert mesh_targets[0]["asset_type"] == "mesh_radio"
+        finally:
+            manager.broadcast = original_broadcast
+            manager.active_connections.discard(fake_ws)
+            loop.close()
+
+    def test_no_broadcast_when_no_non_sim_targets(self):
+        """When the tracker only has pure simulation targets, the tracker
+        broadcast should not emit anything (sim engine handles those)."""
+        from app.routers.ws import _start_tracker_broadcast, manager
+        from engine.tactical.target_tracker import TargetTracker
+
+        loop = asyncio.new_event_loop()
+        tracker = TargetTracker()
+
+        # Add a regular simulation target (NOT mesh_radio)
+        tracker.update_from_simulation({
+            "target_id": "rover_1",
+            "name": "Rover 1",
+            "alliance": "friendly",
+            "asset_type": "rover",
+            "position": {"x": 1.0, "y": 2.0},
+            "heading": 0,
+            "speed": 1.0,
+            "battery": 0.9,
+            "status": "active",
+        })
+
+        broadcasts = []
+        original_broadcast = manager.broadcast
+
+        async def capture(msg):
+            broadcasts.append(msg)
+
+        fake_ws = AsyncMock()
+        manager.active_connections.add(fake_ws)
+        manager.broadcast = capture
+        try:
+            _start_tracker_broadcast(tracker, loop, interval=0.1)
+            time.sleep(0.4)
+            loop.run_until_complete(asyncio.sleep(0.1))
+
+            telemetry_batches = [
+                m for m in broadcasts
+                if m.get("type") == "amy_sim_telemetry_batch"
+            ]
+            assert len(telemetry_batches) == 0, (
+                "Should not broadcast when only simulation targets exist"
+            )
+        finally:
+            manager.broadcast = original_broadcast
+            manager.active_connections.discard(fake_ws)
+            loop.close()
+
+    def test_no_crash_with_none_tracker(self):
+        """_start_tracker_broadcast should handle None tracker gracefully."""
+        from app.routers.ws import _start_tracker_broadcast
+        loop = asyncio.new_event_loop()
+        # Should not raise
+        _start_tracker_broadcast(None, loop)
+        loop.close()

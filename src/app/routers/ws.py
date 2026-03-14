@@ -73,6 +73,9 @@ _lod_system = None
 # Reference to the simulation engine for initial state sync on connect
 _sim_engine = None
 
+# Reference to the TargetTracker for broadcasting BLE/mesh targets
+_target_tracker = None
+
 
 @router.websocket("/live")
 async def websocket_live(websocket: WebSocket):
@@ -341,11 +344,14 @@ def start_amy_event_bridge(amy_commander, loop: asyncio.AbstractEventLoop):
         loop: The asyncio event loop to push events into
     """
     # Wire LOD system reference for viewport_update handling
-    global _lod_system, _sim_engine
+    global _lod_system, _sim_engine, _target_tracker
     sim_engine = getattr(amy_commander, "simulation_engine", None)
     if sim_engine is not None:
         _lod_system = getattr(sim_engine, "lod_system", None)
         _sim_engine = sim_engine
+
+    tracker = getattr(amy_commander, "target_tracker", None)
+    _target_tracker = tracker
 
     sub = amy_commander.event_bus.subscribe()
     batcher = TelemetryBatcher(loop)
@@ -426,9 +432,12 @@ def start_amy_event_bridge(amy_commander, loop: asyncio.AbstractEventLoop):
     # game_state_change event (network hiccup, late join, reconnect).
     _start_game_state_heartbeat(sim_engine, loop)
 
+    # Broadcast BLE/mesh targets from the tracker every 2s
+    _start_tracker_broadcast(tracker, loop)
+
 
 def start_headless_event_bridge(event_bus, loop: asyncio.AbstractEventLoop,
-                                simulation_engine=None):
+                                simulation_engine=None, target_tracker=None):
     """Bridge a bare EventBus to WebSocket without requiring Amy.
 
     Used in headless mode (AMY_ENABLED=false, SIMULATION_ENABLED=true) so that
@@ -438,12 +447,15 @@ def start_headless_event_bridge(event_bus, loop: asyncio.AbstractEventLoop,
         event_bus: An EventBus instance (from the standalone SimulationEngine)
         loop: The asyncio event loop to push events into
         simulation_engine: Optional SimulationEngine instance for LOD wiring
+        target_tracker: Optional TargetTracker for BLE/mesh broadcast
     """
     # Wire LOD system and engine reference for viewport_update and game state sync
-    global _lod_system, _sim_engine
+    global _lod_system, _sim_engine, _target_tracker
     if simulation_engine is not None:
         _lod_system = getattr(simulation_engine, "lod_system", None)
         _sim_engine = simulation_engine
+    if target_tracker is not None:
+        _target_tracker = target_tracker
 
     sub = event_bus.subscribe()
     batcher = TelemetryBatcher(loop)
@@ -578,6 +590,9 @@ def start_headless_event_bridge(event_bus, loop: asyncio.AbstractEventLoop,
     # Game state heartbeat for headless mode too
     _start_game_state_heartbeat(simulation_engine, loop)
 
+    # Broadcast BLE/mesh targets for headless mode too
+    _start_tracker_broadcast(target_tracker, loop)
+
 
 def _start_game_state_heartbeat(
     sim_engine, loop: asyncio.AbstractEventLoop, interval: float = 2.0
@@ -615,5 +630,50 @@ def _start_game_state_heartbeat(
 
     thread = threading.Thread(
         target=_heartbeat, daemon=True, name="game-state-heartbeat"
+    )
+    thread.start()
+
+
+def _start_tracker_broadcast(
+    tracker, loop: asyncio.AbstractEventLoop, interval: float = 2.0
+) -> None:
+    """Broadcast BLE and mesh targets from the TargetTracker every ``interval`` seconds.
+
+    The SimulationEngine only publishes sim_telemetry_batch for simulation targets.
+    BLE devices (source="ble") and mesh radios (asset_type="mesh_radio") enter the
+    tracker via update_from_ble() and update_from_simulation() respectively, but
+    never appear in the sim telemetry stream.  This heartbeat ensures those targets
+    reach WebSocket clients as part of the telemetry batch.
+    """
+    if tracker is None:
+        return
+
+    # Sources/asset_types that are NOT covered by sim_telemetry_batch
+    _NON_SIM_SOURCES = {"ble", "yolo", "manual"}
+    _MESH_ASSET_TYPES = {"mesh_radio", "meshtastic"}
+
+    def _broadcast():
+        while True:
+            _time.sleep(interval)
+            if not manager.active_connections:
+                continue
+            try:
+                all_targets = tracker.get_all()
+                non_sim = [
+                    t for t in all_targets
+                    if t.source in _NON_SIM_SOURCES
+                    or t.asset_type in _MESH_ASSET_TYPES
+                ]
+                if not non_sim:
+                    continue
+                batch = [t.to_dict() for t in non_sim]
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_amy_event("sim_telemetry_batch", batch), loop
+                )
+            except Exception:
+                pass  # Tracker not ready or shutting down
+
+    thread = threading.Thread(
+        target=_broadcast, daemon=True, name="tracker-broadcast"
     )
     thread.start()
