@@ -1062,6 +1062,9 @@ class Commander:
         self._health_warning_times: dict = {}
         self._health_warning_interval: float = 10.0
 
+        # Instinct layer (L2 autonomous responses)
+        self.instinct_layer = None
+
         self._running = False
         self._shutdown_called = False
 
@@ -1988,6 +1991,12 @@ class Commander:
         self.thinking.start()
         print("  Thinking thread: running")
 
+        # Start instinct layer (L2 autonomous responses)
+        from .brain.instinct import InstinctLayer
+        self.instinct_layer = InstinctLayer(self)
+        self.instinct_layer.start()
+        print("  Instinct layer: running")
+
         if self.motor is not None:
             self.motor.set_program(self._default_motor())
 
@@ -2319,6 +2328,8 @@ class Commander:
         self._auto_chat_stop.set()
         if self.thinking:
             self.thinking.stop()
+        if self.instinct_layer:
+            self.instinct_layer.stop()
         self.memory.add_event("shutdown", "Amy shutting down")
         self.memory.save()
         self.transcript.close()

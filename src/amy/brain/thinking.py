@@ -85,6 +85,8 @@ Usually ONE action is sufficient. Available actions:
 - patrol("target_id", "[[x1,y1],[x2,y2],...]") -- assign patrol route to a unit
 - escalate("target_id", "level") -- manually set threat level (unknown/suspicious/hostile)
 - clear_threat("target_id") -- clear a threat classification
+- investigate("target_id") -- open an intelligence investigation on a target
+- watch("mac_address") -- add a BLE MAC to the surveillance watch list
 
 RULES:
 - Most of the time, use think() -- internal reflection is free and natural.
@@ -964,6 +966,53 @@ class ThinkingThread:
                 commander.event_bus.publish("squad_scatter", res)
             else:
                 commander.sensorium.push("thought", f"Scatter failed: {res.get('error', 'unknown error')}")
+
+        elif result.action == "investigate":
+            target_id = result.params[0]
+            inv_engine = getattr(commander, "investigation_engine", None)
+            dossier_mgr = getattr(commander, "dossier_manager", None)
+            if inv_engine is None or dossier_mgr is None:
+                commander.sensorium.push("thought", "No investigation engine available")
+                return
+            dossier = dossier_mgr.get_dossier_for_target(target_id)
+            if dossier is None:
+                commander.sensorium.push("thought", f"No dossier found for {target_id}")
+                return
+            dossier_id = dossier.get("dossier_id", "")
+            dossier_name = dossier.get("name", target_id[:8])
+            inv = inv_engine.auto_investigate_threat(
+                dossier_id, "high", dossier_name=dossier_name,
+            )
+            if inv is not None:
+                commander.sensorium.push(
+                    "thought",
+                    f"Opened investigation {inv.inv_id[:8]} on {dossier_name}",
+                )
+                commander.event_bus.publish("investigation_created", {
+                    "inv_id": inv.inv_id,
+                    "target_id": target_id,
+                })
+            else:
+                commander.sensorium.push(
+                    "thought",
+                    f"Investigation already exists for {dossier_name}",
+                )
+
+        elif result.action == "watch":
+            mac = result.params[0]
+            instinct = getattr(commander, "instinct_layer", None)
+            if instinct is not None:
+                instinct.add_to_watch_list(mac)
+                commander.sensorium.push(
+                    "thought",
+                    f"Added {mac} to BLE watch list",
+                )
+                commander.event_bus.publish("watchlist_add", {
+                    "mac": mac.upper(),
+                    "reason": "manual",
+                })
+            else:
+                commander.sensorium.push("thought", "No instinct layer available")
 
     def _handle_look_at(self, direction: str) -> None:
         commander = self._commander

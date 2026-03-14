@@ -66,6 +66,8 @@ VALID_ACTIONS: dict[str, tuple[int, int, list[type]]] = {
     "squad_dispatch":    (3, 3, [str, float, float]),
     "rally":             (2, 3, [float, float, str]),
     "scatter":           (1, 1, [str]),
+    "investigate":       (1, 1, [str]),  # open investigation on a target
+    "watch":             (1, 1, [str]),  # add BLE MAC to watch list
     # Device commands (dispatched by devices router)
     "sensor_enable":     (1, 1, [str]),
     "sensor_disable":    (1, 1, [str]),
