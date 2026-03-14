@@ -14,6 +14,45 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 38: Multi-Camera, Target Merge, Amy Monologue, Export Scheduler
+
+### Multi-Camera View Panel (Build Verified)
+- New `multi-camera.js` panel — grid layout showing 2x2 or 3x3 camera feeds simultaneously
+- Per-camera detection overlays with YOLO bounding boxes
+- Click any feed to expand to full size, close to return to grid
+- Grid size selector (1x1, 2x2, 3x3), detection overlay toggle
+- MJPEG streams from existing synthetic camera API
+
+### Target Merge Workflow Panel (Build Verified)
+- New `target-merge.js` panel — merge two targets into one dossier
+- Side-by-side comparison table showing primary vs secondary vs merged values
+- Preview merge result before confirming
+- Calls existing `/api/dossiers/merge` endpoint
+- Emits `target:merged` event for map/store updates
+- Listens for `target:merge-request` from target-compare panel
+
+### Amy Conversation Panel (Build Verified)
+- New `amy-conversation.js` panel — full inner monologue with timestamps
+- 4-layer cognitive activity bars (L1 Reflex through L4 Deliberation)
+- SSE connection to `/api/amy/thoughts` for real-time thought stream
+- Chat input to ask Amy tactical questions via `/api/amy/chat`
+- Color-coded entries: thoughts (cyan), actions (magenta), mood (yellow), user (green)
+
+### Data Export Scheduler Panel (Build Verified)
+- New `export-scheduler.js` panel — configure automatic periodic exports
+- Schedule types: targets CSV/JSON/GeoJSON, dossier summary, investigation reports
+- Intervals: hourly, daily, weekly
+- Per-schedule toggle (active/paused), run-now button, delete
+- Export history log with success/fail status
+- Quick "Export Now" button for immediate targets CSV download
+- Schedules persist in localStorage
+
+### CSS Styles (Build Verified)
+- Added complete CSS for all four new panels in `tritium.css`
+- Follows cyberpunk aesthetic with proper MJPEG layout rules
+
+---
+
 ## 2026-03-14 — Wave 37: Security Hardening + CORS + CSP + API Keys
 
 ### CORS Hardening (Unit Tested)
