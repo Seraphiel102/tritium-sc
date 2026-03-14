@@ -310,6 +310,136 @@ async def get_investigation_graph(inv_id: str):
     }
 
 
+@router.get("/{inv_id}/map-entities")
+async def get_investigation_map_entities(inv_id: str, request: Request):
+    """Return investigation entities with map positions for tactical map overlay.
+
+    For each entity in the investigation, attempts to find its current
+    position from the TargetTracker.  Returns entities with lat/lng so
+    the frontend can render them with a distinct investigation border.
+    """
+    engine = _get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Investigation engine unavailable")
+
+    inv = engine.get(inv_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    # Try to get target tracker for position data
+    tracker = None
+    amy = getattr(request.app.state, "amy", None)
+    if amy is not None:
+        tracker = getattr(amy, "target_tracker", None)
+
+    map_entities = []
+    for eid in inv.all_entity_ids():
+        entity = {
+            "entity_id": eid,
+            "is_seed": eid in inv.seed_entities,
+            "inv_id": inv_id,
+            "inv_title": inv.title,
+            "inv_status": inv.status,
+        }
+
+        # Try to find position from tracker
+        if tracker is not None:
+            target = tracker.get(eid)
+            if target is not None:
+                pos = getattr(target, "position", None)
+                if pos is not None:
+                    entity["lat"] = getattr(pos, "lat", None) or pos.get("lat") if isinstance(pos, dict) else getattr(pos, "lat", None)
+                    entity["lng"] = getattr(pos, "lng", None) or pos.get("lng") if isinstance(pos, dict) else getattr(pos, "lng", None)
+                entity["name"] = getattr(target, "name", eid)
+                entity["classification"] = getattr(target, "classification", "unknown")
+                entity["alliance"] = getattr(target, "alliance", "unknown")
+                entity["source"] = getattr(target, "source", "unknown")
+
+        # Enrich with dossier data
+        if engine._dossier_store is not None:
+            dossier = engine._dossier_store.get_dossier(eid)
+            if dossier:
+                entity.setdefault("name", dossier.get("name", eid))
+                entity["entity_type"] = dossier.get("entity_type", "unknown")
+                entity["threat_level"] = dossier.get("threat_level", "none")
+                # Dossier may have last known position
+                if "lat" not in entity:
+                    last_pos = dossier.get("last_position")
+                    if last_pos and isinstance(last_pos, dict):
+                        entity["lat"] = last_pos.get("lat")
+                        entity["lng"] = last_pos.get("lng")
+
+        # Only include entities that have a position
+        if entity.get("lat") is not None and entity.get("lng") is not None:
+            map_entities.append(entity)
+
+    return {
+        "inv_id": inv_id,
+        "title": inv.title,
+        "status": inv.status,
+        "entities": map_entities,
+        "total_entities": len(inv.all_entity_ids()),
+        "positioned_entities": len(map_entities),
+    }
+
+
+@router.get("/active/map-overlay")
+async def get_active_investigation_overlay(request: Request):
+    """Return map overlay data for all open investigations.
+
+    Combines entities from all open investigations into a single overlay
+    suitable for rendering on the tactical map.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return {"investigations": [], "entities": []}
+
+    investigations = engine.list_investigations(status="open", limit=100, offset=0)
+    if not investigations:
+        return {"investigations": [], "entities": []}
+
+    tracker = None
+    amy = getattr(request.app.state, "amy", None)
+    if amy is not None:
+        tracker = getattr(amy, "target_tracker", None)
+
+    all_entities = []
+    inv_summaries = []
+
+    for inv in investigations:
+        inv_summaries.append({
+            "inv_id": inv.inv_id,
+            "title": inv.title,
+            "entity_count": len(inv.all_entity_ids()),
+        })
+
+        for eid in inv.all_entity_ids():
+            entity = {
+                "entity_id": eid,
+                "is_seed": eid in inv.seed_entities,
+                "inv_id": inv.inv_id,
+                "inv_title": inv.title,
+            }
+
+            if tracker is not None:
+                target = tracker.get(eid)
+                if target is not None:
+                    pos = getattr(target, "position", None)
+                    if pos is not None:
+                        entity["lat"] = getattr(pos, "lat", None) or (pos.get("lat") if isinstance(pos, dict) else None)
+                        entity["lng"] = getattr(pos, "lng", None) or (pos.get("lng") if isinstance(pos, dict) else None)
+                    entity["name"] = getattr(target, "name", eid)
+                    entity["alliance"] = getattr(target, "alliance", "unknown")
+
+            if entity.get("lat") is not None and entity.get("lng") is not None:
+                all_entities.append(entity)
+
+    return {
+        "investigations": inv_summaries,
+        "entities": all_entities,
+    }
+
+
 @router.post("/{inv_id}/filter/type")
 async def filter_by_type(
     inv_id: str,
