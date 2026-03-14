@@ -14,6 +14,30 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-13 — Wave 13: Codebase Audit & Cleanup
+
+### Test Suite Cleanup
+| Change | Verification |
+|--------|-------------|
+| Fix `test_feature_flows.js` broken paths (`frontend/` -> `src/frontend/`) | Integration Tested |
+| Fix `test_feature_flows.js` patrol assertions to match refactored source (patrol-all, recall-all) | Integration Tested |
+| Fix `test_feature_flows.js` spawn radius assertion to match engine value (0.40-0.65) | Integration Tested |
+| Fix `test_map_overlays_new.js` showCoverPoints default from true to false | Integration Tested |
+| Register 15 missing JS test files in test.sh tier 3 (92 total, up from 77) | Integration Tested |
+
+### Audit Results
+| Check | Status |
+|-------|--------|
+| Python syntax: all 346 files | PASS |
+| Python imports: `from app.main import app` | PASS |
+| Unit tests: 8406 passed, 79 skipped, 0 failed | PASS |
+| JS tests: all 92 files pass | PASS |
+| All routers registered in main.py | PASS |
+| Plugin discovery and PluginManager wiring | PASS |
+| No circular imports | PASS |
+
+---
+
 ## 2026-03-13 — Wave 12: WiFi Geolocation, ReID, Threat Feeds, Trilateration & Reporting
 
 ### WiFi BSSID Geolocation Enrichment
@@ -57,6 +81,25 @@ Changes tracked with verification status. All changes on `dev` branch.
 |--------|-------------|
 | Unified test reporting system with coverage gap analysis and trend tracking | Integration Tested |
 | Heatmap, RF motion, and test reporting wired into main app lifecycle | Integration Tested |
+
+---
+
+## 2026-03-13 — Wave 11: Notification System & Geolocation Enrichment
+
+### Notification Manager
+| Change | Verification |
+|--------|-------------|
+| `NotificationManager` with EventBus subscription and WebSocket broadcast | Integration Tested |
+| Thread-safe notification storage with severity levels and source tracking | Integration Tested |
+| REST API: `GET /api/notifications`, `POST /api/notifications/read`, `GET /api/notifications/count` | Integration Tested |
+| Notifications panel in Command Center with real-time updates | Integration Tested |
+| WebSocket `notification:new` event type wired into EventBus bridge | Integration Tested |
+
+### WiFi BSSID Geolocation
+| Change | Verification |
+|--------|-------------|
+| WiFi BSSID geolocation enrichment provider with local SQLite cache | Integration Tested |
+| Enriches BLE/WiFi sightings with approximate lat/lng from known BSSID databases | Integration Tested |
 
 ---
 
@@ -395,9 +438,9 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 | Suite | Count | Status | Date |
 |-------|-------|--------|------|
-| ./test.sh fast | 81 tiers | All passing | 2026-03-13 |
-| Unit tests (tier 2) | ~7845 | All passing | 2026-03-13 |
-| JS tests (tier 3) | 281+ | All passing | 2026-03-13 |
+| ./test.sh fast | 96 tiers | All passing | 2026-03-13 |
+| Unit tests (tier 2) | 8406 | All passing | 2026-03-13 |
+| JS tests (tier 3) | 92 files | All passing | 2026-03-13 |
 | ROS2 tests (tier 8b) | 125 | All passing | 2026-03-13 |
 
 ## Known Issues
