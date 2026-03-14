@@ -14,6 +14,20 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 26: WS Compression, Clustering, Bookmarks, Ontology
+
+### New Features
+| Change | Verification |
+|--------|-------------|
+| TargetUpdateBatcher: deduplicates WS target updates by target_id, 5-10x bandwidth reduction | Unit Tested |
+| Target clustering: `GET /api/targets/clusters?zoom=N` spatial grouping for map readability | Unit Tested |
+| Frontend TargetClusterer module: client-side grid clustering with styled cluster markers | Unit Tested |
+| Ontology schema: `GET /api/v1/ontology/schema` exports full entity/action/event schema as JSON | Unit Tested |
+| Map bookmarks: `GET/POST/PUT/DELETE /api/bookmarks` with frontend panel for saved map positions | Unit Tested |
+| 2319 Python tests passing (1507 engine + 812 amy), 92 JS test tiers passing | Integration Tested |
+
+---
+
 ## 2026-03-14 — Wave 25: Maintenance & Quality
 
 ### New Features
