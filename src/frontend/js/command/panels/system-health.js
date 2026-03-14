@@ -235,8 +235,28 @@ export const SystemHealthPanelDef = {
                 <span class="panel-stat-label">BRIDGE</span>
                 <span class="panel-stat-value" style="color:${bridgeColor}">${_esc(mqttBridge.toUpperCase())}</span>
             </div>`;
-            if (!brokerReachable && mqttHint) {
-                html += `<div style="padding:2px 8px;font-size:0.35rem;color:var(--amber);font-family:monospace;word-break:break-word">${_esc(mqttHint)}</div>`;
+            if (!brokerReachable) {
+                if (mqttHint) {
+                    html += `<div style="padding:2px 8px;font-size:0.35rem;color:var(--amber);font-family:monospace;word-break:break-word">${_esc(mqttHint)}</div>`;
+                }
+                html += `<div style="padding:4px 8px">
+                    <button class="panel-action-btn panel-action-btn-primary" data-action="start-mqtt" style="font-size:0.35rem;padding:2px 8px">START MQTT BROKER</button>
+                </div>`;
+            }
+
+            // --- Meshtastic Bridge ---
+            const meshBridge = subsystems.meshtastic || 'disabled';
+            const meshConnected = meshBridge === 'connected';
+            const meshColor = meshConnected ? 'var(--green)' : 'var(--text-ghost)';
+            html += `<div class="panel-section-label">MESHTASTIC</div>`;
+            html += `<div class="panel-stat-row">
+                <span class="panel-stat-label">BRIDGE</span>
+                <span class="panel-stat-value" style="color:${meshColor}">${_esc(meshBridge.toUpperCase())}</span>
+            </div>`;
+            if (!meshConnected) {
+                html += `<div style="padding:4px 8px">
+                    <button class="panel-action-btn" data-action="start-mesh-bridge" style="font-size:0.35rem;padding:2px 8px">START BRIDGE</button>
+                </div>`;
             }
 
             // --- Plugins ---
@@ -392,6 +412,47 @@ export const SystemHealthPanelDef = {
         }
 
         bodyEl.querySelector('[data-action="refresh-health"]')?.addEventListener('click', fetchHealth);
+
+        // Service start actions (delegated)
+        bodyEl.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            const action = btn.dataset.action;
+
+            if (action === 'start-mqtt') {
+                btn.disabled = true;
+                btn.textContent = 'STARTING...';
+                try {
+                    const resp = await fetch('/api/deployment/services/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ service: 'mqtt_broker' }),
+                    });
+                    const data = await resp.json();
+                    btn.textContent = data.ok ? 'STARTED' : 'FAILED';
+                    setTimeout(fetchHealth, 1500);
+                } catch (_) {
+                    btn.textContent = 'ERROR';
+                }
+            }
+
+            if (action === 'start-mesh-bridge') {
+                btn.disabled = true;
+                btn.textContent = 'STARTING...';
+                try {
+                    const resp = await fetch('/api/deployment/services/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ service: 'meshtastic_bridge' }),
+                    });
+                    const data = await resp.json();
+                    btn.textContent = data.ok ? `STARTED (PID ${data.pid || '?'})` : 'FAILED';
+                    setTimeout(fetchHealth, 1500);
+                } catch (_) {
+                    btn.textContent = 'ERROR';
+                }
+            }
+        });
 
         // Initial fetch
         fetchHealth();

@@ -14,6 +14,20 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 67: Deployment Readiness
+
+| Change | Verification |
+|--------|-------------|
+| Deployment status API (`/api/deployment/services`) — detect, start, stop MQTT broker, Meshtastic bridge, Ollama, edge fleet server | Unit Tested (9 tests) |
+| System requirements API (`/api/deployment/requirements`) — Python version, system packages, hostname | Unit Tested |
+| Deployment status panel — live service overview with start/stop buttons, uptime, PID, port display | Code Reviewed |
+| MQTT auto-start button in system health panel — one-click start when broker is not running | Code Reviewed |
+| Meshtastic bridge auto-start button in system health panel — launch bridge as background process | Code Reviewed |
+| Quick deploy script (`scripts/deploy.sh`) — installs deps, creates venv, starts mosquitto, creates systemd service | Code Reviewed |
+| Deploy panel registered in System menu bar category | Code Reviewed |
+
+---
+
 ## 2026-03-14 — Wave 66: Boot Self-Test + MQTT Health Check
 
 | Change | Verification |

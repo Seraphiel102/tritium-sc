@@ -88,6 +88,7 @@ from app.routers.screenshots import router as screenshots_router
 from app.routers.correlations import router as correlations_router
 from app.routers.voice import router as voice_router
 from app.routers.self_test import router as self_test_router
+from app.routers.deployment import router as deployment_router
 
 
 # ---------------------------------------------------------------------------
@@ -1149,6 +1150,7 @@ app.include_router(screenshots_router)
 app.include_router(correlations_router)
 app.include_router(voice_router)
 app.include_router(self_test_router)
+app.include_router(deployment_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"

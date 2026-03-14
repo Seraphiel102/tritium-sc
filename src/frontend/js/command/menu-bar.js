@@ -64,7 +64,7 @@ const PANEL_CATEGORIES = {
     'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'assets'],
     'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs'],
     'Simulation':    ['game', 'battle-stats', 'replay', 'scenarios'],
-    'System':        ['system', 'system-health', 'testing', 'export-scheduler', 'events', 'videos', 'quick-start', 'setup-wizard'],
+    'System':        ['system', 'system-health', 'deployment', 'testing', 'export-scheduler', 'events', 'videos', 'quick-start', 'setup-wizard'],
 };
 
 function _viewMenuItems(panelManager) {

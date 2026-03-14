@@ -74,6 +74,7 @@ import { WatchlistPanelDef } from './panels/watchlist.js';
 import { MapSharePanelDef, checkShareHash } from './panels/map-share.js';
 import { KeyboardMacrosPanelDef } from './panels/keyboard-macros.js';
 import { GridOverlayPanelDef, toggleGridOverlay } from './panels/grid-overlay.js';
+import { DeploymentPanelDef } from './panels/deployment.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
@@ -579,6 +580,7 @@ function initPanelSystem(container) {
     panelManager.register(MapSharePanelDef);
     panelManager.register(KeyboardMacrosPanelDef);
     panelManager.register(GridOverlayPanelDef);
+    panelManager.register(DeploymentPanelDef);
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
     initScreenshotHotkey();
