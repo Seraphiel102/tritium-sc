@@ -249,6 +249,11 @@ def _sitrep_to_text(sitrep: dict) -> str:
         lines.append(f"AMY ASSESSMENT: {sitrep['amy_assessment']}")
         lines.append("")
 
+    # LLM narrative summary (if available)
+    if sitrep.get("llm_summary"):
+        lines.append(f"NARRATIVE SUMMARY: {sitrep['llm_summary']}")
+        lines.append("")
+
     lines.append("=" * 60)
     lines.append("  END SITREP")
     lines.append("=" * 60)
@@ -256,8 +261,61 @@ def _sitrep_to_text(sitrep: dict) -> str:
     return "\n".join(lines)
 
 
+def _llm_enhance_sitrep(sitrep: dict) -> Optional[str]:
+    """Optionally enhance SITREP with an LLM-generated natural language summary.
+
+    Uses qwen2.5:3b via OllamaFleet to generate a narrative paragraph
+    from the structured SITREP data. Falls back gracefully if no LLM
+    is available.
+
+    Returns:
+        Natural language summary string, or None if unavailable.
+    """
+    try:
+        from engine.inference.fleet import OllamaFleet
+        fleet = OllamaFleet(auto_discover=False)
+        if fleet.count == 0:
+            return None
+
+        # Try qwen2.5:3b first, fall back to any available model
+        model = "qwen2.5:3b"
+        if not fleet.hosts_with_model(model):
+            # Try larger qwen
+            model = "qwen2.5:7b"
+            if not fleet.hosts_with_model(model):
+                return None
+
+        # Build a structured prompt
+        targets = sitrep.get("targets", {})
+        fleet_status = sitrep.get("fleet", {})
+        threat_level = sitrep.get("threat_level", "UNKNOWN")
+
+        prompt = (
+            "You are a military intelligence analyst. Write a concise 2-3 sentence "
+            "situation summary based on this data. Be professional and direct. "
+            "Do not use markdown formatting.\n\n"
+            f"Threat Level: {threat_level}\n"
+            f"Total Targets: {targets.get('total', 0)}\n"
+            f"By Alliance: {targets.get('by_alliance', {})}\n"
+            f"By Type: {targets.get('by_type', {})}\n"
+            f"Active Threats: {targets.get('threat_count', 0)}\n"
+            f"Fleet Nodes Online: {fleet_status.get('online', 0)}/{fleet_status.get('total_nodes', 0)}\n"
+            f"Geofence Breaches: {sitrep.get('geofence', {}).get('breach_count', 0)}\n"
+        )
+
+        response = fleet.generate(model=model, prompt=prompt, timeout=15.0)
+        if response and len(response.strip()) > 10:
+            return response.strip()
+        return None
+    except Exception:
+        return None
+
+
 @router.get("/sitrep")
-async def get_sitrep(request: Request):
+async def get_sitrep(
+    request: Request,
+    enhance: bool = Query(False, description="Add LLM-generated narrative summary"),
+):
     """Generate a tactical situation report (SITREP).
 
     Returns a JSON summary of:
@@ -267,15 +325,30 @@ async def get_sitrep(request: Request):
     - Geofence zone breaches
     - Amy's current assessment
     - Overall threat level (GREEN/YELLOW/ORANGE/RED)
+
+    Pass ?enhance=true to include an LLM-generated natural language summary.
     """
-    return _build_sitrep(request)
+    sitrep = _build_sitrep(request)
+    if enhance:
+        llm_summary = _llm_enhance_sitrep(sitrep)
+        if llm_summary:
+            sitrep["llm_summary"] = llm_summary
+    return sitrep
 
 
 @router.get("/sitrep/text", response_class=PlainTextResponse)
-async def get_sitrep_text(request: Request):
+async def get_sitrep_text(
+    request: Request,
+    enhance: bool = Query(False, description="Add LLM-generated narrative summary"),
+):
     """Generate a human-readable plain text SITREP.
 
     Suitable for sending via MQTT, TAK, radio, or printing.
+    Pass ?enhance=true to include an LLM-generated narrative paragraph.
     """
     sitrep = _build_sitrep(request)
+    if enhance:
+        llm_summary = _llm_enhance_sitrep(sitrep)
+        if llm_summary:
+            sitrep["llm_summary"] = llm_summary
     return _sitrep_to_text(sitrep)
