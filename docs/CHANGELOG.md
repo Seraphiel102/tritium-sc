@@ -14,6 +14,18 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 70: MILESTONE — Movement Analytics, Amy Briefing, Perf Benchmarks
+
+| Change | Verification |
+|--------|-------------|
+| Movement analytics router: `GET /api/analytics/movement/{target_id}` — velocity, direction histogram, dwell time per zone, activity periods | Unit Tested (15 tests) |
+| Fleet movement endpoint: `GET /api/analytics/movement` — fleet-wide aggregates | Unit Tested |
+| Amy daily briefing: `POST /api/amy/briefing` — LLM (Ollama) + template fallback, 5-min cache | Unit Tested (8 tests) |
+| API latency benchmarks: 20 most important endpoints, all must respond in <200ms | Unit Tested (21 tests) |
+| Registered 2 new routers in main.py (movement_analytics, amy_briefing) | Verified |
+
+---
+
 ## 2026-03-14 — Wave 67: Deployment Readiness
 
 | Change | Verification |
