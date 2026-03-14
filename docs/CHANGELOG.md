@@ -14,6 +14,39 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 52: Security Audit, RL Training Store, Feedback, LLM SITREP
+
+### Security Audit: Classification Override (Unit Tested, 16 tests)
+- 16 security tests for `POST /api/targets/{id}/classify`
+- Validates alliance whitelist: rejects invalid values, SQL injection, case-sensitivity
+- Validates device_type whitelist: rejects XSS, SQL injection, path traversal, oversized values
+- Edge cases: no-fields, target-not-found, null values, tracker-unavailable, body/path mismatch
+
+### RL Training Data Store (Unit Tested, 12 tests)
+- New `engine/intelligence/training_store.py` — SQLite-backed ML data collection
+- Logs every correlation decision (target pairs, features, scores, outcomes)
+- Logs every classification decision (device features, predicted type, confidence)
+- Logs operator feedback (confirmations/rejections of system decisions)
+- `get_stats()` for training data metrics (counts, accuracy)
+- Singleton pattern via `get_training_store()`
+
+### Operator Feedback Endpoint (Unit Tested, 9 tests)
+- New `POST /api/feedback` — operators confirm/reject system decisions
+- Accepts decision_type: correlation, classification, threat
+- Validates required fields (target_id min_length=1, correct bool required)
+- `GET /api/feedback/stats` — training data statistics for monitoring
+
+### LLM-Enhanced SITREP (Unit Tested, 7 existing tests pass)
+- `GET /api/sitrep?enhance=true` — optional LLM-generated narrative summary
+- Uses qwen2.5:3b via OllamaFleet (falls back to qwen2.5:7b)
+- Graceful fallback: returns template SITREP if no LLM available
+- Text SITREP includes NARRATIVE SUMMARY section when enhanced
+
+### Ollama Visual Testing (Graceful Skip)
+- New `tests/visual/test_llm_visual.py` — screenshot analysis via llava:7b
+- Captures Command Center via Playwright, sends to LLM for tactical map verification
+- Auto-skips if no server, no Ollama, or no llava model available
+
 ## 2026-03-14 — Wave 51: Map Sharing, Macros, Grid Overlay, Classification Override
 
 ### Map Sharing (Unit Tested, 4 tests)
