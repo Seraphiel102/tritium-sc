@@ -2264,6 +2264,9 @@ class Commander:
                 elif msg_type == "meshtastic:nodes_updated":
                     data = msg.get("data", {})
                     self.sensorium.update_mesh(data)
+                elif msg_type == "meshtastic:environment":
+                    data = msg.get("data", {})
+                    self.sensorium.update_environment(data)
                 elif msg_type == "auto_dispatch_speech":
                     data = msg.get("data", {})
                     text = data.get("text", "")

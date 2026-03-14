@@ -138,6 +138,31 @@ def create_router(plugin: MeshtasticPlugin) -> APIRouter:
         ok = plugin.send_waypoint(lat, lng, name, destination)
         return {"sent": ok, "lat": lat, "lng": lng, "name": name}
 
+    @router.get("/environment")
+    @compat_router.get("/environment")
+    async def environment():
+        """Get environment readings from mesh nodes with sensors."""
+        readings = []
+        for node_id, node in plugin._nodes.items():
+            temp = node.get("temperature")
+            humidity = node.get("humidity")
+            pressure = node.get("pressure")
+            if temp is not None or humidity is not None or pressure is not None:
+                readings.append({
+                    "source_id": node_id,
+                    "source_name": node.get("name") or node.get("short_name") or node_id,
+                    "temperature_c": temp,
+                    "humidity_pct": humidity,
+                    "pressure_hpa": pressure,
+                    "last_heard": node.get("last_heard"),
+                    "lat": node.get("lat"),
+                    "lng": node.get("lng"),
+                })
+        return {
+            "readings": readings,
+            "count": len(readings),
+        }
+
     @router.get("/status")
     @compat_router.get("/status")
     async def status():

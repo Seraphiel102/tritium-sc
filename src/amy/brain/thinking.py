@@ -459,6 +459,9 @@ class ThinkingThread:
         anomaly_ctx = commander.sensorium.anomaly_context()
         if anomaly_ctx:
             edge_parts.append(anomaly_ctx)
+        env_ctx = commander.sensorium.environment_context()
+        if env_ctx:
+            edge_parts.append(env_ctx)
         edge_sensors_ctx = ""
         if edge_parts:
             edge_sensors_ctx = "EDGE SENSORS:\n" + "\n".join(edge_parts)

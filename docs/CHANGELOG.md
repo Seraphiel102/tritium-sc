@@ -14,6 +14,24 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 64: Meshtastic Environment + Amy Sensorium
+
+### Meshtastic Environment Data (Integration Tested)
+- Meshtastic plugin now emits `meshtastic:environment` events when nodes report temperature, humidity, pressure
+- Both direct connection and MQTT bridge modes publish environment events
+- New `/api/meshtastic/environment` endpoint returns all environment-capable mesh nodes
+- Amy sensorium wired to receive environment data via `update_environment()`
+- Amy's thinking prompt includes environment context: "Alpha: 72F/22.2C, 45% humidity, 1013 hPa"
+- Environment context shows in rich_narrative header alongside BLE/mesh/anomaly awareness
+- Mesh bridge script tested: connects TCP, registers PubSub callbacks, needs MQTT broker
+
+### Quality: Meshtastic Bridge Script (Tested)
+- Bridge starts and connects to TCP host, registers meshtastic PubSub callbacks
+- Fails gracefully when MQTT broker not available (Connection refused), retries with backoff
+- Handles SIGTERM cleanly
+
+---
+
 ## 2026-03-14 — Wave 63: Real Meshtastic Hardware Integration
 
 ### Meshtastic Bridge Script (Code Reviewed)

@@ -257,6 +257,18 @@ class MeshtasticPlugin(PluginInterface):
             if env.get("barometricPressure") is not None:
                 node["pressure"] = env["barometricPressure"]
 
+            # Publish environment data for Amy's sensorium
+            if any(env.get(k) is not None for k in ("temperature", "relativeHumidity", "barometricPressure")):
+                env_data = {
+                    "source_id": node_id,
+                    "source_name": node.get("name") or node.get("short_name") or node_id,
+                    "temperature_c": env.get("temperature"),
+                    "humidity_pct": env.get("relativeHumidity"),
+                    "pressure_hpa": env.get("barometricPressure"),
+                }
+                if self._event_bus:
+                    self._event_bus.publish("meshtastic:environment", data=env_data)
+
         except Exception as exc:
             self._logger.error("Error processing MQTT telemetry: %s", exc)
 
@@ -528,6 +540,19 @@ class MeshtasticPlugin(PluginInterface):
 
         # Push to tracker
         self._push_node_to_tracker(node_id, self._nodes[node_id])
+
+        # Publish environment data for Amy's sensorium (direct connection mode)
+        env_metrics = node_info.get("environmentMetrics", {})
+        if any(env_metrics.get(k) is not None for k in ("temperature", "relativeHumidity", "barometricPressure")):
+            env_data = {
+                "source_id": node_id,
+                "source_name": name,
+                "temperature_c": env_metrics.get("temperature"),
+                "humidity_pct": env_metrics.get("relativeHumidity"),
+                "pressure_hpa": env_metrics.get("barometricPressure"),
+            }
+            if self._event_bus:
+                self._event_bus.publish("meshtastic:environment", data=env_data)
 
     # -- Send messages -----------------------------------------------------
 

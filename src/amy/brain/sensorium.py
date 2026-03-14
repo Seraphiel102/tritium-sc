@@ -115,6 +115,10 @@ class Sensorium:
         self._ble_new_devices: list[dict] = []  # recently appeared devices
         self._ble_known_macs: set[str] = set()  # MACs seen across all scans
 
+        # Environment awareness (from Meshtastic nodes or edge sensors)
+        self._environment_readings: dict[str, dict] = {}  # source_id -> latest reading
+        self._environment_timestamp: float = 0.0
+
         # Anomaly baseline awareness
         self._anomaly_alerts: list[dict] = []  # recent anomaly alerts for narrative
         self._anomaly_summary: str = ""        # cached anomaly context string
@@ -463,6 +467,86 @@ class Sensorium:
             line += f" New: {names}."
         return line
 
+    def update_environment(self, data: dict) -> None:
+        """Process an environment reading from mesh nodes or edge sensors.
+
+        Expected *data* keys:
+        - ``source_id``: node or device ID
+        - ``source_name``: human-readable name (optional)
+        - ``temperature_c``: temperature in Celsius (optional)
+        - ``humidity_pct``: relative humidity 0-100 (optional)
+        - ``pressure_hpa``: barometric pressure in hPa (optional)
+        - ``air_quality_index``: AQI value (optional)
+        - ``light_level_lux``: ambient light in lux (optional)
+        """
+        source_id = data.get("source_id", "")
+        if not source_id:
+            return
+
+        now = time.monotonic()
+        with self._lock:
+            self._environment_readings[source_id] = {
+                **data,
+                "_timestamp": now,
+            }
+            self._environment_timestamp = now
+
+        # Build a sensorium event with human-readable environment info
+        parts = []
+        name = data.get("source_name") or source_id
+        temp_c = data.get("temperature_c")
+        if temp_c is not None:
+            temp_f = temp_c * 9.0 / 5.0 + 32.0
+            parts.append(f"{temp_f:.0f}F")
+        humidity = data.get("humidity_pct")
+        if humidity is not None:
+            parts.append(f"{humidity:.0f}% humidity")
+        pressure = data.get("pressure_hpa")
+        if pressure is not None:
+            parts.append(f"{pressure:.0f} hPa")
+        aqi = data.get("air_quality_index")
+        if aqi is not None:
+            parts.append(f"AQI {aqi:.0f}")
+
+        if parts:
+            env_str = ", ".join(parts)
+            self.push("mesh", f"Mesh node {name} reports {env_str}", importance=0.4)
+
+    def environment_context(self) -> str:
+        """Build an environment awareness string for the thinking prompt."""
+        now = time.monotonic()
+        with self._lock:
+            if not self._environment_readings:
+                return ""
+            # Only show if data is recent (within 5 minutes)
+            if now - self._environment_timestamp > 300:
+                return ""
+            readings = dict(self._environment_readings)
+
+        lines = []
+        for source_id, data in readings.items():
+            # Skip stale readings (>5 min)
+            if now - data.get("_timestamp", 0) > 300:
+                continue
+            name = data.get("source_name") or source_id
+            parts = []
+            temp_c = data.get("temperature_c")
+            if temp_c is not None:
+                temp_f = temp_c * 9.0 / 5.0 + 32.0
+                parts.append(f"{temp_f:.0f}F/{temp_c:.1f}C")
+            humidity = data.get("humidity_pct")
+            if humidity is not None:
+                parts.append(f"{humidity:.0f}% humidity")
+            pressure = data.get("pressure_hpa")
+            if pressure is not None:
+                parts.append(f"{pressure:.0f} hPa")
+            if parts:
+                lines.append(f"  {name}: {', '.join(parts)}")
+
+        if not lines:
+            return ""
+        return "Environment:\n" + "\n".join(lines)
+
     def update_anomalies(self, anomalies: list[dict]) -> None:
         """Process anomaly alerts from the AnomalyBaselineCollector.
 
@@ -646,6 +730,12 @@ class Sensorium:
             # mesh_context may be multiline; wrap each line
             for mline in mesh_ctx.split("\n"):
                 header_lines.append(f"[{mline.strip()}]")
+
+        # Environment awareness
+        env_ctx = self.environment_context()
+        if env_ctx:
+            for eline in env_ctx.split("\n"):
+                header_lines.append(f"[{eline.strip()}]")
 
         # Anomaly baseline awareness
         anomaly_ctx = self.anomaly_context()
