@@ -14,6 +14,47 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 48: Comm Links, Target Prediction, Amy TTS, Reports
+
+### Communication Link Map Layer (Unit Tested)
+- New `comm-link-layer.js` — draws network topology on tactical map
+- Transport-specific colors: cyan=ESP-NOW, green=WiFi, purple=BLE, yellow=LoRa
+- Link width/opacity scales with quality score; low-quality links show % badge
+- `GET /api/fleet/topology` endpoint returns nodes + links from heartbeat data
+- Fleet dashboard plugin extracts mesh_peers from heartbeat JSON
+- 23 JS tests (all pass)
+
+### Target Position Prediction (Unit Tested)
+- New `target_prediction.py` — linear velocity extrapolation from TargetHistory
+- Predicts 1/5/15 minute positions with confidence cones that widen over time
+- Confidence decays exponentially with horizon; velocity noise increases cone radius
+- `GET /api/targets/predictions` — all moving targets
+- `GET /api/targets/{id}/predictions` — single target
+- 12 Python tests (all pass)
+
+### Amy Voice Synthesis for Browser (Syntax Verified)
+- New `POST /api/amy/speak/audio` — returns WAV audio from Piper TTS
+- Synthesizes raw S16 PCM, wraps in proper WAV header
+- Frontend can play via Audio element, toggled with V key
+
+### Investigation Report Generator (Syntax Verified)
+- New `POST /api/investigations/{id}/report` — generates IntelligenceReport
+- Auto-populates findings from dossier threat levels and correlation signals
+- Recommendations based on high-threat count, discovered entities, annotation gaps
+- Uses tritium-lib IntelligenceReport, ReportFinding, ReportRecommendation models
+
+### Edge Firmware: ESP-NOW Peer Quality Tracking (Syntax Verified)
+- MeshPeerInfo gains per-peer quality metrics: rssi_sum, rssi_samples, rssi_min/max
+- peersToJson includes quality object per peer (rssi_avg, pkt_loss, score)
+- Heartbeat JSON includes mesh_peers array when ESP-NOW active
+
+### Tritium-Lib: Network Topology Models (Unit Tested)
+- New NetworkNode model: role, position, health, peer stats
+- New NodeRole enum: gateway/relay/leaf/sensor
+- New PeerQuality model: RSSI trend, packet loss, quality_score property
+- NetworkLink gains packet_loss_pct and quality_score fields
+- 12 Python tests (all pass)
+
 ## 2026-03-14 — Wave 47: Security Audit, Input Validation, System Metrics
 
 ### Security Hardening — API Input Validation (Unit Tested)
