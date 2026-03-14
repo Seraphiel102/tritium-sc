@@ -2925,11 +2925,12 @@ function _updateUnits() {
             _state.unitMarkers[id] = _createUnitMarker(id, unit, lngLat);
         }
 
-        // Visibility: respect global toggle and optional alliance filter
+        // Visibility: respect global toggle, alliance filter, and target filter overlay
         const el = _state.unitMarkers[id].getElement();
         const allianceOk = !_state.allianceFilter ||
             _state.allianceFilter.includes(unit.alliance || 'unknown');
-        el.style.display = (_state.showUnits && allianceOk) ? '' : 'none';
+        const filterOk = !window.matchesTargetFilter || window.matchesTargetFilter(unit);
+        el.style.display = (_state.showUnits && allianceOk && filterOk) ? '' : 'none';
 
         // Fog of war: dim invisible hostiles, show radio ghosts
         if (unit.alliance === 'hostile' && unit.visible === false && _state.showFog) {

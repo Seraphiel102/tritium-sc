@@ -58,6 +58,7 @@ import { QuickStartPanelDef } from './panels/quick-start.js';
 import { BookmarksPanelDef } from './panels/bookmarks.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
+import { initTargetFilter, matchesFilter, getTargetFilters } from './target-filter.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -242,6 +243,16 @@ function init() {
 
     // Initialize tactical map
     initMap();
+
+    // Target filter overlay (on tactical map)
+    const tacticalArea = document.getElementById('tactical-area');
+    if (tacticalArea) {
+        initTargetFilter(tacticalArea);
+    }
+
+    // Expose filter functions for map renderers
+    window.matchesTargetFilter = matchesFilter;
+    window.getTargetFilters = getTargetFilters;
 
     // Initialize panel system (unified layout) or legacy sidebar
     const panelContainer = document.getElementById('panel-container');
