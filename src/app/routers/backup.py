@@ -3,24 +3,30 @@
 # Licensed under AGPL-3.0 — see LICENSE for details.
 """Backup and restore API for Tritium-SC state.
 
-Exports/imports the SQLite database, configuration, and Amy memory
-as a single archive file. Useful for migrations and disaster recovery.
+Endpoints:
+- POST /api/backup/create   — trigger backup, return download URL
+- GET  /api/backup/list     — available backups
+- POST /api/backup/restore  — upload and restore from archive
+- GET  /api/backup/download/{id} — download a specific backup file
+- GET  /api/backup/status   — system backup status
+- POST /api/backup/schedule — configure auto-backup interval
 """
+
+from __future__ import annotations
 
 import io
 import json
-import os
-import shutil
 import tempfile
-import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from app.config import settings
+from engine.backup.backup import BackupManager
+
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
@@ -28,164 +34,189 @@ router = APIRouter(prefix="/api/backup", tags=["backup"])
 def _get_db_path() -> Path:
     """Extract SQLite file path from database URL."""
     url = settings.database_url
-    # sqlite+aiosqlite:///./tritium.db -> ./tritium.db
     if ":///" in url:
         path = url.split(":///")[-1]
         return Path(path)
     return Path("tritium.db")
 
 
-def _get_backup_manifest() -> dict:
-    """Build manifest describing what's being backed up."""
-    db_path = _get_db_path()
-    amy_memory = Path("data/amy/memory.json")
-
-    manifest = {
-        "version": "1.0",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "tritium_version": "0.1.0",
-        "contents": {},
-    }
-
-    if db_path.exists():
-        manifest["contents"]["database"] = {
-            "file": db_path.name,
-            "size_bytes": db_path.stat().st_size,
-        }
-    if amy_memory.exists():
-        manifest["contents"]["amy_memory"] = {
-            "file": "amy/memory.json",
-            "size_bytes": amy_memory.stat().st_size,
-        }
-
-    return manifest
-
-
-@router.get("/status")
-async def backup_status():
-    """Get backup system status and available data."""
-    db_path = _get_db_path()
-    return {
-        "database_exists": db_path.exists(),
-        "database_size_bytes": db_path.stat().st_size if db_path.exists() else 0,
-        "database_path": str(db_path),
-        "amy_memory_exists": Path("data/amy/memory.json").exists(),
-        "backup_ready": db_path.exists(),
-    }
-
-
-@router.post("/export")
-async def export_backup():
-    """Export a full backup as a ZIP archive.
-
-    Returns a ZIP file containing:
-    - manifest.json (backup metadata)
-    - tritium.db (SQLite database)
-    - amy/memory.json (Amy's persistent memory, if exists)
-    - config snapshot
-    """
-    db_path = _get_db_path()
-    if not db_path.exists():
-        raise HTTPException(status_code=404, detail="No database found to backup")
-
-    buf = io.BytesIO()
-
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Manifest
-        manifest = _get_backup_manifest()
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
-
-        # Database — make a copy to avoid locking issues
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            shutil.copy2(str(db_path), tmp_path)
-            zf.write(tmp_path, db_path.name)
-        finally:
-            os.unlink(tmp_path)
-
-        # Amy memory
-        amy_mem = Path("data/amy/memory.json")
-        if amy_mem.exists():
-            zf.write(str(amy_mem), "amy/memory.json")
-
-        # Config snapshot (non-sensitive settings only)
-        safe_config = {
-            k: v for k, v in settings.model_dump().items()
-            if "password" not in k.lower()
-            and "secret" not in k.lower()
-            and "token" not in k.lower()
-            and "key" not in k.lower()
-        }
-        zf.writestr("config_snapshot.json", json.dumps(safe_config, indent=2, default=str))
-
-    buf.seek(0)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"tritium_backup_{timestamp}.zip"
-
-    logger.info(f"Backup exported: {filename} ({buf.getbuffer().nbytes} bytes)")
-
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+def _get_manager() -> BackupManager:
+    """Create a BackupManager with current settings."""
+    return BackupManager(
+        data_dir=Path("data"),
+        backup_dir=Path("data/backups"),
+        db_path=_get_db_path(),
     )
 
 
-@router.post("/import")
-async def import_backup(file: UploadFile = File(...)):
-    """Import a backup from a ZIP archive.
+# Keep a module-level manager for the scheduler
+_manager: BackupManager | None = None
 
-    WARNING: This will overwrite the current database and Amy memory.
-    The server should be restarted after import.
+
+def _shared_manager() -> BackupManager:
+    """Get or create a shared manager instance (preserves scheduler state)."""
+    global _manager
+    if _manager is None:
+        _manager = _get_manager()
+    return _manager
+
+
+# ------------------------------------------------------------------
+# Request/Response models
+# ------------------------------------------------------------------
+
+class CreateBackupRequest(BaseModel):
+    label: str = ""
+
+
+class ScheduleRequest(BaseModel):
+    interval_hours: float
+
+
+# ------------------------------------------------------------------
+# Endpoints
+# ------------------------------------------------------------------
+
+@router.post("/create")
+async def create_backup(body: CreateBackupRequest | None = None):
+    """Trigger a backup and return download info.
+
+    Returns the backup ID and a download URL.
+    """
+    mgr = _shared_manager()
+    label = body.label if body else ""
+
+    try:
+        archive_path = mgr.export_state(label=label or None)
+    except Exception as e:
+        logger.error(f"Backup creation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+
+    backup_id = archive_path.stem
+    return {
+        "status": "created",
+        "backup_id": backup_id,
+        "filename": archive_path.name,
+        "size_bytes": archive_path.stat().st_size,
+        "download_url": f"/api/backup/download/{backup_id}",
+    }
+
+
+@router.get("/list")
+async def list_backups():
+    """List available backups, newest first."""
+    mgr = _shared_manager()
+    backups = mgr.list_backups()
+    return {
+        "backups": backups,
+        "count": len(backups),
+    }
+
+
+@router.post("/restore")
+async def restore_backup(file: UploadFile = File(...)):
+    """Upload a backup archive and restore system state.
+
+    WARNING: This overwrites current databases and state.
+    The server should be restarted after restore.
     """
     if not file.filename or not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a ZIP archive")
 
     content = await file.read()
-    if len(content) > 500 * 1024 * 1024:  # 500MB limit
+    if len(content) > 500 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Backup file too large (max 500MB)")
 
-    buf = io.BytesIO(content)
+    # Write to a temp file and restore
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
     try:
-        with zipfile.ZipFile(buf, "r") as zf:
-            names = zf.namelist()
-
-            # Validate manifest
-            if "manifest.json" not in names:
-                raise HTTPException(status_code=400, detail="Invalid backup: missing manifest.json")
-
-            manifest = json.loads(zf.read("manifest.json"))
-            if manifest.get("version") != "1.0":
-                raise HTTPException(status_code=400, detail=f"Unsupported backup version: {manifest.get('version')}")
-
-            # Restore database
-            db_path = _get_db_path()
-            db_name = db_path.name
-            if db_name in names:
-                # Backup current database first
-                if db_path.exists():
-                    backup_name = f"{db_path.stem}_pre_restore_{datetime.now().strftime('%Y%m%d%H%M%S')}{db_path.suffix}"
-                    shutil.copy2(str(db_path), str(db_path.parent / backup_name))
-                    logger.info(f"Current database backed up as {backup_name}")
-
-                with zf.open(db_name) as src:
-                    db_path.write_bytes(src.read())
-                logger.info(f"Database restored: {db_name}")
-
-            # Restore Amy memory
-            if "amy/memory.json" in names:
-                amy_dir = Path("data/amy")
-                amy_dir.mkdir(parents=True, exist_ok=True)
-                with zf.open("amy/memory.json") as src:
-                    (amy_dir / "memory.json").write_bytes(src.read())
-                logger.info("Amy memory restored")
-
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+        mgr = _shared_manager()
+        report = mgr.import_state(tmp_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
     return {
         "status": "restored",
         "message": "Backup imported successfully. Restart the server to apply changes.",
-        "manifest": manifest,
+        "restored": report["restored"],
+        "errors": report["errors"],
+        "manifest": report.get("manifest"),
     }
+
+
+@router.get("/download/{backup_id}")
+async def download_backup(backup_id: str):
+    """Download a specific backup archive by ID."""
+    mgr = _shared_manager()
+    path = mgr.get_backup_path(backup_id)
+
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Backup not found: {backup_id}")
+
+    return FileResponse(
+        path=str(path),
+        media_type="application/zip",
+        filename=path.name,
+    )
+
+
+@router.get("/status")
+async def backup_status():
+    """Get backup system status."""
+    mgr = _shared_manager()
+    db_path = _get_db_path()
+    backups = mgr.list_backups()
+
+    return {
+        "database_exists": db_path.exists(),
+        "database_size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+        "database_path": str(db_path),
+        "amy_memory_exists": Path("data/amy/memory.json").exists(),
+        "dossiers_db_exists": Path("data/dossiers.db").exists(),
+        "backup_count": len(backups),
+        "latest_backup": backups[0] if backups else None,
+        "scheduler_active": mgr.scheduler_active,
+        "backup_ready": db_path.exists(),
+    }
+
+
+@router.post("/schedule")
+async def set_schedule(body: ScheduleRequest):
+    """Configure automatic periodic backups.
+
+    Set interval_hours > 0 to enable, or 0 to disable.
+    """
+    mgr = _shared_manager()
+
+    if body.interval_hours <= 0:
+        mgr.stop_schedule()
+        return {"status": "disabled", "message": "Auto-backup scheduler stopped"}
+
+    mgr.schedule(body.interval_hours)
+    return {
+        "status": "enabled",
+        "interval_hours": body.interval_hours,
+        "message": f"Auto-backup scheduled every {body.interval_hours} hours",
+    }
+
+
+# Legacy endpoints for backwards compatibility with existing router
+
+@router.post("/export")
+async def export_backup():
+    """Legacy export endpoint — redirects to /create."""
+    return await create_backup()
+
+
+@router.post("/import")
+async def import_backup(file: UploadFile = File(...)):
+    """Legacy import endpoint — redirects to /restore."""
+    return await restore_backup(file)

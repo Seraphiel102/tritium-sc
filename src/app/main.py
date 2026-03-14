@@ -58,6 +58,8 @@ from app.routers.device_management import router as device_management_router
 from app.routers.auth import router as auth_router
 from app.routers.backup import router as backup_router
 from app.routers.health import router as health_router
+from app.routers.acoustic import router as acoustic_router
+from app.routers.recordings import router as recordings_router
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +879,8 @@ app.include_router(device_management_router)
 app.include_router(auth_router)
 app.include_router(backup_router)
 app.include_router(health_router)
+app.include_router(acoustic_router)
+app.include_router(recordings_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"
