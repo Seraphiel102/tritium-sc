@@ -56,6 +56,7 @@ import { RfMotionPanelDef } from './panels/rf-motion.js';
 import { SystemHealthPanelDef } from './panels/system-health.js';
 import { QuickStartPanelDef } from './panels/quick-start.js';
 import { BookmarksPanelDef } from './panels/bookmarks.js';
+import { TargetComparePanelDef } from './panels/target-compare.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
 import { initTargetFilter, matchesFilter, getTargetFilters } from './target-filter.js';
@@ -503,6 +504,7 @@ function initPanelSystem(container) {
     panelManager.register(SystemHealthPanelDef);
     panelManager.register(QuickStartPanelDef);
     panelManager.register(BookmarksPanelDef);
+    panelManager.register(TargetComparePanelDef);
 
     // panel:request-open — allows map click to open panels by id
     EventBus.on('panel:request-open', (data) => {

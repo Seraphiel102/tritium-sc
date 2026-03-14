@@ -4317,3 +4317,137 @@
     color: var(--text-dim, rgba(255, 255, 255, 0.35));
     font-size: 12px;
 }
+
+/* ========================================
+   Target Comparison Panel
+   ======================================== */
+
+.tgt-compare-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    height: 100%;
+    overflow: hidden;
+}
+
+.tgc-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.tgc-instruction {
+    font-size: 10px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.4));
+    letter-spacing: 0.5px;
+}
+
+.tgc-input-row {
+    display: flex;
+    gap: 6px;
+}
+
+.tgc-id-input {
+    flex: 1;
+    background: rgba(18, 18, 26, 0.9);
+    color: var(--text, rgba(255, 255, 255, 0.9));
+    border: 1px solid var(--border, rgba(0, 240, 255, 0.15));
+    border-radius: var(--radius-sm, 4px);
+    padding: 4px 8px;
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+}
+
+.tgc-id-input:focus {
+    outline: none;
+    border-color: var(--cyan, #00f0ff);
+}
+
+.tgc-comparison-area {
+    flex: 1;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+
+.tgc-empty {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--text-dim, rgba(255, 255, 255, 0.3));
+    font-size: 11px;
+    line-height: 1.8;
+}
+
+.tgc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.tgc-table th, .tgc-table td {
+    padding: 4px 8px;
+    border: 1px solid var(--border, rgba(0, 240, 255, 0.1));
+    text-align: left;
+    white-space: nowrap;
+}
+
+.tgc-table th {
+    background: rgba(0, 240, 255, 0.05);
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    color: var(--text, rgba(255, 255, 255, 0.8));
+    position: relative;
+}
+
+.tgc-prop-col {
+    min-width: 90px;
+    color: var(--cyan, #00f0ff) !important;
+}
+
+.tgc-prop-label {
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.5));
+}
+
+.tgc-val {
+    font-family: var(--font-mono, monospace);
+    color: var(--text, rgba(255, 255, 255, 0.8));
+}
+
+.tgc-diff {
+    color: var(--yellow, #fcee0a) !important;
+    font-weight: bold;
+}
+
+.tgc-friendly { color: var(--green, #05ffa1) !important; }
+.tgc-hostile { color: var(--magenta, #ff2a6d) !important; }
+.tgc-unknown { color: var(--yellow, #fcee0a) !important; }
+
+.tgc-remove-btn {
+    background: transparent;
+    color: var(--magenta, #ff2a6d);
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 4px;
+    margin-left: 4px;
+    opacity: 0.6;
+}
+
+.tgc-remove-btn:hover { opacity: 1; }
+
+.tgc-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border, rgba(0, 240, 255, 0.1));
+}
+
+.tgc-similarity {
+    font-size: 11px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.5));
+}
