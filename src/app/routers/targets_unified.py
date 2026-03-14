@@ -131,6 +131,88 @@ async def get_target_trail(
     }
 
 
+@router.get("/targets/predictions")
+async def get_target_predictions(
+    request: Request,
+    horizons: str = Query("1,5,15", description="Comma-separated prediction horizons in minutes"),
+):
+    """Return predicted future positions for all moving targets.
+
+    For each target with sufficient movement history, returns predicted
+    positions at the specified horizons (default 1, 5, 15 minutes) with
+    confidence cones.  Stationary targets are excluded.
+    """
+    tracker = _get_tracker(request)
+    if tracker is None:
+        return {"predictions": {}, "target_count": 0}
+
+    horizon_list = [int(h.strip()) for h in horizons.split(",") if h.strip().isdigit()]
+    if not horizon_list:
+        horizon_list = [1, 5, 15]
+
+    from engine.tactical.target_prediction import predict_all_targets
+
+    target_ids = [t.target_id for t in tracker.get_all()]
+    predictions = predict_all_targets(target_ids, tracker.history, horizons=horizon_list)
+
+    # Serialize with geo coordinates
+    from engine.tactical.geo import local_to_latlng
+
+    result = {}
+    for tid, preds in predictions.items():
+        result[tid] = []
+        for p in preds:
+            d = p.to_dict()
+            geo = local_to_latlng(p.x, p.y)
+            d["lat"] = geo["lat"]
+            d["lng"] = geo["lng"]
+            result[tid].append(d)
+
+    return {
+        "predictions": result,
+        "target_count": len(result),
+        "horizons": horizon_list,
+    }
+
+
+@router.get("/targets/{target_id}/predictions")
+async def get_single_target_predictions(
+    request: Request,
+    target_id: str,
+    horizons: str = Query("1,5,15", description="Comma-separated prediction horizons in minutes"),
+):
+    """Return predicted future positions for a specific target."""
+    tracker = _get_tracker(request)
+    if tracker is None:
+        return {"error": "No tracker available", "predictions": []}
+
+    target = tracker.get_target(target_id)
+    if target is None:
+        return {"error": "Target not found", "predictions": []}
+
+    horizon_list = [int(h.strip()) for h in horizons.split(",") if h.strip().isdigit()]
+    if not horizon_list:
+        horizon_list = [1, 5, 15]
+
+    from engine.tactical.target_prediction import predict_target
+    from engine.tactical.geo import local_to_latlng
+
+    preds = predict_target(target_id, tracker.history, horizons=horizon_list)
+    result = []
+    for p in preds:
+        d = p.to_dict()
+        geo = local_to_latlng(p.x, p.y)
+        d["lat"] = geo["lat"]
+        d["lng"] = geo["lng"]
+        result.append(d)
+
+    return {
+        "target_id": target_id,
+        "predictions": result,
+        "moving": len(result) > 0,
+    }
+
+
 @router.get("/targets/clusters")
 async def get_target_clusters(
     request: Request,

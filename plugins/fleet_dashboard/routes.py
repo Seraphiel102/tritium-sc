@@ -58,4 +58,15 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
             "device_count": len(histories),
         }
 
+    @router.get("/topology")
+    async def get_topology():
+        """Return network topology: nodes with positions and links between peers.
+
+        Builds topology from fleet heartbeat data.  Each device becomes a node,
+        and mesh_peers/connected_peers from heartbeat data become links.
+        Used by the comm-link map layer to visualize network connectivity.
+        """
+        topology = plugin.get_topology()
+        return topology
+
     return router

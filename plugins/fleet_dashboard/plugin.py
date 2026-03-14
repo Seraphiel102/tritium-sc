@@ -132,6 +132,75 @@ class FleetDashboardPlugin(EventDrainPlugin):
         with self._lock:
             return {did: list(h) for did, h in self._target_history.items()}
 
+    def get_topology(self) -> dict:
+        """Build network topology from device registry for comm-link visualization.
+
+        Returns nodes (fleet devices with positions) and links (peer connections
+        extracted from heartbeat mesh_peers data).
+        """
+        devices = self.get_devices()
+        nodes = []
+        links = []
+        seen_edges: set[tuple[str, str]] = set()
+
+        for dev in devices:
+            did = dev.get("device_id", "")
+            nodes.append({
+                "node_id": did,
+                "name": dev.get("name", did),
+                "ip": dev.get("ip", ""),
+                "online": dev.get("status") == "online",
+                "battery": dev.get("battery"),
+                "peer_count": 0,
+                # Position: use stored lat/lng or derive from x/y
+                "x": dev.get("x", 0),
+                "y": dev.get("y", 0),
+                "lat": dev.get("lat"),
+                "lng": dev.get("lng"),
+            })
+
+        # Extract peer links from heartbeat mesh_peers data
+        with self._lock:
+            for did, dev in self._devices.items():
+                peers = dev.get("mesh_peers", [])
+                if not peers:
+                    continue
+
+                # Update node peer_count
+                for node in nodes:
+                    if node["node_id"] == did:
+                        node["peer_count"] = len(peers)
+                        break
+
+                for peer in peers:
+                    peer_mac = peer.get("mac", "")
+                    if not peer_mac:
+                        continue
+
+                    # Dedup edges (A->B == B->A)
+                    edge_key = tuple(sorted((did, peer_mac)))
+                    if edge_key in seen_edges:
+                        continue
+                    seen_edges.add(edge_key)
+
+                    quality = peer.get("quality", {})
+                    links.append({
+                        "source_id": did,
+                        "target_id": peer_mac,
+                        "transport": "espnow",
+                        "rssi": peer.get("rssi"),
+                        "quality_score": quality.get("score", 0) if isinstance(quality, dict) else 0,
+                        "packet_loss_pct": quality.get("pkt_loss", 0) if isinstance(quality, dict) else 0,
+                        "active": True,
+                    })
+
+        return {
+            "nodes": nodes,
+            "links": links,
+            "node_count": len(nodes),
+            "link_count": len(links),
+        }
+
     def get_summary(self) -> dict:
         """Return fleet summary: counts by status, avg battery, total sightings."""
         devices = self.get_devices()
@@ -181,6 +250,10 @@ class FleetDashboardPlugin(EventDrainPlugin):
                 "rssi": data.get("rssi", data.get("wifi_rssi", existing.get("rssi"))),
                 "last_seen": now,
             })
+            # Store mesh peer data for topology visualization
+            mesh_peers = data.get("mesh_peers", data.get("peers", []))
+            if mesh_peers:
+                existing["mesh_peers"] = mesh_peers
             self._devices[device_id] = existing
 
             # Record target count for sparkline history

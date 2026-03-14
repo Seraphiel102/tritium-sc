@@ -440,6 +440,172 @@ async def get_active_investigation_overlay(request: Request):
     }
 
 
+@router.post("/{inv_id}/report")
+async def generate_report(inv_id: str):
+    """Generate a structured IntelligenceReport from an investigation.
+
+    Auto-populates entities, findings based on correlation data,
+    and recommendations based on threat levels.  Uses the
+    tritium-lib IntelligenceReport model.
+    """
+    engine = _get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Investigation engine unavailable")
+
+    inv = engine.get(inv_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    try:
+        from tritium_lib.models.report import (
+            IntelligenceReport,
+            ReportFinding,
+            ReportRecommendation,
+            ReportStatus,
+        )
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="tritium-lib report models not available",
+        )
+
+    from datetime import datetime, timezone
+    import uuid
+
+    now = datetime.now(timezone.utc)
+
+    # Build entity list
+    all_entity_ids = sorted(inv.all_entity_ids())
+
+    # Build findings from dossier data
+    findings = []
+    high_threat_count = 0
+    entity_summaries = []
+
+    if engine._dossier_store is not None:
+        for eid in all_entity_ids:
+            dossier = engine._dossier_store.get_dossier(eid)
+            if not dossier:
+                continue
+
+            entity_type = dossier.get("entity_type", "unknown")
+            threat_level = dossier.get("threat_level", "none")
+            confidence = dossier.get("confidence", 0.0)
+            name = dossier.get("name", eid[:12])
+
+            entity_summaries.append(f"{name} ({entity_type}, threat={threat_level})")
+
+            if threat_level in ("high", "critical"):
+                high_threat_count += 1
+                findings.append(ReportFinding(
+                    finding_id=str(uuid.uuid4())[:8],
+                    title=f"High-threat entity: {name}",
+                    description=(
+                        f"Entity {eid} classified as {entity_type} with "
+                        f"threat level '{threat_level}' and confidence {confidence:.0%}."
+                    ),
+                    confidence=confidence,
+                    evidence_refs=[eid],
+                    tags=[threat_level, entity_type],
+                ))
+
+            # Check for correlation signals
+            signals = dossier.get("signals", [])
+            correlation_signals = [
+                s for s in signals if s.get("signal_type") == "correlation"
+            ]
+            if correlation_signals:
+                correlated_with = [
+                    s.get("data", {}).get("correlated_with", "")
+                    for s in correlation_signals
+                    if s.get("data", {}).get("correlated_with")
+                ]
+                if correlated_with:
+                    findings.append(ReportFinding(
+                        finding_id=str(uuid.uuid4())[:8],
+                        title=f"Correlation: {name} linked to {len(correlated_with)} entities",
+                        description=(
+                            f"Entity {name} has been correlated with: "
+                            f"{', '.join(correlated_with[:5])}. "
+                            f"Correlation may indicate co-location or shared activity."
+                        ),
+                        confidence=0.6,
+                        evidence_refs=[eid] + correlated_with[:5],
+                        tags=["correlation"],
+                    ))
+
+    # Add summary finding
+    if entity_summaries:
+        findings.insert(0, ReportFinding(
+            finding_id=str(uuid.uuid4())[:8],
+            title=f"Investigation scope: {len(all_entity_ids)} entities",
+            description=(
+                f"This investigation covers {len(all_entity_ids)} entities. "
+                f"Seeds: {len(inv.seed_entities)}, "
+                f"Discovered: {len(inv.discovered_entities)}. "
+                f"Entities: {'; '.join(entity_summaries[:10])}"
+                + ("..." if len(entity_summaries) > 10 else "")
+            ),
+            confidence=1.0,
+            evidence_refs=all_entity_ids[:10],
+            tags=["summary"],
+        ))
+
+    # Build recommendations based on threat levels
+    recommendations = []
+    if high_threat_count > 0:
+        recommendations.append(ReportRecommendation(
+            recommendation_id=str(uuid.uuid4())[:8],
+            action=f"Escalate monitoring for {high_threat_count} high-threat entities",
+            priority=1,
+            rationale=(
+                f"{high_threat_count} entities in this investigation have "
+                f"high or critical threat levels requiring active monitoring."
+            ),
+        ))
+
+    if len(inv.discovered_entities) > 0:
+        recommendations.append(ReportRecommendation(
+            recommendation_id=str(uuid.uuid4())[:8],
+            action=f"Review {len(inv.discovered_entities)} discovered entities",
+            priority=2,
+            rationale=(
+                f"Graph expansion discovered {len(inv.discovered_entities)} "
+                f"related entities that may require analyst review."
+            ),
+        ))
+
+    if len(inv.annotations) == 0:
+        recommendations.append(ReportRecommendation(
+            recommendation_id=str(uuid.uuid4())[:8],
+            action="Add analyst annotations to investigation entities",
+            priority=3,
+            rationale="No analyst annotations have been added yet.",
+        ))
+
+    # Build the report
+    report = IntelligenceReport(
+        report_id=str(uuid.uuid4()),
+        title=f"Report: {inv.title}",
+        summary=(
+            f"Intelligence report generated from investigation '{inv.title}' "
+            f"covering {len(all_entity_ids)} entities with "
+            f"{len(findings)} findings and {len(recommendations)} recommendations."
+        ),
+        entities=all_entity_ids,
+        findings=findings,
+        recommendations=recommendations,
+        created_by="system",
+        status=ReportStatus.DRAFT,
+        created_at=now,
+        updated_at=now,
+        tags=["auto-generated", f"inv:{inv_id[:8]}"],
+        source_investigation=inv_id,
+    )
+
+    return report.model_dump(mode="json")
+
+
 @router.post("/{inv_id}/filter/type")
 async def filter_by_type(
     inv_id: str,

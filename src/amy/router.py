@@ -180,7 +180,7 @@ async def amy_thoughts(request: Request):
 
 @router.post("/speak")
 async def amy_speak(request: Request, body: SpeakRequest):
-    """Make Amy say something."""
+    """Make Amy say something through the server speakers."""
     amy = _get_amy(request)
     if amy is None:
         return JSONResponse({"error": "Amy is not running"}, status_code=503)
@@ -189,6 +189,83 @@ async def amy_speak(request: Request, body: SpeakRequest):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, amy.say, body.text)
     return {"status": "ok", "text": body.text}
+
+
+@router.post("/speak/audio")
+async def amy_speak_audio(request: Request, body: SpeakRequest):
+    """Synthesize Amy's speech and return WAV audio for browser playback.
+
+    Uses Piper TTS to generate raw PCM, wraps in a WAV header, and returns
+    the audio as a downloadable response.  The frontend can play this via
+    an Audio element, toggled with the V key.
+    """
+    amy = _get_amy(request)
+    speaker = None
+    if amy is not None:
+        speaker = getattr(amy, "speaker", None)
+
+    # Fallback: try to use Speaker directly
+    if speaker is None:
+        try:
+            from engine.comms.speaker import Speaker
+            speaker = Speaker()
+        except Exception:
+            return JSONResponse(
+                {"error": "TTS not available"},
+                status_code=503,
+            )
+
+    if not speaker.available:
+        return JSONResponse(
+            {"error": "Piper TTS not installed"},
+            status_code=503,
+        )
+
+    import struct
+
+    loop = asyncio.get_event_loop()
+    raw_pcm = await loop.run_in_executor(None, speaker.synthesize_raw, body.text)
+    if raw_pcm is None or len(raw_pcm) == 0:
+        return JSONResponse(
+            {"error": "TTS synthesis failed"},
+            status_code=500,
+        )
+
+    # Wrap raw S16 mono PCM in a WAV header
+    sample_rate = speaker.sample_rate
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = len(raw_pcm)
+
+    wav_header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF',
+        36 + data_size,
+        b'WAVE',
+        b'fmt ',
+        16,              # PCM format chunk size
+        1,               # PCM format
+        num_channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b'data',
+        data_size,
+    )
+
+    wav_data = wav_header + raw_pcm
+
+    return Response(
+        content=wav_data,
+        media_type="audio/wav",
+        headers={
+            "Content-Disposition": "inline; filename=amy_speech.wav",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @router.post("/chat")
