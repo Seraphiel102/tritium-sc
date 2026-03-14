@@ -1,13 +1,13 @@
 # Created by Matthew Valancy
 # Copyright 2026 Valpatel Software LLC
 # Licensed under AGPL-3.0 — see LICENSE for details.
-"""BattleIntegration — bridges simulation combat into the Wave 5-13 intelligence stack.
+"""BattleIntegration — bridges simulation combat into the full intelligence stack.
 
 The simulation engine produces combat events (eliminations, projectile hits,
 target movement) but these never reached the correlator, geofence engine,
-dossier store, or automation system.  This module wires them together so
-that simulated battles exercise the full intelligence pipeline — making
-the game a genuine CI test for the real system.
+dossier store, BLE classifier, or automation system.  This module wires them
+together so that simulated battles exercise the full intelligence pipeline —
+making the game a genuine CI test for the real system.
 
 Architecture
 ------------
@@ -18,6 +18,9 @@ It subscribes to the EventBus and:
   2. Syncs sim targets into TargetTracker so the correlator can see them.
   3. Publishes combat events as dossier signals (via DossierStore).
   4. Runs AutomationRules against incoming events and fires actions.
+  5. (Sensor simulation mode) Generates synthetic BLE/WiFi sightings for
+     each hostile target, feeding them through the BLE classifier and into
+     the correlator so that the full sensor-fusion pipeline is exercised.
 
 Data flow:
 
@@ -27,6 +30,10 @@ Data flow:
     +-> TargetTracker.update_from_simulation() --> correlator can fuse
     +-> DossierStore.create_or_update() --> persistent identity
     +-> AutomationEngine.evaluate() --> automation:alert events
+    +-> SensorSimulationMode:
+    |     +-> BLEClassifier.classify() --> ble:new/suspicious events
+    |     +-> TargetTracker (BLE source) --> correlator can fuse BLE+visual
+    |     +-> EventBus ble_sighting/wifi_sighting --> instinct layer
 
 AutomationEngine
 ----------------
@@ -41,8 +48,10 @@ simple — complex logic belongs in Amy's L4 deliberation, not here.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import queue
+import random
 import threading
 import time
 import uuid
@@ -51,6 +60,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from engine.comms.event_bus import EventBus
+    from engine.tactical.ble_classifier import BLEClassifier
     from engine.tactical.correlator import TargetCorrelator
     from engine.tactical.dossier import DossierStore
     from engine.tactical.geofence import GeofenceEngine
@@ -260,6 +270,213 @@ def default_combat_rules() -> list[AutomationRule]:
 
 
 # ---------------------------------------------------------------------------
+# SensorSimulationMode — synthetic BLE/WiFi sightings from battle hostiles
+# ---------------------------------------------------------------------------
+
+# OUI prefixes for synthetic BLE MACs (realistic manufacturer variety)
+_SYNTHETIC_OUI = [
+    "AA:BB:CC", "DE:AD:BE", "CA:FE:00", "BA:DC:0D", "F0:0D:BA",
+    "11:22:33", "44:55:66", "77:88:99", "AB:CD:EF", "FE:DC:BA",
+]
+
+# WiFi SSID templates for synthetic probe requests
+_SYNTHETIC_SSIDS = [
+    "AndroidAP-{n}", "iPhone-{n}", "{name}-hotspot",
+    "DIRECT-{n}", "Galaxy-S{n}", "OnePlus-{n}",
+]
+
+
+class SensorSimulationMode:
+    """Generates synthetic BLE/WiFi sightings for simulated hostiles.
+
+    When enabled, each hostile target in the simulation is assigned a
+    deterministic synthetic BLE MAC address and WiFi probe fingerprint.
+    On every telemetry tick, the module:
+
+      1. Generates a BLE sighting for each hostile (MAC, RSSI from distance).
+      2. Feeds it through BLEClassifier (triggering new/suspicious alerts).
+      3. Injects a BLE-sourced TrackedTarget into TargetTracker at a slightly
+         offset position (simulating imprecise BLE localization).
+      4. Publishes ble_sighting and wifi_sighting events to EventBus for
+         the instinct layer and correlator to pick up.
+
+    This exercises the full sensor-fusion pipeline: the correlator sees both
+    a simulation-sourced visual target and a BLE-sourced target at similar
+    positions, and should fuse them into a single dossier.
+
+    Parameters
+    ----------
+    event_bus : EventBus
+    tracker : TargetTracker | None
+    ble_classifier : BLEClassifier | None
+    rng_seed : int
+        Deterministic seed for reproducible synthetic data.
+    ble_offset_meters : float
+        Max position offset for BLE targets (simulates localization error).
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        tracker: TargetTracker | None = None,
+        ble_classifier: BLEClassifier | None = None,
+        rng_seed: int = 42,
+        ble_offset_meters: float = 3.0,
+    ) -> None:
+        self._event_bus = event_bus
+        self._tracker = tracker
+        self._ble_classifier = ble_classifier
+        self._rng = random.Random(rng_seed)
+        self._ble_offset = ble_offset_meters
+
+        # target_id -> assigned synthetic MAC
+        self._target_macs: dict[str, str] = {}
+        # target_id -> assigned synthetic WiFi SSID
+        self._target_ssids: dict[str, str] = {}
+
+        # Stats
+        self.ble_sightings_generated: int = 0
+        self.wifi_sightings_generated: int = 0
+        self.ble_classifications: int = 0
+
+    def _mac_for_target(self, target_id: str) -> str:
+        """Deterministic MAC address for a target ID."""
+        if target_id in self._target_macs:
+            return self._target_macs[target_id]
+        # Generate from hash so it's stable across ticks
+        h = hashlib.md5(target_id.encode()).hexdigest()
+        oui = _SYNTHETIC_OUI[int(h[:2], 16) % len(_SYNTHETIC_OUI)]
+        suffix = f"{int(h[2:4], 16):02X}:{int(h[4:6], 16):02X}:{int(h[6:8], 16):02X}"
+        mac = f"{oui}:{suffix}"
+        self._target_macs[target_id] = mac
+        return mac
+
+    def _ssid_for_target(self, target_id: str, name: str) -> str:
+        """Deterministic WiFi SSID for a target."""
+        if target_id in self._target_ssids:
+            return self._target_ssids[target_id]
+        h = hashlib.md5(target_id.encode()).hexdigest()
+        template = _SYNTHETIC_SSIDS[int(h[:2], 16) % len(_SYNTHETIC_SSIDS)]
+        ssid = template.format(n=int(h[2:4], 16), name=name[:8])
+        self._target_ssids[target_id] = ssid
+        return ssid
+
+    def _rssi_from_distance(self, distance: float) -> int:
+        """Simulate RSSI from distance (simple log-distance model).
+
+        RSSI = -40 - 20*log10(max(distance, 1))
+        Close targets (~1m) -> -40 dBm (suspicious threshold)
+        Far targets (~100m) -> -80 dBm
+        """
+        import math
+        d = max(distance, 1.0)
+        rssi = int(-40 - 20 * math.log10(d))
+        return max(-100, min(-20, rssi))
+
+    def process_telemetry(self, batch: list[dict]) -> None:
+        """Generate synthetic BLE/WiFi sightings from a telemetry batch.
+
+        Called by BattleIntegration on each sim_telemetry_batch event.
+        Only generates sightings for hostile targets.
+        """
+        for entry in batch:
+            alliance = entry.get("alliance", "")
+            if alliance != "hostile":
+                continue
+
+            target_id = entry.get("target_id", "")
+            name = entry.get("name", target_id[:8])
+            status = entry.get("status", "")
+            if status in ("destroyed", "eliminated", "despawned", "escaped"):
+                continue
+
+            pos = entry.get("position", {})
+            if isinstance(pos, dict):
+                x = pos.get("x", 0.0)
+                y = pos.get("y", 0.0)
+            else:
+                continue
+
+            self._generate_ble_sighting(target_id, name, x, y)
+            self._generate_wifi_sighting(target_id, name, x, y)
+
+    def _generate_ble_sighting(
+        self, target_id: str, name: str, x: float, y: float
+    ) -> None:
+        """Generate a synthetic BLE sighting for a hostile target."""
+        mac = self._mac_for_target(target_id)
+        # Distance from origin (simulating scanner at base)
+        import math
+        distance = math.hypot(x, y)
+        rssi = self._rssi_from_distance(distance)
+
+        # Classify through BLE classifier if available
+        if self._ble_classifier is not None:
+            self._ble_classifier.classify(mac, name=f"SIM:{name}", rssi=rssi)
+            self.ble_classifications += 1
+
+        # Add offset to simulate BLE localization imprecision
+        offset_x = self._rng.uniform(-self._ble_offset, self._ble_offset)
+        offset_y = self._rng.uniform(-self._ble_offset, self._ble_offset)
+        ble_x = x + offset_x
+        ble_y = y + offset_y
+
+        # Inject BLE-sourced target into tracker for correlator
+        if self._tracker is not None:
+            self._tracker.update_from_ble({
+                "mac": mac,
+                "name": f"SIM:{name}",
+                "rssi": rssi,
+                "position": {"x": ble_x, "y": ble_y},
+            })
+
+        # Publish sighting event for instinct layer / other subscribers
+        sighting_data = {
+            "mac": mac,
+            "name": f"SIM:{name}",
+            "rssi": rssi,
+            "target_id": target_id,
+            "position": {"x": ble_x, "y": ble_y},
+            "source": "battle_sim",
+            "device_type": "hostile_device",
+        }
+        self._event_bus.publish("ble_sighting", sighting_data)
+        self.ble_sightings_generated += 1
+
+    def _generate_wifi_sighting(
+        self, target_id: str, name: str, x: float, y: float
+    ) -> None:
+        """Generate a synthetic WiFi probe request sighting."""
+        mac = self._mac_for_target(target_id)
+        ssid = self._ssid_for_target(target_id, name)
+        import math
+        distance = math.hypot(x, y)
+        rssi = self._rssi_from_distance(distance)
+
+        sighting_data = {
+            "bssid": mac,
+            "ssid": ssid,
+            "rssi": rssi,
+            "target_id": target_id,
+            "position": {"x": x, "y": y},
+            "source": "battle_sim",
+            "probe": True,
+        }
+        self._event_bus.publish("wifi_sighting", sighting_data)
+        self.wifi_sightings_generated += 1
+
+    @property
+    def stats(self) -> dict:
+        return {
+            "ble_sightings": self.ble_sightings_generated,
+            "wifi_sightings": self.wifi_sightings_generated,
+            "ble_classifications": self.ble_classifications,
+            "assigned_macs": len(self._target_macs),
+        }
+
+
+# ---------------------------------------------------------------------------
 # BattleIntegration — the main bridge
 # ---------------------------------------------------------------------------
 
@@ -284,6 +501,8 @@ class BattleIntegration:
         correlator: TargetCorrelator | None = None,
         investigation: InvestigationEngine | None = None,
         automation: AutomationEngine | None = None,
+        ble_classifier: BLEClassifier | None = None,
+        sensor_sim: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._tracker = tracker
@@ -292,6 +511,16 @@ class BattleIntegration:
         self._correlator = correlator
         self._investigation = investigation
         self._automation = automation or AutomationEngine(event_bus)
+        self._ble_classifier = ble_classifier
+
+        # Sensor simulation mode: generates synthetic BLE/WiFi sightings
+        self._sensor_sim: SensorSimulationMode | None = None
+        if sensor_sim:
+            self._sensor_sim = SensorSimulationMode(
+                event_bus,
+                tracker=tracker,
+                ble_classifier=ble_classifier,
+            )
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -308,14 +537,21 @@ class BattleIntegration:
         return self._automation
 
     @property
+    def sensor_sim(self) -> SensorSimulationMode | None:
+        return self._sensor_sim
+
+    @property
     def stats(self) -> dict:
-        return {
+        d = {
             "geofence_checks": self._geofence_checks,
             "tracker_syncs": self._tracker_syncs,
             "dossier_updates": self._dossier_updates,
             "automation_fires": self._automation_fires,
             "running": self._running,
         }
+        if self._sensor_sim is not None:
+            d["sensor_sim"] = self._sensor_sim.stats
+        return d
 
     def start(self) -> None:
         """Start the integration bridge background thread."""
@@ -383,7 +619,7 @@ class BattleIntegration:
             self._automation_fires += len(fired)
 
     def _on_telemetry_batch(self, batch: list[dict]) -> None:
-        """Process a telemetry batch: sync tracker + check geofences."""
+        """Process a telemetry batch: sync tracker + check geofences + sensor sim."""
         for entry in batch:
             target_id = entry.get("target_id", "")
             if not target_id:
@@ -401,6 +637,10 @@ class BattleIntegration:
                 y = pos.get("y", 0.0) if isinstance(pos, dict) else 0.0
                 self._geofence.check(target_id, (x, y))
                 self._geofence_checks += 1
+
+        # Generate synthetic sensor sightings for hostiles
+        if self._sensor_sim is not None:
+            self._sensor_sim.process_telemetry(batch)
 
     def _on_combat_event(self, event_type: str, data: dict) -> None:
         """Process a combat event: update dossiers."""

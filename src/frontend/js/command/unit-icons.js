@@ -25,6 +25,7 @@ const ALLIANCE_COLORS = {
 const UNIT_TYPES = [
     'rover', 'drone', 'turret', 'hostile_person', 'neutral_person',
     'tank', 'sensor', 'camera', 'ble_device', 'mesh_radio',
+    'rf_motion', 'camera_detection',
 ];
 
 // Vision radius per type (world meters)
@@ -36,6 +37,8 @@ const VISION_RADII = {
     sensor:  30,
     ble_device: 10,
     mesh_radio: 35,
+    rf_motion: 20,
+    camera_detection: 25,
     neutral_person: 15,
     hostile_person: 20,
     tank:    45,
@@ -115,6 +118,12 @@ function drawUnit(ctx, type, alliance, heading, screenX, screenY, scale, selecte
             break;
         case 'mesh_radio':
             _drawMeshRadio(ctx, scale, color);
+            break;
+        case 'rf_motion':
+            _drawRfMotion(ctx, scale);
+            break;
+        case 'camera_detection':
+            _drawCameraDetection(ctx, scale, color);
             break;
         default:
             // Fallback: simple square
@@ -476,6 +485,91 @@ function _drawMeshRadio(ctx, scale, color) {
     }
 }
 
+/** RF motion: pulsing yellow concentric rings (motion detected via RSSI variance) */
+function _drawRfMotion(ctx, scale) {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(now * 0.004));
+    const r = 6 * scale;
+
+    // Outer pulsing ring
+    ctx.strokeStyle = `rgba(252, 238, 10, ${pulse * 0.6})`;
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.2 + pulse * 0.4), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Middle ring
+    ctx.strokeStyle = `rgba(252, 238, 10, ${pulse * 0.4})`;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Center dot
+    ctx.fillStyle = '#fcee0a';
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Motion wave arcs (animated)
+    const wavePhase = (now * 0.003) % (Math.PI * 2);
+    ctx.strokeStyle = `rgba(252, 238, 10, ${0.3 * pulse})`;
+    ctx.lineWidth = 1 * scale;
+    for (let i = 0; i < 3; i++) {
+        const waveR = r * (1.8 + i * 0.5) * pulse;
+        const angleOff = wavePhase + i * (Math.PI * 2 / 3);
+        ctx.beginPath();
+        ctx.arc(0, 0, waveR, angleOff, angleOff + Math.PI / 3);
+        ctx.stroke();
+    }
+}
+
+/** Camera detection: magenta diamond (hostile) or green circle (friendly) with eye icon */
+function _drawCameraDetection(ctx, scale, color) {
+    const s = 7 * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    if (color === '#ff2a6d' || color === ALLIANCE_COLORS.hostile) {
+        // Hostile: magenta diamond with pulsing glow
+        const pulse = 0.5 + 0.5 * Math.sin(now * 0.005);
+        ctx.fillStyle = `rgba(255, 42, 109, ${pulse * 0.25})`;
+        ctx.beginPath();
+        ctx.moveTo(0, -s * 1.3);
+        ctx.lineTo(s * 1.3, 0);
+        ctx.lineTo(0, s * 1.3);
+        ctx.lineTo(-s * 1.3, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#ff2a6d';
+        ctx.beginPath();
+        ctx.moveTo(0, -s);
+        ctx.lineTo(s, 0);
+        ctx.lineTo(0, s);
+        ctx.lineTo(-s, 0);
+        ctx.closePath();
+        ctx.fill();
+    } else {
+        // Friendly/neutral/unknown: colored circle
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Eye icon in center (camera detection marker)
+    const eyeR = s * 0.35;
+    ctx.strokeStyle = '#0a0a0f';
+    ctx.lineWidth = 1.2 * scale;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, eyeR * 1.4, eyeR * 0.7, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#0a0a0f';
+    ctx.beginPath();
+    ctx.arc(0, 0, eyeR * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+}
+
 /** Fallback: simple filled square */
 function _drawFallback(ctx, scale, color) {
     const s = 8 * scale;
@@ -691,8 +785,104 @@ function _drawRioterIndicator(ctx, scale) {
     ctx.globalAlpha = 1.0;
 }
 
+/**
+ * Draw a multi-source fusion indicator around a correlated target.
+ * Shows how many sensors see this target with a ring of source-type pips.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} screenX
+ * @param {number} screenY
+ * @param {number} scale
+ * @param {number} sourceCount - number of distinct sensor sources
+ * @param {string[]} sourceTypes - array of source type strings (e.g. ['ble', 'yolo', 'mesh'])
+ */
+function drawFusionIndicator(ctx, screenX, screenY, scale, sourceCount, sourceTypes) {
+    if (!sourceCount || sourceCount < 2) return;
+
+    ctx.save();
+    ctx.translate(screenX, screenY);
+
+    const r = (10 + sourceCount * 2) * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const rotSpeed = 0.0008;
+    const rotation = now * rotSpeed;
+
+    // Outer fusion ring (double line, rotating dash)
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -rotation * 50;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Source type pips around the ring
+    const SOURCE_COLORS = {
+        ble: '#00f0ff',     // cyan
+        yolo: '#ff2a6d',    // magenta
+        camera: '#ff2a6d',  // magenta
+        mesh: '#05ffa1',    // green
+        meshtastic: '#05ffa1',
+        wifi: '#00a0ff',    // blue
+        rf_motion: '#fcee0a', // yellow
+        simulation: '#05ffa1',
+    };
+
+    const types = sourceTypes || [];
+    const pipCount = Math.max(sourceCount, types.length);
+    for (let i = 0; i < pipCount; i++) {
+        const angle = (i / pipCount) * Math.PI * 2 - Math.PI / 2 + rotation;
+        const px = Math.cos(angle) * r;
+        const py = Math.sin(angle) * r;
+        const type = types[i] || 'unknown';
+        const pipColor = SOURCE_COLORS[type] || '#fcee0a';
+
+        // Pip dot
+        ctx.fillStyle = pipColor;
+        ctx.beginPath();
+        ctx.arc(px, py, 3 * scale, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pip glow
+        ctx.fillStyle = pipColor.replace(')', ', 0.3)').replace('#', '');
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.arc(px, py, 5 * scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Source count badge (top-right)
+    const badgeX = r * 0.7;
+    const badgeY = -r * 0.7;
+    const badgeR = 6 * scale;
+
+    // Badge background
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Badge border
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Badge text
+    ctx.fillStyle = '#00f0ff';
+    ctx.font = `bold ${Math.max(7, 9 * scale)}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(sourceCount), badgeX, badgeY);
+
+    ctx.restore();
+}
+
 // ============================================================
 // Exports
 // ============================================================
 
-export { drawUnit, drawCrowdRoleIndicator, UNIT_TYPES, ALLIANCE_COLORS, CROWD_ROLE_COLORS, getVisionRadius };
+export { drawUnit, drawCrowdRoleIndicator, drawFusionIndicator, UNIT_TYPES, ALLIANCE_COLORS, CROWD_ROLE_COLORS, getVisionRadius };

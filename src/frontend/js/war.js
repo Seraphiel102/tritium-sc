@@ -721,6 +721,77 @@ function drawTarget(ctx, tid, t) {
             ctx.arc(sp.x, sp.y, arcR, Math.PI - Math.PI / 4, Math.PI + Math.PI / 4);
             ctx.stroke();
         }
+    } else if (tAssetType === 'rf_motion') {
+        // RF motion: pulsing yellow concentric rings
+        const rfNow = performance.now();
+        const rfPulse = 0.4 + 0.6 * Math.abs(Math.sin(rfNow * 0.004));
+        const rfColor = '#fcee0a';
+        // Outer pulsing ring
+        ctx.strokeStyle = `rgba(252, 238, 10, ${rfPulse * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * (1.2 + rfPulse * 0.4), 0, Math.PI * 2);
+        ctx.stroke();
+        // Middle ring
+        ctx.strokeStyle = `rgba(252, 238, 10, ${rfPulse * 0.4})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.8, 0, Math.PI * 2);
+        ctx.stroke();
+        // Center dot
+        ctx.fillStyle = rfColor;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Motion wave arcs
+        const wavePhase = (rfNow * 0.003) % (Math.PI * 2);
+        ctx.strokeStyle = `rgba(252, 238, 10, ${0.3 * rfPulse})`;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 3; i++) {
+            const waveR = radius * (1.8 + i * 0.5) * rfPulse;
+            const angleOff = wavePhase + i * (Math.PI * 2 / 3);
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, waveR, angleOff, angleOff + Math.PI / 3);
+            ctx.stroke();
+        }
+    } else if (tAssetType === 'camera_detection' || tAssetType === 'detection') {
+        // Camera detection: magenta diamond (hostile) or green circle (friendly)
+        if (alliance === 'hostile') {
+            const cdNow = performance.now();
+            const cdPulse = 0.5 + 0.5 * Math.sin(cdNow * 0.005);
+            ctx.fillStyle = `rgba(255, 42, 109, ${cdPulse * 0.25})`;
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y - radius * 1.3);
+            ctx.lineTo(sp.x + radius * 1.3, sp.y);
+            ctx.lineTo(sp.x, sp.y + radius * 1.3);
+            ctx.lineTo(sp.x - radius * 1.3, sp.y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#ff2a6d';
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y - radius);
+            ctx.lineTo(sp.x + radius, sp.y);
+            ctx.lineTo(sp.x, sp.y + radius);
+            ctx.lineTo(sp.x - radius, sp.y);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, radius * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // Eye icon
+        const eyeR = radius * 0.35;
+        ctx.strokeStyle = '#0a0a0f';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.ellipse(sp.x, sp.y, eyeR * 1.4, eyeR * 0.7, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#0a0a0f';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, eyeR * 0.4, 0, Math.PI * 2);
+        ctx.fill();
     } else
     // Use improved combat shapes if available
     if (typeof warCombatDrawTargetShape === 'function') {
@@ -803,6 +874,42 @@ function drawTarget(ctx, tid, t) {
             ctx.textAlign = 'center';
             ctx.fillText(threat.threat_level.toUpperCase(), sp.x, sp.y + radius + 18);
         }
+    }
+
+    // Fusion indicator for correlated multi-source targets
+    const sourceCount = t.source_count || (t.sources ? t.sources.length : 0);
+    if (sourceCount >= 2) {
+        const fusionR = (radius + 4 + sourceCount * 2);
+        const fusionNow = performance.now();
+        const fusionRot = fusionNow * 0.0008;
+        // Rotating dashed ring
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.lineDashOffset = -fusionRot * 50;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, fusionR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Source count badge (top-right)
+        const badgeX = sp.x + fusionR * 0.7;
+        const badgeY = sp.y - fusionR * 0.7;
+        const badgeR = 6;
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+        ctx.beginPath();
+        ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#00f0ff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#00f0ff';
+        ctx.font = `bold 9px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(sourceCount), badgeX, badgeY);
+        ctx.textBaseline = 'alphabetic';
     }
 
     // Label

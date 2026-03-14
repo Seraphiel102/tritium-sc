@@ -19,7 +19,7 @@
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { resolveLabels } from './label-collision.js';
-import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator } from './unit-icons.js';
+import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator, drawFusionIndicator } from './unit-icons.js';
 import { DeviceModalManager } from './device-modal.js';
 
 // ============================================================
@@ -168,6 +168,20 @@ const _state = {
     _visibleThoughtIds: new Set(),  // unit IDs with visible thought bubbles
     _maxThoughtBubbles: 5,          // max non-critical visible at once
 
+    // Geofence polygon drawing mode
+    geofenceDrawing: false,
+    geofenceVertices: [],  // [{x, y}, ...] in world coords
+
+    // Patrol waypoint drawing mode
+    patrolDrawing: false,
+    patrolUnitId: null,
+    patrolWaypoints: [],  // [{x, y}, ...] in world coords
+
+    // RF motion data (from rfMotion:update events)
+    rfMotionPairs: [],     // active motion pairs with positions
+    rfMotionZones: [],     // occupied zones
+    rfMotionDetected: false,
+
     // Screen shake tracking
     _shakeActive: false,
 
@@ -296,6 +310,9 @@ export function initMap() {
         EventBus.on('minimap:pan', _onMinimapPan),
         EventBus.on('map:flyToMission', _onPanToMission),
         EventBus.on('device:open-modal', _onDeviceOpenModal),
+        EventBus.on('geofence:drawZone', _onGeofenceDrawStart),
+        EventBus.on('patrol:drawRoute', _onPatrolDrawStart),
+        EventBus.on('rfMotion:update', _onRfMotionUpdate),
     );
 
     // Subscribe to store for selectedUnitId changes (highlight sync)
@@ -1955,6 +1972,8 @@ function _drawUnit(ctx, id, unit) {
     else if (type === 'hostile_kid') iconType = 'hostile_person';
     else if (type === 'mesh_radio' || type === 'meshtastic') iconType = 'mesh_radio';
     else if (type === 'ble_device' || type === 'ble') iconType = 'ble_device';
+    else if (type === 'rf_motion') iconType = 'rf_motion';
+    else if (type === 'camera_detection' || type === 'detection') iconType = 'camera_detection';
 
     // BLE confidence-based transparency: low confidence devices render faded
     const isBle = iconType === 'ble_device';
@@ -1981,6 +2000,12 @@ function _drawUnit(ctx, id, unit) {
     // Reset alpha after BLE confidence fade
     if (isBle) {
         ctx.globalAlpha = 1.0;
+    }
+
+    // Fusion indicator for correlated multi-source targets
+    const sourceCount = unit.source_count || (unit.sources ? unit.sources.length : 0);
+    if (sourceCount >= 2) {
+        drawFusionIndicator(ctx, sp.x, sp.y, scale, sourceCount, unit.sources || []);
     }
 
     // Crowd role indicator (civil_unrest mode — instigator/rioter visual differentiation)
@@ -2764,6 +2789,20 @@ function _onMouseDown(e) {
 
     // Left click
     if (e.button === 0) {
+        // Geofence drawing mode: click to add vertex
+        if (_state.geofenceDrawing) {
+            const wp = screenToWorld(sx, sy);
+            _geofenceAddVertex(wp);
+            return;
+        }
+
+        // Patrol drawing mode: click to add waypoint
+        if (_state.patrolDrawing) {
+            const wp = screenToWorld(sx, sy);
+            _patrolAddWaypoint(wp);
+            return;
+        }
+
         // Dispatch mode: click to send selected unit somewhere
         if (_state.dispatchMode && _state.dispatchUnitId) {
             const wp = screenToWorld(sx, sy);
@@ -3252,6 +3291,93 @@ function _onDeviceOpenModal(data) {
     if (unit) {
         DeviceModalManager.open(data.id, _resolveModalType(unit), unit);
     }
+}
+
+// -- Geofence polygon drawing -----------------------------------------
+
+function _onGeofenceDrawStart() {
+    _state.geofenceDrawing = true;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    console.log('[MAP] Geofence draw mode started — click to add vertices, Enter to finish, Escape to cancel');
+}
+
+function _geofenceAddVertex(worldPos) {
+    _state.geofenceVertices.push([worldPos.x, worldPos.y]);
+}
+
+function _geofenceFinish() {
+    const verts = _state.geofenceVertices;
+    _state.geofenceDrawing = false;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    if (verts.length >= 3) {
+        EventBus.emit('geofence:zoneDrawn', { polygon: verts });
+    } else {
+        EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a zone', type: 'alert' });
+    }
+}
+
+function _geofenceCancel() {
+    _state.geofenceDrawing = false;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: 'Geofence drawing cancelled', type: 'info' });
+}
+
+// -- Patrol waypoint drawing ------------------------------------------
+
+function _onPatrolDrawStart(data) {
+    const unitId = data?.unitId;
+    if (!unitId) return;
+    _state.patrolDrawing = true;
+    _state.patrolUnitId = unitId;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: `Click map to add patrol waypoints for ${unitId}, Enter to finish`, type: 'info' });
+}
+
+function _patrolAddWaypoint(worldPos) {
+    _state.patrolWaypoints.push({ x: worldPos.x, y: worldPos.y });
+}
+
+function _patrolFinish() {
+    const wps = _state.patrolWaypoints;
+    const unitId = _state.patrolUnitId;
+    _state.patrolDrawing = false;
+    _state.patrolUnitId = null;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    if (wps.length >= 2 && unitId) {
+        fetch('/api/amy/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'patrol', params: [unitId, ...wps.flatMap(w => [w.x, w.y])] }),
+        }).then(() => {
+            EventBus.emit('toast:show', { message: `Patrol route set: ${wps.length} waypoints`, type: 'info' });
+        }).catch(() => {
+            EventBus.emit('toast:show', { message: 'Failed to set patrol route', type: 'alert' });
+        });
+    } else {
+        EventBus.emit('toast:show', { message: 'Need at least 2 waypoints for a patrol route', type: 'alert' });
+    }
+}
+
+function _patrolCancel() {
+    _state.patrolDrawing = false;
+    _state.patrolUnitId = null;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: 'Patrol drawing cancelled', type: 'info' });
+}
+
+// -- RF motion data handler -------------------------------------------
+
+function _onRfMotionUpdate(data) {
+    if (!data) return;
+    _state.rfMotionPairs = data.pairs || [];
+    _state.rfMotionZones = data.zones || [];
+    _state.rfMotionDetected = data.motionDetected || false;
 }
 
 function _onMinimapPan(data) {

@@ -161,6 +161,12 @@ export class WebSocketManager {
         if (t.radio_signal_strength !== undefined) update.radio_signal_strength = t.radio_signal_strength;
         // Source classification (sim, real, graphling)
         if (t.source !== undefined) update.source = t.source;
+        // Multi-source fusion fields (correlated targets)
+        if (t.sources !== undefined) update.sources = t.sources;
+        if (t.source_count !== undefined) update.source_count = t.source_count;
+        // Position confidence for rendering
+        if (t.position_confidence !== undefined) update.position_confidence = t.position_confidence;
+        if (t.position_source !== undefined) update.position_source = t.position_source;
         // Patrol route fields
         if (t.waypoints !== undefined) update.waypoints = t.waypoints;
         if (t.loop_waypoints !== undefined) update.loopWaypoints = t.loop_waypoints;
