@@ -2040,6 +2040,42 @@ body.v2 {
     color: #05ffa1;
 }
 
+/* Target counter widget in header */
+.target-counter .stat-value { color: var(--cyan); }
+.target-breakdown {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 4px;
+}
+.target-chip {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    padding: 0 4px;
+    border-radius: 3px;
+    line-height: 1.4;
+}
+.target-chip.target-friendly {
+    color: #05ffa1;
+    background: rgba(5, 255, 161, 0.1);
+    border: 1px solid rgba(5, 255, 161, 0.2);
+}
+.target-chip.target-hostile {
+    color: #ff2a6d;
+    background: rgba(255, 42, 109, 0.1);
+    border: 1px solid rgba(255, 42, 109, 0.2);
+}
+.target-chip.target-unknown {
+    color: #fcee0a;
+    background: rgba(252, 238, 10, 0.1);
+    border: 1px solid rgba(252, 238, 10, 0.2);
+}
+/* Hide breakdown when all zeros */
+.target-breakdown:empty,
+.target-chip[data-count="0"] {
+    display: none;
+}
+
 /* Sidebar sections */
 .sidebar-section { border-bottom: 1px solid var(--border); }
 .section-header {

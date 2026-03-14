@@ -57,6 +57,7 @@ import { SystemHealthPanelDef } from './panels/system-health.js';
 import { QuickStartPanelDef } from './panels/quick-start.js';
 import { BookmarksPanelDef } from './panels/bookmarks.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
+import { initTargetCounter } from './target-counter.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -77,6 +78,9 @@ function init() {
     // Clock
     updateClock();
     setInterval(updateClock, 1000);
+
+    // Target counter widget (live target counts in header)
+    initTargetCounter();
 
     // WebSocket
     ws.connect();
