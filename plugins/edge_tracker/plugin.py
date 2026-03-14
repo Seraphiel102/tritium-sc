@@ -250,7 +250,7 @@ class EdgeTrackerPlugin(PluginInterface):
                 self._emit_wifi_update()
 
     def _emit_ble_update(self) -> None:
-        """Emit edge:ble_update with current active devices."""
+        """Emit edge:ble_update with current active devices and push to TargetTracker."""
         if self._event_bus is None or self._store is None:
             return
 
@@ -261,6 +261,26 @@ class EdgeTrackerPlugin(PluginInterface):
                 "count": len(active),
                 "timestamp": time.time(),
             })
+
+            # Push BLE devices into TargetTracker so they appear on the tactical map
+            if self._tracker is not None:
+                for dev in active:
+                    node_id = dev.get("node_id", "unknown")
+                    node_pos = None
+                    try:
+                        np_data = self._store.get_node_position(node_id)
+                        if np_data:
+                            node_pos = {"x": np_data.get("x", 0), "y": np_data.get("y", 0)}
+                    except Exception:
+                        pass
+
+                    self._tracker.update_from_ble({
+                        "mac": dev.get("mac", ""),
+                        "name": dev.get("name", ""),
+                        "rssi": dev.get("rssi", -100),
+                        "node_id": node_id,
+                        "node_position": node_pos,
+                    })
         except Exception as exc:
             log.error("Failed to emit BLE update: %s", exc)
 

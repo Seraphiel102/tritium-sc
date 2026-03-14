@@ -196,6 +196,64 @@ class TargetTracker:
                     position_confidence=0.1,
                 )
 
+    # BLE sightings have longer stale timeout — devices can be stationary
+    BLE_STALE_TIMEOUT = 120.0
+
+    def update_from_ble(self, sighting: dict) -> None:
+        """Update or create a tracked target from a BLE sighting.
+
+        Args:
+            sighting: Dict with keys: mac, name, rssi, node_id,
+                      and optionally position (x, y) from trilateration.
+        """
+        mac = sighting.get("mac", "")
+        if not mac:
+            return
+
+        # Normalize MAC as target ID
+        tid = f"ble_{mac.replace(':', '').lower()}"
+        name = sighting.get("name") or mac
+        rssi = sighting.get("rssi", -100)
+
+        # RSSI → confidence: -30dBm=1.0, -60dBm=0.7, -90dBm=0.1
+        confidence = max(0.0, min(1.0, (rssi + 100) / 70))
+
+        # Position from trilateration if available, else from observer node
+        pos = sighting.get("position")
+        if pos:
+            position = (float(pos.get("x", 0)), float(pos.get("y", 0)))
+            pos_source = "trilateration"
+        else:
+            # Use node position if available
+            node_pos = sighting.get("node_position")
+            if node_pos:
+                position = (float(node_pos.get("x", 0)), float(node_pos.get("y", 0)))
+                pos_source = "node_proximity"
+            else:
+                position = (0.0, 0.0)
+                pos_source = "unknown"
+
+        with self._lock:
+            if tid in self._targets:
+                t = self._targets[tid]
+                t.last_seen = time.monotonic()
+                t.position_confidence = confidence
+                if pos_source != "unknown":
+                    t.position = position
+                    t.position_source = pos_source
+            else:
+                self._targets[tid] = TrackedTarget(
+                    target_id=tid,
+                    name=name,
+                    alliance="unknown",
+                    asset_type="ble_device",
+                    position=position,
+                    last_seen=time.monotonic(),
+                    source="ble",
+                    position_source=pos_source,
+                    position_confidence=confidence,
+                )
+
     def get_all(self) -> list[TrackedTarget]:
         """Return all tracked targets (pruning stale YOLO detections)."""
         self._prune_stale()
@@ -276,6 +334,7 @@ class TargetTracker:
                 tid for tid, t in self._targets.items()
                 if (t.source == "yolo" and (now - t.last_seen) > self.STALE_TIMEOUT)
                 or (t.source == "simulation" and (now - t.last_seen) > self.SIM_STALE_TIMEOUT)
+                or (t.source == "ble" and (now - t.last_seen) > self.BLE_STALE_TIMEOUT)
             ]
             for tid in stale:
                 del self._targets[tid]
