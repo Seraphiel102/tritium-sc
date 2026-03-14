@@ -14,6 +14,36 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 43: SITREP, Multi-Select, Target History Export, Print CSS
+
+### SITREP Generator (Unit Tested, 7 tests)
+- `GET /api/sitrep` — JSON tactical situation report
+- `GET /api/sitrep/text` — plain text SITREP for MQTT/TAK/radio
+- Target counts by alliance, type, source
+- Active threats with positions
+- Fleet status, geofence breaches, Amy assessment
+- Overall threat level: GREEN/YELLOW/ORANGE/RED
+
+### Multi-Select on Map (Syntax Verified)
+- Shift+click to add/remove targets from multi-selection
+- Yellow dashed ring indicator on multi-selected units
+- Bulk action bar: Group Dossier, Export, Compare, Set Alliance, Clear
+- EventBus events: multiselect:changed, multiselect:group-dossier, multiselect:compare, multiselect:set-alliance
+
+### Target History Export (Unit Tested)
+- `GET /api/targets/{id}/history/export?format=csv` — CSV position history
+- JSON and GeoJSON LineString export formats
+- Includes timestamp, lat, lng, x, y, heading, speed, confidence
+
+### Print-Friendly CSS (Syntax Verified)
+- `@media print` rules in tritium.css
+- White backgrounds, high-contrast text colors
+- Hidden UI controls (buttons, menus, status bars)
+- Landscape page layout with TRITIUM-SC header
+- Tables formatted with borders for readability
+
+---
+
 ## 2026-03-14 — Wave 42: Security Hardening + WebSocket Improvements
 
 ### Annotation Security (Unit Tested, 18 tests)
