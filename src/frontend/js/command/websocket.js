@@ -17,8 +17,9 @@ export class WebSocketManager {
     constructor() {
         this._ws = null;
         this._reconnectTimer = null;
-        this._reconnectDelay = 2000;
-        this._maxDelay = 30000;
+        this._reconnectDelay = 1000;
+        this._maxDelay = 16000;
+        this._disconnectedBanner = null;
     }
 
     /**
@@ -36,7 +37,8 @@ export class WebSocketManager {
             this._ws.onopen = () => {
                 console.log('%c[WS] Connected', 'color: #05ffa1;');
                 TritiumStore.set('connection.status', 'connected');
-                this._reconnectDelay = 2000;
+                this._reconnectDelay = 1000;
+                this._hideDisconnectedBanner();
                 EventBus.emit('ws:connected');
                 // Sync full state on every connect (covers initial load and
                 // reconnects — events may have been missed during the gap).
@@ -46,6 +48,7 @@ export class WebSocketManager {
             this._ws.onclose = () => {
                 console.log('%c[WS] Disconnected', 'color: #ff2a6d;');
                 TritiumStore.set('connection.status', 'disconnected');
+                this._showDisconnectedBanner();
                 EventBus.emit('ws:disconnected');
                 this._scheduleReconnect();
             };
@@ -190,10 +193,54 @@ export class WebSocketManager {
 
     _scheduleReconnect() {
         clearTimeout(this._reconnectTimer);
+        const delay = this._reconnectDelay;
+        console.log(`%c[WS] Reconnecting in ${delay / 1000}s...`, 'color: #fcee0a;');
         this._reconnectTimer = setTimeout(() => {
-            this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, this._maxDelay);
+            // Exponential backoff: 1s -> 2s -> 4s -> 8s -> 16s (cap)
+            this._reconnectDelay = Math.min(this._reconnectDelay * 2, this._maxDelay);
             this.connect();
-        }, this._reconnectDelay);
+        }, delay);
+    }
+
+    /**
+     * Show a fixed "DISCONNECTED" banner at the top of the viewport.
+     * Idempotent — safe to call multiple times.
+     */
+    _showDisconnectedBanner() {
+        if (typeof document === 'undefined') return;
+        if (this._disconnectedBanner) return;
+        const banner = document.createElement('div');
+        banner.id = 'ws-disconnected-banner';
+        banner.style.cssText = [
+            'position: fixed',
+            'top: 0',
+            'left: 0',
+            'right: 0',
+            'z-index: 99999',
+            'background: #ff2a6d',
+            'color: #fff',
+            'text-align: center',
+            'padding: 6px 12px',
+            'font-family: monospace',
+            'font-size: 13px',
+            'font-weight: bold',
+            'letter-spacing: 2px',
+            'text-transform: uppercase',
+            'box-shadow: 0 2px 8px rgba(255,42,109,0.5)',
+        ].join(';');
+        banner.textContent = '// DISCONNECTED -- reconnecting...';
+        document.body.appendChild(banner);
+        this._disconnectedBanner = banner;
+    }
+
+    /**
+     * Remove the "DISCONNECTED" banner when connection is restored.
+     */
+    _hideDisconnectedBanner() {
+        if (this._disconnectedBanner) {
+            this._disconnectedBanner.remove();
+            this._disconnectedBanner = null;
+        }
     }
 
     /**

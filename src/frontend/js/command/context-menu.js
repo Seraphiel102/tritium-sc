@@ -19,6 +19,7 @@
  */
 
 import { EventBus } from './events.js';
+import { TritiumStore } from './store.js';
 
 // ============================================================
 // State
@@ -43,6 +44,13 @@ function getMenuItems(selectedUnitId) {
         items.push({ label: 'DISPATCH HERE',  action: 'dispatch',          icon: '>' });
         items.push({ label: 'SUGGEST TO AMY', action: 'suggest_dispatch',  icon: '?' });
         items.push({ label: 'SET WAYPOINT',   action: 'waypoint',          icon: '+' });
+        // Pin/unpin toggle
+        const pinned = TritiumStore.isTargetPinned(selectedUnitId);
+        items.push({
+            label: pinned ? 'UNPIN TARGET' : 'PIN TARGET',
+            action: pinned ? 'unpin' : 'pin',
+            icon: pinned ? '-' : '^',
+        });
     } else {
         items.push({ label: 'DROP MARKER',              action: 'marker',              icon: 'x' });
         items.push({ label: 'SUGGEST TO AMY: INVESTIGATE', action: 'suggest_investigate', icon: '?' });
@@ -230,6 +238,20 @@ function handleAction(action, gamePos, selectedUnitId) {
             });
             break;
         }
+
+        case 'pin':
+            if (selectedUnitId) {
+                TritiumStore.pinTarget(selectedUnitId);
+                EventBus.emit('toast:show', { message: `Pinned: ${selectedUnitId}`, type: 'info' });
+            }
+            break;
+
+        case 'unpin':
+            if (selectedUnitId) {
+                TritiumStore.unpinTarget(selectedUnitId);
+                EventBus.emit('toast:show', { message: `Unpinned: ${selectedUnitId}`, type: 'info' });
+            }
+            break;
 
         case 'cancel':
             // No-op — menu is hidden by the caller

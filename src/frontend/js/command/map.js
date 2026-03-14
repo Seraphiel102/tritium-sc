@@ -2270,6 +2270,11 @@ function _drawUnit(ctx, id, unit) {
         drawCrowdRoleIndicator(ctx, sp.x, sp.y, scale, unit.crowdRole, unit.instigatorState);
     }
 
+    // Pin icon for pinned targets (top-right of unit)
+    if (TritiumStore.isTargetPinned(id)) {
+        _drawPinIcon(ctx, sp.x + scale * 8, sp.y - scale * 10, scale);
+    }
+
     // FSM status badge above unit
     _drawStatusBadge(ctx, unit, sp);
 
@@ -2284,6 +2289,31 @@ function _drawUnit(ctx, id, unit) {
 // ============================================================
 // Target shapes
 // ============================================================
+
+/**
+ * Draw a small pin icon (pushpin shape) at the given position.
+ * Used to indicate that a target is pinned and will not be pruned.
+ */
+function _drawPinIcon(ctx, x, y, scale) {
+    const s = Math.max(3, scale * 4);
+    ctx.save();
+    ctx.fillStyle = '#fcee0a';
+    ctx.strokeStyle = '#0a0a0f';
+    ctx.lineWidth = 1;
+    // Pin head (circle)
+    ctx.beginPath();
+    ctx.arc(x, y, s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Pin needle (line down)
+    ctx.beginPath();
+    ctx.moveTo(x, y + s);
+    ctx.lineTo(x, y + s * 2.5);
+    ctx.strokeStyle = '#fcee0a';
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.stroke();
+    ctx.restore();
+}
 
 function _drawRoundedRect(ctx, cx, cy, size, color) {
     const w = size * 1.6;

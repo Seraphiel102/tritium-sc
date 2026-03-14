@@ -78,6 +78,13 @@ export const TritiumStore = {
     // Alerts (from WebSocket escalation events)
     alerts: [],  // { id, type, message, time, source, read }
 
+    // Pinned targets — always visible, never pruned (persisted to localStorage)
+    pinnedTargets: new Set(
+        typeof localStorage !== 'undefined' && localStorage.getItem('tritium.pinnedTargets')
+            ? JSON.parse(localStorage.getItem('tritium.pinnedTargets'))
+            : []
+    ),
+
     // Cameras (from API /api/cameras)
     cameras: [],
 
@@ -213,9 +220,12 @@ export const TritiumStore = {
 
     /**
      * Remove a unit by id.
+     * Pinned targets are protected from removal.
      * @param {string} id
      */
     removeUnit(id) {
+        // Pinned targets are never pruned
+        if (this.pinnedTargets.has(id)) return;
         this.units.delete(id);
         // Clear selection if the removed unit was selected
         if (this.map.selectedUnitId === id) {
@@ -288,6 +298,47 @@ export const TritiumStore = {
         // Deselect unit and release control
         this.set('map.selectedUnitId', null);
         this.set('controlledUnitId', null);
+    },
+
+    /**
+     * Pin a target so it stays visible and is never pruned.
+     * @param {string} id - target/unit ID
+     */
+    pinTarget(id) {
+        this.pinnedTargets.add(id);
+        this._persistPinnedTargets();
+        this._notify('pinnedTargets', this.pinnedTargets);
+    },
+
+    /**
+     * Unpin a target, allowing it to be pruned normally.
+     * @param {string} id - target/unit ID
+     */
+    unpinTarget(id) {
+        this.pinnedTargets.delete(id);
+        this._persistPinnedTargets();
+        this._notify('pinnedTargets', this.pinnedTargets);
+    },
+
+    /**
+     * Check if a target is pinned.
+     * @param {string} id
+     * @returns {boolean}
+     */
+    isTargetPinned(id) {
+        return this.pinnedTargets.has(id);
+    },
+
+    /**
+     * Save pinned targets to localStorage for persistence across reloads.
+     */
+    _persistPinnedTargets() {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(
+                'tritium.pinnedTargets',
+                JSON.stringify([...this.pinnedTargets])
+            );
+        }
     },
 
     /**
