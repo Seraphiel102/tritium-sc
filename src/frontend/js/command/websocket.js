@@ -409,7 +409,10 @@ export class WebSocketManager {
                 // Route through warHandle* for audio hooks
                 if (typeof window.warHandleGameState === 'function') {
                     window.warHandleGameState(d);
-                } else if (typeof window.warHudUpdateGameState === 'function') {
+                }
+                // Always update HUD state (warHandleGameState may not propagate to warHudUpdateGameState
+                // when war.js is not loaded, e.g. in Command Center view)
+                if (typeof window.warHudUpdateGameState === 'function') {
                     window.warHudUpdateGameState(d);
                 }
                 // Trigger countdown audio when entering countdown state
@@ -465,13 +468,14 @@ export class WebSocketManager {
                 // Route through warHandle* for audio + visual + kill feed
                 if (typeof window.warHandleTargetEliminated === 'function') {
                     window.warHandleTargetEliminated(msg.data || msg);
-                } else {
-                    if (typeof window.warCombatAddEliminationEffect === 'function') {
-                        window.warCombatAddEliminationEffect(msg.data || msg);
-                    }
-                    if (typeof window.warHudAddKillFeedEntry === 'function') {
-                        window.warHudAddKillFeedEntry(msg.data || msg);
-                    }
+                }
+                // Always add elimination effect + kill feed entry (warHandleTargetEliminated
+                // may not propagate to these when war.js is not loaded, e.g. Command Center)
+                if (typeof window.warCombatAddEliminationEffect === 'function') {
+                    window.warCombatAddEliminationEffect(msg.data || msg);
+                }
+                if (typeof window.warHudAddKillFeedEntry === 'function') {
+                    window.warHudAddKillFeedEntry(msg.data || msg);
                 }
                 EventBus.emit('combat:elimination', msg.data || msg);
                 EventBus.emit('game:elimination', msg.data || msg);

@@ -177,6 +177,7 @@ const _state = {
 
     // Saved geofence polygon zones (from /api/geofence/zones)
     geofencePolygonZones: [],
+    geofenceOccupancy: {},  // zone_id -> count
 
     // Night mode — auto-dim map between sunset and sunrise
     nightMode: false,
@@ -1079,6 +1080,41 @@ function _drawGeofencePolygonZones(ctx) {
             ctx.fillStyle = colors.label.replace('0.8', '0.4');
             ctx.font = `${Math.max(7, 9 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
             ctx.fillText(zone.zone_type.toUpperCase(), cx, cy + fontSize + 2);
+
+            // Occupancy count badge
+            const occ = _state.geofenceOccupancy[zone.zone_id] || 0;
+            if (occ > 0) {
+                const badgeY = cy + fontSize + 2 + fontSize;
+                const badgeFontSize = Math.max(9, 10 * Math.min(_state.cam.zoom, 2));
+                // Background pill
+                const badgeText = `${occ} INSIDE`;
+                ctx.font = `bold ${badgeFontSize}px ${FONT_FAMILY}`;
+                const tw = ctx.measureText(badgeText).width;
+                ctx.fillStyle = 'rgba(10, 10, 20, 0.75)';
+                ctx.beginPath();
+                const bx = cx - tw / 2 - 6;
+                const by = badgeY - badgeFontSize / 2 - 3;
+                const bw = tw + 12;
+                const bh = badgeFontSize + 6;
+                const br = 3;
+                ctx.moveTo(bx + br, by);
+                ctx.lineTo(bx + bw - br, by);
+                ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + br);
+                ctx.lineTo(bx + bw, by + bh - br);
+                ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - br, by + bh);
+                ctx.lineTo(bx + br, by + bh);
+                ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - br);
+                ctx.lineTo(bx, by + br);
+                ctx.quadraticCurveTo(bx, by, bx + br, by);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = colors.stroke;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                // Text
+                ctx.fillStyle = colors.stroke;
+                ctx.fillText(badgeText, cx, badgeY);
+            }
         }
     }
 }
@@ -5574,6 +5610,15 @@ function _fetchGeofencePolygonZones() {
         .catch(() => {
             // Geofence zones not available -- non-fatal
         });
+    // Also fetch occupancy counts
+    fetch('/api/geofence/occupancy')
+        .then(r => r.ok ? r.json() : {})
+        .then(data => {
+            if (data && typeof data === 'object') {
+                _state.geofenceOccupancy = data;
+            }
+        })
+        .catch(() => {});
 }
 
 // ============================================================

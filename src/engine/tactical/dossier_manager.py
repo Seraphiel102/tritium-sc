@@ -14,6 +14,7 @@ Lifecycle:
        - ble:new_device (new BLE device appeared)
        - detections (YOLO detection)
        - enrichment_complete (enrichment pipeline finished)
+       - geofence:enter / geofence:exit (zone transition events)
   2. On each event, find-or-create a dossier and attach signals.
   3. Periodic flush (every 30s) persists dirty dossiers to the store.
 
@@ -775,10 +776,11 @@ class DossierManager:
         with self._lock:
             dossier_id = self._target_dossier_map.get(target_id)
         if dossier_id is None:
-            # Only create dossier if target enters a restricted zone
-            if event_type == "geofence:enter" and zone_type == "restricted":
+            # Create dossier for any zone entry (not just restricted)
+            if event_type == "geofence:enter":
+                tags = ["geofence_alert"] if zone_type == "restricted" else []
                 dossier_id = self.find_or_create_for_target(
-                    target_id, name=target_id, tags=["geofence_alert"],
+                    target_id, name=target_id, tags=tags,
                 )
             else:
                 return

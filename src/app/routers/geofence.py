@@ -160,6 +160,17 @@ async def get_zone_occupants(zone_id: str):
     }
 
 
+@router.get("/occupancy")
+async def get_all_occupancy():
+    """Return occupancy counts for all zones (zone_id -> count)."""
+    engine = get_engine()
+    result = {}
+    for zone in engine.list_zones():
+        occupants = engine.get_zone_occupants(zone.zone_id)
+        result[zone.zone_id] = len(occupants)
+    return result
+
+
 @router.delete("/zones/{zone_id}")
 async def delete_zone(zone_id: str, _user: dict = Depends(require_auth)):
     """Delete a geofence zone."""

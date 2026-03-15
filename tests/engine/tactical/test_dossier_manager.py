@@ -726,8 +726,8 @@ class TestGeofenceEventHandling:
         store.close()
 
     @pytest.mark.unit
-    def test_geofence_unknown_target_monitored_ignored(self):
-        """Unknown target in monitored zone should NOT create a dossier."""
+    def test_geofence_unknown_target_monitored_creates_dossier(self):
+        """Unknown target entering monitored zone should create a dossier (no geofence_alert tag)."""
         store = _make_store()
         mgr = DossierManager(store=store)
 
@@ -739,6 +739,28 @@ class TestGeofenceEventHandling:
         })
 
         dossier = mgr.get_dossier_for_target("ble_nobody")
+        assert dossier is not None
+        # Monitored zones should NOT get the geofence_alert tag (only restricted zones do)
+        assert "geofence_alert" not in dossier.get("tags", [])
+        # But should have the zone_entered signal
+        signals = dossier.get("signals", [])
+        assert any(s["signal_type"] == "zone_entered" for s in signals)
+        store.close()
+
+    @pytest.mark.unit
+    def test_geofence_exit_unknown_target_ignored(self):
+        """Unknown target exiting a zone (without prior entry) should NOT create a dossier."""
+        store = _make_store()
+        mgr = DossierManager(store=store)
+
+        mgr._handle_geofence_event("geofence:exit", {
+            "target_id": "ble_ghost",
+            "zone_name": "Garden",
+            "zone_type": "monitored",
+            "position": [1.0, 2.0],
+        })
+
+        dossier = mgr.get_dossier_for_target("ble_ghost")
         assert dossier is None
         store.close()
 
