@@ -309,7 +309,7 @@ function makeMockMapActions() {
         showSatellite: true, showRoads: true, showBuildings: true,
         showWaterways: true, showParks: true, showGrid: true,
         showUnits: true, showModels3d: true, showLabels: true, showMesh: true, showThoughts: true, showFog: true,
-        showTerrain: true, tiltMode: 'tilted',
+        showPredictionCones: true, showTerrain: true, tiltMode: 'tilted',
         showTracers: true, showExplosions: true, showParticles: true,
         showHitFlashes: true, showFloatingText: true,
         showKillFeed: true, showScreenFx: true, showBanners: true,
@@ -331,6 +331,7 @@ function makeMockMapActions() {
         toggleMesh() { state.showMesh = !state.showMesh; calls.push('toggleMesh'); },
         toggleThoughts() { state.showThoughts = !state.showThoughts; calls.push('toggleThoughts'); },
         toggleFog() { state.showFog = !state.showFog; calls.push('toggleFog'); },
+        togglePredictionCones() { state.showPredictionCones = !state.showPredictionCones; calls.push('togglePredictionCones'); },
         toggleTerrain() { state.showTerrain = !state.showTerrain; calls.push('toggleTerrain'); },
         toggleTilt() { state.tiltMode = state.tiltMode === 'flat' ? 'tilted' : 'flat'; calls.push('toggleTilt'); },
         toggleTracers() { state.showTracers = !state.showTracers; calls.push('toggleTracers'); },
@@ -1341,10 +1342,10 @@ console.log('\n--- Dropdown items structure ---');
     //           Health Bars, Selection FX, sep,
     //           Layer Browser, Toggle All, sep,
     //           Satellite, Buildings, Roads, Grid, Unit Markers, GIS, sep,
-    //           Fog, Terrain, 3D Mode, sep,
-    //           Center, Reset, Zoom In, Zoom Out = 18
-    assert(mapDropdown.children.length === 18,
-        'MAP dropdown has 18 items, got ' + mapDropdown.children.length);
+    //           Fog, Prediction Cones, Terrain, 3D Mode, sep,
+    //           Center, Reset, Zoom In, Zoom Out = 19
+    assert(mapDropdown.children.length === 19,
+        'MAP dropdown has 19 items, got ' + mapDropdown.children.length);
 
     // First item: Layer Browser... (action)
     const layerBrowserItem = mapDropdown.children[0];
@@ -1414,7 +1415,7 @@ console.log('\n--- Dropdown items structure ---');
     // Separators at indices 2, 9, 13
     assert(mapDropdown.children[2].className === 'menu-separator', 'MAP has separator at index 2 (after Toggle All)');
     assert(mapDropdown.children[9].className === 'menu-separator', 'MAP has separator at index 9 (after quick toggles)');
-    assert(mapDropdown.children[13].className === 'menu-separator', 'MAP has separator at index 13 (after view)');
+    assert(mapDropdown.children[14].className === 'menu-separator', 'MAP has separator at index 14 (after view)');
 })();
 
 (function testHelpMenuItems() {
@@ -2061,7 +2062,8 @@ const _fxToggleTests = [
     { label: 'Unit Markers', stateKey: 'showUnits', action: 'toggleUnits', index: 7 },
     { label: 'GIS Intelligence', stateKey: 'showGeoLayers', action: 'toggleGeoLayers', index: 8 },
     { label: 'Fog of War', stateKey: 'showFog', action: 'toggleFog', index: 10 },
-    { label: 'Terrain', stateKey: 'showTerrain', action: 'toggleTerrain', index: 11 },
+    { label: 'Prediction Cones', stateKey: 'showPredictionCones', action: 'togglePredictionCones', index: 11 },
+    { label: 'Terrain', stateKey: 'showTerrain', action: 'toggleTerrain', index: 12 },
 ];
 
 for (const tt of _fxToggleTests) {

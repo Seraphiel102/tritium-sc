@@ -4830,3 +4830,156 @@
 .mqt-btn.active:hover {
     background: #00f0ff20;
 }
+
+/* ============================================================
+   Device Capabilities Matrix Panel
+   ============================================================ */
+
+.dcm-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.dcm-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    background: var(--surface-2, #12121a);
+    border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+    flex-shrink: 0;
+}
+
+.dcm-summary-label {
+    font-size: 0.7rem;
+    color: var(--cyan, #00f0ff);
+    white-space: nowrap;
+}
+
+.dcm-summary-caps {
+    display: flex;
+    gap: 10px;
+}
+
+.dcm-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.dcm-summary-icon {
+    font-family: monospace;
+    font-size: 0.7rem;
+    font-weight: bold;
+}
+
+.dcm-summary-count {
+    font-size: 0.7rem;
+}
+
+.dcm-table-wrap {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+}
+
+.dcm-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+}
+
+.dcm-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-2, #12121a);
+    color: var(--text-dim, #8892b0);
+    padding: 6px 4px;
+    text-align: center;
+    font-size: 0.65rem;
+    font-weight: normal;
+    border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+    z-index: 1;
+}
+
+.dcm-device-header {
+    text-align: left !important;
+    padding-left: 8px !important;
+}
+
+.dcm-status-header {
+    min-width: 50px;
+}
+
+.dcm-cap-header {
+    min-width: 28px;
+    font-weight: bold !important;
+}
+
+.dcm-score-header {
+    min-width: 40px;
+}
+
+.dcm-row {
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.15s;
+}
+
+.dcm-row:hover {
+    background: rgba(0, 240, 255, 0.04);
+}
+
+.dcm-device-cell {
+    padding: 5px 8px;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text, #e0e0e0);
+    font-size: 0.7rem;
+}
+
+.dcm-cap-cell {
+    text-align: center;
+    padding: 4px 2px;
+    font-family: monospace;
+    font-size: 0.75rem;
+    font-weight: bold;
+}
+
+.dcm-cap-on {
+    text-shadow: 0 0 6px currentColor;
+}
+
+.dcm-cap-off {
+    color: var(--text-dim, #444) !important;
+    opacity: 0.3;
+}
+
+.dcm-cap-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+}
+
+.dcm-score-cell {
+    text-align: center;
+    padding: 4px 6px;
+    font-size: 0.7rem;
+    font-weight: bold;
+}
+
+.dcm-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    background: var(--surface-2, #12121a);
+    border-top: 1px solid var(--border, rgba(255,255,255,0.06));
+    flex-shrink: 0;
+    font-size: 0.65rem;
+}

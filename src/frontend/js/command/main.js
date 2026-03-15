@@ -52,6 +52,7 @@ import { HeatmapPanelDef } from './panels/heatmap.js';
 import { HeatmapTimelinePanelDef } from './panels/heatmap-timeline.js';
 import { TestingPanelDef } from './panels/testing.js';
 import { DeviceManagerPanelDef } from './panels/device-manager.js';
+import { DeviceCapabilitiesPanelDef } from './panels/device-capabilities.js';
 import { AutomationPanelDef } from './panels/automation.js';
 import { RfMotionPanelDef } from './panels/rf-motion.js';
 import { EdgeIntelligencePanelDef } from './panels/edge-intelligence.js';
@@ -571,6 +572,7 @@ function initPanelSystem(container) {
     panelManager.register(HeatmapTimelinePanelDef);
     panelManager.register(TestingPanelDef);
     panelManager.register(DeviceManagerPanelDef);
+    panelManager.register(DeviceCapabilitiesPanelDef);
     panelManager.register(AutomationPanelDef);
     panelManager.register(RfMotionPanelDef);
     panelManager.register(EdgeIntelligencePanelDef);
