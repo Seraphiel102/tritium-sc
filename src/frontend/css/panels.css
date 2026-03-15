@@ -4690,3 +4690,89 @@
     margin-top: 3px;
     line-height: 1.4;
 }
+
+/* ================================================================== */
+/* Tactical Situation Banner                                           */
+/* ================================================================== */
+
+.tactical-banner {
+    display: flex;
+    align-items: center;
+    height: 24px;
+    background: var(--surface-1, #0e0e14);
+    border-bottom: 1px solid #05ffa133;
+    padding: 0 12px;
+    gap: 0;
+    z-index: 50;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.tb-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+}
+
+.tb-threat {
+    gap: 5px;
+}
+
+.tb-sep {
+    width: 1px;
+    height: 14px;
+    background: var(--border-dim, #1a1a2e);
+    flex-shrink: 0;
+}
+
+.tb-label {
+    font-size: 0.55rem;
+    color: var(--text-dim, #556);
+    letter-spacing: 1px;
+}
+
+.tb-value {
+    font-size: 0.65rem;
+    color: var(--cyan, #00f0ff);
+    font-weight: 600;
+}
+
+.tb-threat-dot,
+.tb-amy-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #05ffa1;
+    flex-shrink: 0;
+}
+
+.tb-threat-level {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #05ffa1;
+    letter-spacing: 1px;
+}
+
+.tb-alert-value.tb-alert-active {
+    color: #ff2a6d;
+    animation: tb-alert-pulse 1.5s ease infinite;
+}
+
+@keyframes tb-alert-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.tb-pulse {
+    animation: tb-dot-pulse 1s ease infinite;
+}
+
+@keyframes tb-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.4); }
+}
+
+.tb-amy-section {
+    margin-left: auto;
+}

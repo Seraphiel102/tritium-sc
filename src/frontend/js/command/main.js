@@ -83,6 +83,7 @@ import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
 import { initTargetFilter, matchesFilter, getTargetFilters } from './target-filter.js';
 import { initCommandPalette, openCommandPalette } from './command-palette.js';
+import { createTacticalBanner } from './tactical-banner.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -711,6 +712,9 @@ function initPanelSystem(container) {
         // Expose for automated testing
         window._mapActions = mapActions;
         menuBarEl = createMenuBar(barContainer, panelManager, layoutManager, mapActions);
+
+        // Tactical situation banner (persistent bar below menu)
+        createTacticalBanner(barContainer);
 
         // Command palette (Ctrl+K or /)
         initCommandPalette(panelManager, mapActions);
