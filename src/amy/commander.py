@@ -2006,6 +2006,12 @@ class Commander:
         print("=" * 58)
         print()
 
+        # Publish initial thought so the frontend doesn't stay on
+        # "Awaiting initialization..." — Amy is online and aware.
+        boot_thought = "Systems online. All sensors active — scanning the area."
+        self.sensorium.push("thought", boot_thought)
+        self.event_bus.publish("thought", {"text": boot_thought})
+
         listening_since: float | None = None
 
         try:
@@ -2201,62 +2207,51 @@ class Commander:
                     state = data.get("state", "")
                     wave = data.get("wave", 0)
                     if state == "countdown":
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation starting — countdown initiated.",
-                            importance=0.9,
-                        )
+                        text = "Battle simulation starting — countdown initiated."
+                        self.sensorium.push("tactical", text, importance=0.9)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "active" and wave == 1:
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation active — Wave 1 beginning. All units engage.",
-                            importance=1.0,
-                        )
+                        text = "Battle simulation active — Wave 1 beginning. All units engage."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
+                        # Unsuppress thinking so Amy responds immediately
+                        if self.thinking is not None:
+                            self.thinking._suppress_until = 0.0
                     elif state == "active" and wave > 1:
                         wave_name = data.get("wave_name", f"Wave {wave}")
-                        self.sensorium.push(
-                            "tactical",
-                            f"Wave {wave} ({wave_name}) incoming.",
-                            importance=0.9,
-                        )
+                        text = f"Wave {wave} ({wave_name}) incoming."
+                        self.sensorium.push("tactical", text, importance=0.9)
+                        self.event_bus.publish("thought", {"text": text})
+                        if self.thinking is not None:
+                            self.thinking._suppress_until = 0.0
                     elif state == "victory":
                         score = data.get("score", 0)
                         elims = data.get("total_eliminations", 0)
-                        self.sensorium.push(
-                            "tactical",
-                            f"Victory — all waves cleared. Score: {score}, eliminations: {elims}.",
-                            importance=1.0,
-                        )
+                        text = f"Victory — all waves cleared. Score: {score}, eliminations: {elims}."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "defeat":
-                        self.sensorium.push(
-                            "tactical",
-                            "Defeat — all friendly combatants eliminated. Battle simulation ended.",
-                            importance=1.0,
-                        )
+                        text = "Defeat — all friendly combatants eliminated. Battle simulation ended."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "setup":
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation reset. Returning to normal operations.",
-                            importance=0.7,
-                        )
+                        text = "Battle simulation reset. Returning to normal operations."
+                        self.sensorium.push("tactical", text, importance=0.7)
+                        self.event_bus.publish("thought", {"text": text})
                 elif msg_type == "wave_complete":
                     data = msg.get("data", {})
                     wave = data.get("wave", 0)
                     elims = data.get("eliminations", 0)
-                    self.sensorium.push(
-                        "tactical",
-                        f"Wave {wave} cleared — {elims} hostiles eliminated.",
-                        importance=0.8,
-                    )
+                    text = f"Wave {wave} cleared — {elims} hostiles eliminated."
+                    self.sensorium.push("tactical", text, importance=0.8)
+                    self.event_bus.publish("thought", {"text": text})
                 elif msg_type == "game_over":
                     data = msg.get("data", {})
                     result = data.get("result", "unknown")
                     score = data.get("score", 0)
-                    self.sensorium.push(
-                        "tactical",
-                        f"Battle simulation ended: {result}. Final score: {score}.",
-                        importance=1.0,
-                    )
+                    text = f"Battle simulation ended: {result}. Final score: {score}."
+                    self.sensorium.push("tactical", text, importance=1.0)
+                    self.event_bus.publish("thought", {"text": text})
                 # ── Edge sensor events ─────────────────────────
                 elif msg_type == "fleet.ble_presence":
                     data = msg.get("data", {})
@@ -2299,6 +2294,12 @@ class Commander:
                         if dispatcher is not None:
                             dispatcher.clear_dispatch(hostile_id)
             except queue.Empty:
+                # While idle, generate periodic tactical summaries during
+                # active combat so Amy always appears aware.
+                if _maybe_generate_tactical_summary(self):
+                    summary = _generate_tactical_summary(self)
+                    if summary:
+                        self.event_bus.publish("thought", {"text": summary})
                 continue
             except Exception as e:
                 import logging

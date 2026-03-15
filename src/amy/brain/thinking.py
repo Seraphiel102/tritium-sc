@@ -404,7 +404,8 @@ class ThinkingThread:
 
         # Build war mode context if game is active
         war_mode_ctx = ""
-        game_mode = getattr(commander, "game_mode", None)
+        sim_engine = getattr(commander, "simulation_engine", None)
+        game_mode = getattr(sim_engine, "game_mode", None) if sim_engine else None
         if game_mode is not None:
             state = getattr(game_mode, "state", None)
             if state == "active":
