@@ -33,6 +33,9 @@ class AddSourceRequest(BaseModel):
     uri: str = ""
     lat: float | None = None
     lng: float | None = None
+    heading: float | None = None
+    fov_angle: float | None = None
+    fov_range: float | None = None
     extra: dict = {}
 
 
@@ -60,6 +63,9 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
                 "latest_detection": None,
                 "lat": s.get("lat"),
                 "lng": s.get("lng"),
+                "heading": s.get("heading"),
+                "fov_angle": s.get("fov_angle"),
+                "fov_range": s.get("fov_range"),
                 "source_type": s.get("source_type", ""),
                 "uri": s.get("uri", ""),
             })
@@ -92,6 +98,12 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
             extra["lat"] = request.lat
         if request.lng is not None:
             extra["lng"] = request.lng
+        if request.heading is not None:
+            extra["heading"] = request.heading
+        if request.fov_angle is not None:
+            extra["fov_angle"] = request.fov_angle
+        if request.fov_range is not None:
+            extra["fov_range"] = request.fov_range
         config = CameraSourceConfig(
             source_id=request.source_id,
             source_type=request.source_type,

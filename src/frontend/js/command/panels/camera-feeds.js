@@ -85,6 +85,10 @@ export const CameraFeedsPanelDef = {
                                 <input type="number" name="lng" step="any" placeholder="-97.5678" class="cf-form-input" />
                             </label>
                         </div>
+                        <label class="cf-form-label">
+                            <span class="mono">HEADING (deg, 0=North)</span>
+                            <input type="number" name="heading" step="any" min="0" max="360" placeholder="0" class="cf-form-input" />
+                        </label>
                         <button type="button" class="panel-action-btn cf-pick-map-btn" data-action="cf-pick-map" style="margin-bottom:8px;width:100%;color:#00f0ff;border-color:#00f0ff33">
                             PICK LOCATION FROM MAP
                         </button>
@@ -169,8 +173,10 @@ export const CameraFeedsPanelDef = {
             };
             const latVal = fd.get('lat');
             const lngVal = fd.get('lng');
+            const headingVal = fd.get('heading');
             if (latVal && latVal.trim()) payload.lat = parseFloat(latVal);
             if (lngVal && lngVal.trim()) payload.lng = parseFloat(lngVal);
+            if (headingVal && headingVal.trim()) payload.heading = parseFloat(headingVal);
 
             try {
                 const resp = await fetch('/api/camera-feeds/sources', {

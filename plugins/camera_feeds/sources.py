@@ -114,11 +114,17 @@ class CameraSourceBase(ABC):
             "frame_count": self._frame_count,
             "created_at": self._created_at,
         }
-        # Expose location if present
+        # Expose location and orientation if present
         if "lat" in self.config.extra:
             d["lat"] = self.config.extra["lat"]
         if "lng" in self.config.extra:
             d["lng"] = self.config.extra["lng"]
+        if "heading" in self.config.extra:
+            d["heading"] = self.config.extra["heading"]
+        if "fov_angle" in self.config.extra:
+            d["fov_angle"] = self.config.extra["fov_angle"]
+        if "fov_range" in self.config.extra:
+            d["fov_range"] = self.config.extra["fov_range"]
         return d
 
 

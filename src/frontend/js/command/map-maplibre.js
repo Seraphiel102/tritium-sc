@@ -9328,7 +9328,9 @@ export function centerOnAction() {
 const CAMERA_SOURCE_ID = 'tritium-camera-markers';
 const CAMERA_FOV_SOURCE_ID = 'tritium-camera-fov';
 const CAMERA_LAYER_CIRCLE = 'tritium-camera-circle';
+const CAMERA_LAYER_GLOW = 'tritium-camera-glow';
 const CAMERA_LAYER_LABEL = 'tritium-camera-label';
+const CAMERA_LAYER_ICON = 'tritium-camera-icon';
 const CAMERA_LAYER_FOV = 'tritium-camera-fov-fill';
 const CAMERA_LAYER_FOV_LINE = 'tritium-camera-fov-line';
 
@@ -9462,41 +9464,79 @@ function _onCamerasChanged(data) {
         } else {
             _state.map.addSource(CAMERA_SOURCE_ID, { type: 'geojson', data: geojson });
 
-            // Camera circle marker
+            // Camera outer glow ring — makes cameras visible at all zoom levels
+            _state.map.addLayer({
+                id: CAMERA_LAYER_GLOW,
+                type: 'circle',
+                source: CAMERA_SOURCE_ID,
+                paint: {
+                    'circle-radius': 18,
+                    'circle-color': 'transparent',
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#00f0ff',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'circle-stroke-opacity': 0.5,
+                },
+            });
+
+            // Camera circle marker — larger, distinctive from targets
             _state.map.addLayer({
                 id: CAMERA_LAYER_CIRCLE,
                 type: 'circle',
                 source: CAMERA_SOURCE_ID,
                 paint: {
-                    'circle-radius': 8,
+                    'circle-radius': 12,
                     'circle-color': [
                         'match', ['get', 'status'],
                         'streaming', '#05ffa1',
                         'connecting', '#fcee0a',
                         '#ff2a6d',
                     ],
-                    'circle-stroke-width': 2,
+                    'circle-stroke-width': 3,
                     'circle-stroke-color': '#00f0ff',
-                    'circle-opacity': 0.85,
+                    'circle-opacity': 0.9,
                 },
             });
 
-            // Camera label
+            // Camera icon letter "C" — always visible, overlaps allowed
+            _state.map.addLayer({
+                id: CAMERA_LAYER_ICON,
+                type: 'symbol',
+                source: CAMERA_SOURCE_ID,
+                layout: {
+                    'text-field': 'C',
+                    'text-size': 14,
+                    'text-font': ['Open Sans Semibold'],
+                    'text-allow-overlap': true,
+                    'text-ignore-placement': true,
+                },
+                paint: {
+                    'text-color': '#0a0a0f',
+                },
+            });
+
+            // Camera label — name below the marker
             _state.map.addLayer({
                 id: CAMERA_LAYER_LABEL,
                 type: 'symbol',
                 source: CAMERA_SOURCE_ID,
                 layout: {
-                    'text-field': ['concat', 'CAM ', ['get', 'name']],
-                    'text-size': 11,
-                    'text-offset': [0, 1.4],
+                    'text-field': ['get', 'name'],
+                    'text-size': 12,
+                    'text-offset': [0, 2.0],
                     'text-anchor': 'top',
                     'text-font': ['Open Sans Semibold'],
+                    'text-allow-overlap': true,
+                    'text-ignore-placement': true,
                 },
                 paint: {
                     'text-color': '#00f0ff',
                     'text-halo-color': '#0a0a0f',
-                    'text-halo-width': 1.5,
+                    'text-halo-width': 2,
                 },
             });
 
@@ -9537,13 +9577,13 @@ function _onCamerasChanged(data) {
                 paint: {
                     'fill-color': [
                         'match', ['get', 'status'],
-                        'streaming', 'rgba(5, 255, 161, 0.12)',
+                        'streaming', 'rgba(0, 240, 255, 0.10)',
                         'connecting', 'rgba(252, 238, 10, 0.10)',
                         'rgba(255, 42, 109, 0.08)',
                     ],
-                    'fill-opacity': 0.7,
+                    'fill-opacity': 0.8,
                 },
-            }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
+            }, CAMERA_LAYER_GLOW); // insert below the glow layer
 
             // Outline for FOV cone
             _state.map.addLayer({
@@ -9553,15 +9593,15 @@ function _onCamerasChanged(data) {
                 paint: {
                     'line-color': [
                         'match', ['get', 'status'],
-                        'streaming', '#05ffa1',
+                        'streaming', '#00f0ff',
                         'connecting', '#fcee0a',
                         '#ff2a6d',
                     ],
-                    'line-width': 1,
-                    'line-opacity': 0.5,
+                    'line-width': 1.5,
+                    'line-opacity': 0.6,
                     'line-dasharray': [4, 3],
                 },
-            }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
+            }, CAMERA_LAYER_GLOW); // insert below the glow layer
         }
     } catch (err) {
         console.warn('[MAP-ML] Camera marker layer error:', err.message || err);
