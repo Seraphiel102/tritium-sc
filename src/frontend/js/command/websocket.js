@@ -167,6 +167,12 @@ export class WebSocketManager {
         // Multi-source fusion fields (correlated targets)
         if (t.sources !== undefined) update.sources = t.sources;
         if (t.source_count !== undefined) update.source_count = t.source_count;
+        if (t.confirming_sources !== undefined) {
+            update.sources = t.confirming_sources;
+            update.source_count = t.confirming_sources.length;
+        }
+        if (t.correlated_ids !== undefined) update.correlated_ids = t.correlated_ids;
+        if (t.correlation_confidence !== undefined) update.correlation_confidence = t.correlation_confidence;
         // Position confidence for rendering
         if (t.position_confidence !== undefined) update.position_confidence = t.position_confidence;
         if (t.position_source !== undefined) update.position_source = t.position_source;

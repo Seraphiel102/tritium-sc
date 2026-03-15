@@ -278,6 +278,11 @@ class TargetCorrelator:
                 # Merge secondary into primary
                 self._merge(primary, secondary)
 
+                # Store correlation confidence on the primary target
+                primary.correlation_confidence = max(
+                    primary.correlation_confidence, weighted_confidence
+                )
+
                 # Remove the secondary from the tracker
                 self.tracker.remove(secondary.target_id)
 
@@ -401,6 +406,18 @@ class TargetCorrelator:
         # Append source info to name if not already composite
         if secondary.source not in primary.name:
             primary.name = f"{primary.name} [{secondary.source}]"
+
+        # Track correlated (fused) target IDs
+        if secondary.target_id not in primary.correlated_ids:
+            primary.correlated_ids.append(secondary.target_id)
+        # Also inherit any previously correlated IDs from the secondary
+        for cid in secondary.correlated_ids:
+            if cid not in primary.correlated_ids:
+                primary.correlated_ids.append(cid)
+
+        # Merge confirming sources from secondary
+        primary.confirming_sources.add(secondary.source)
+        primary.confirming_sources |= secondary.confirming_sources
 
         # If primary has low-quality position but secondary is better, use secondary
         if secondary.position_confidence > primary.position_confidence:

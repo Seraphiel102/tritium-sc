@@ -107,6 +107,8 @@ class TrackedTarget:
     threat_score: float = 0.0  # 0.0 = no threat, 1.0 = maximum threat probability
     _initial_confidence: float = 0.0  # stored at detection time for decay
     confirming_sources: set = field(default_factory=set)  # source types that confirmed this target
+    correlated_ids: list = field(default_factory=list)  # IDs of targets fused into this one
+    correlation_confidence: float = 0.0  # weighted correlation score from correlator
     velocity_suspicious: bool = False  # flagged if target teleported
     _last_velocity_flag: float = 0.0  # monotonic time of last velocity flag
 
@@ -145,6 +147,10 @@ class TrackedTarget:
             "position_confidence": self.effective_confidence,
             "threat_score": self.threat_score,
             "confirming_sources": list(self.confirming_sources),
+            "sources": list(self.confirming_sources),
+            "source_count": len(self.confirming_sources),
+            "correlated_ids": list(self.correlated_ids),
+            "correlation_confidence": self.correlation_confidence,
             "velocity_suspicious": self.velocity_suspicious,
         }
         if history is not None:

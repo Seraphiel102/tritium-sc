@@ -2468,6 +2468,26 @@ function _drawTooltip(ctx) {
         if (u.coverage_radius_meters) lines.push('RANGE: ' + u.coverage_radius_meters + 'm');
         if (u.coverage_cone_angle && u.coverage_cone_angle < 360) lines.push('FOV: ' + u.coverage_cone_angle + '\u00B0');
     }
+    // Fusion / multi-source correlation info
+    const tooltipSources = u.sources || u.confirming_sources || [];
+    const tooltipSourceCount = u.source_count || tooltipSources.length;
+    if (tooltipSourceCount >= 2) {
+        lines.push('--- FUSED TARGET ---');
+        lines.push('SOURCES: ' + tooltipSources.map(s => s.toUpperCase()).join(' + '));
+        if (u.correlation_confidence) {
+            lines.push('CORRELATION: ' + Math.round(u.correlation_confidence * 100) + '%');
+        }
+        if (u.correlated_ids && u.correlated_ids.length > 0) {
+            const idList = u.correlated_ids.map(id => {
+                // Truncate long IDs for display
+                return id.length > 20 ? id.substring(0, 18) + '..' : id;
+            });
+            lines.push('MERGED: ' + idList.join(', '));
+        }
+        if (u.position_confidence !== undefined) {
+            lines.push('POS CONF: ' + Math.round(u.position_confidence * 100) + '%');
+        }
+    }
 
     ctx.save();
     ctx.font = `11px ${FONT_FAMILY}`;
@@ -2607,6 +2627,9 @@ function _drawUnit(ctx, id, unit) {
     // Compact icons: ~0.4x at zoom 1.5, matching 3D indicator scale
     let scale = Math.min(_state.cam.zoom, 3) / 4.0;
     scale = Math.max(0.2, Math.min(0.8, scale));
+    // Fused multi-source targets render slightly larger for prominence
+    const fusedSourceCount = unit.source_count || (unit.sources ? unit.sources.length : 0);
+    if (fusedSourceCount >= 2) scale *= 1.1 + Math.min(fusedSourceCount - 2, 3) * 0.05;
     if (isSelected) scale *= 1.3;
     else if (isMultiSelected) scale *= 1.2;
     else if (isHovered) scale *= 1.15;

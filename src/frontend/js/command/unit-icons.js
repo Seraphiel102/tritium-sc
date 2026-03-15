@@ -806,18 +806,9 @@ function drawFusionIndicator(ctx, screenX, screenY, scale, sourceCount, sourceTy
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const rotSpeed = 0.0008;
     const rotation = now * rotSpeed;
+    const pulse = 0.7 + 0.3 * Math.sin(now / 600);
 
-    // Outer fusion ring (double line, rotating dash)
-    ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
-    ctx.lineWidth = 1.5 * scale;
-    ctx.setLineDash([6, 4]);
-    ctx.lineDashOffset = -rotation * 50;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Source type pips around the ring
+    // Source color map
     const SOURCE_COLORS = {
         ble: '#00f0ff',     // cyan
         yolo: '#ff2a6d',    // magenta
@@ -829,54 +820,133 @@ function drawFusionIndicator(ctx, screenX, screenY, scale, sourceCount, sourceTy
         simulation: '#05ffa1',
     };
 
+    // Source icon glyphs (single char shorthand)
+    const SOURCE_ICONS = {
+        ble: '\u{1F4F6}',       // signal bars
+        yolo: '\u{1F4F7}',      // camera
+        camera: '\u{1F4F7}',    // camera
+        mesh: '\u{1F4E1}',      // antenna
+        meshtastic: '\u{1F4E1}',
+        wifi: '\u{1F4F6}',      // signal
+        rf_motion: '\u{1F30A}', // wave
+        simulation: '\u{2699}', // gear
+    };
+
+    // Source label abbreviations (fallback for monospace rendering)
+    const SOURCE_LABELS = {
+        ble: 'BLE',
+        yolo: 'CAM',
+        camera: 'CAM',
+        mesh: 'MESH',
+        meshtastic: 'MESH',
+        wifi: 'WiFi',
+        rf_motion: 'RF',
+        simulation: 'SIM',
+    };
+
     const types = sourceTypes || [];
+
+    // --- Concentric rings ---
+    // Inner ring: solid, brighter
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.4 * pulse})`;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Middle ring: dashed, rotating
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.35 * pulse})`;
+    ctx.lineWidth = 1.2 * scale;
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -rotation * 50;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Outer ring: faint glow, counter-rotating
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.15 * pulse})`;
+    ctx.lineWidth = 2.5 * scale;
+    ctx.setLineDash([3, 6]);
+    ctx.lineDashOffset = rotation * 30;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // --- Source icon badges around the ring ---
     const pipCount = Math.max(sourceCount, types.length);
     for (let i = 0; i < pipCount; i++) {
-        const angle = (i / pipCount) * Math.PI * 2 - Math.PI / 2 + rotation;
-        const px = Math.cos(angle) * r;
-        const py = Math.sin(angle) * r;
+        const angle = (i / pipCount) * Math.PI * 2 - Math.PI / 2;
+        const orbR = r * 1.15;
+        const px = Math.cos(angle) * orbR;
+        const py = Math.sin(angle) * orbR;
         const type = types[i] || 'unknown';
         const pipColor = SOURCE_COLORS[type] || '#fcee0a';
+        const label = SOURCE_LABELS[type] || type.substring(0, 3).toUpperCase();
 
-        // Pip dot
-        ctx.fillStyle = pipColor;
+        // Icon background circle
+        const iconR = 8 * scale;
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.9)';
         ctx.beginPath();
-        ctx.arc(px, py, 3 * scale, 0, Math.PI * 2);
+        ctx.arc(px, py, iconR, 0, Math.PI * 2);
         ctx.fill();
 
-        // Pip glow
-        ctx.fillStyle = pipColor.replace(')', ', 0.3)').replace('#', '');
-        ctx.globalAlpha = 0.3;
+        // Icon border with source color
+        ctx.strokeStyle = pipColor;
+        ctx.lineWidth = 1.2 * scale;
         ctx.beginPath();
-        ctx.arc(px, py, 5 * scale, 0, Math.PI * 2);
+        ctx.arc(px, py, iconR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Icon label text
+        ctx.fillStyle = pipColor;
+        ctx.font = `bold ${Math.max(6, 7 * scale)}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, px, py);
+
+        // Small glow behind the icon
+        ctx.globalAlpha = 0.15 * pulse;
+        ctx.fillStyle = pipColor;
+        ctx.beginPath();
+        ctx.arc(px, py, iconR + 3 * scale, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1.0;
     }
 
-    // Source count badge (top-right)
-    const badgeX = r * 0.7;
-    const badgeY = -r * 0.7;
-    const badgeR = 6 * scale;
+    // --- Fusion count badge (top-right) ---
+    const badgeX = r * 0.85;
+    const badgeY = -r * 0.85;
+    const badgeR = 7 * scale;
 
     // Badge background
-    ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.9)';
     ctx.beginPath();
     ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
     ctx.fill();
 
-    // Badge border
-    ctx.strokeStyle = '#00f0ff';
-    ctx.lineWidth = 1;
+    // Badge border — multi-color gradient effect by using brightest source color
+    const primaryColor = types.length > 0 ? (SOURCE_COLORS[types[0]] || '#00f0ff') : '#00f0ff';
+    ctx.strokeStyle = primaryColor;
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
     ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
     ctx.stroke();
 
     // Badge text
-    ctx.fillStyle = '#00f0ff';
+    ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${Math.max(7, 9 * scale)}px "JetBrains Mono", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(sourceCount), badgeX, badgeY);
+
+    // --- "FUSED" label below the rings ---
+    ctx.fillStyle = `rgba(0, 240, 255, ${0.5 * pulse})`;
+    ctx.font = `bold ${Math.max(6, 7 * scale)}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('FUSED', 0, r * 1.3 + 4 * scale);
 
     ctx.restore();
 }
