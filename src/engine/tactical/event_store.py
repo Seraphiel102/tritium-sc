@@ -64,6 +64,9 @@ _TRACKED_EVENT_TYPES = (
     "rf_motion",
     "patrol_event",
     "investigation_event",
+    "convoy_detected",
+    "convoy_dissolved",
+    "daily_summary",
 )
 
 

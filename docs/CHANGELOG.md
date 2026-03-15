@@ -14,6 +14,18 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 145: Convoy Detection + Daily Activity Summary
+
+| Change | Verification |
+|--------|-------------|
+| ConvoyDetector — detects 3+ co-moving targets (heading/speed/distance similarity), BFS connected components | 12 tests pass |
+| ConvoySuspiciousScore — heading variance, speed variance, duration, member count weighting | Unit Tested |
+| DailySummaryGenerator — scheduled daily summaries: unique targets, new/departed, busiest hour, threat level, sightings by source | 9 tests pass |
+| EventStore: convoy_detected, convoy_dissolved, daily_summary added to tracked event types | Code review |
+| Convoy events published to EventBus for real-time WebSocket broadcast | Code review |
+
+---
+
 ## 2026-03-15 — Wave 144: Activity Heatmap + Fleet First/Last Seen
 
 | Change | Verification |
