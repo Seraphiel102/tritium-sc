@@ -14,6 +14,19 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 116: Target Timeline, Fleet Map, Amy Personality
+
+| Change | Verification |
+|--------|-------------|
+| Target timeline/biography API: GET /api/targets/{id}/timeline returns first_seen, last_seen, total_tracked_seconds, sighting_count, source_breakdown, trail, dossier data | Unit Tested (8 tests passing) |
+| Target biography narrative: GET /api/targets/{id}/biography generates human-readable target summary | Unit Tested |
+| Fleet map API: GET /api/fleet/map/devices returns edge devices with health status, coverage radius, group assignments, positions | Unit Tested (7 tests passing) |
+| Fleet coverage overlay: GET /api/fleet/map/coverage returns circle overlay data for positioned devices | Unit Tested |
+| Amy personality config: GET/PUT /api/amy/personality for aggression, curiosity, verbosity, caution, initiative traits | Unit Tested (10 tests passing) |
+| Amy personality presets: POST /api/amy/personality/preset with patrol, battle, stealth, observer, default profiles | Unit Tested |
+
+---
+
 ## 2026-03-14 — Wave 112: Maintenance + Security
 
 | Change | Verification |
