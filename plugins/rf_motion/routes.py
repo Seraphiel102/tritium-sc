@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 
 # -- Request/response models ---------------------------------------------------
@@ -36,10 +42,10 @@ class RecordDeviceRSSIRequest(BaseModel):
 
 
 class CreateZoneRequest(BaseModel):
-    zone_id: str
-    name: str
-    pair_ids: list[str]
-    vacancy_timeout: float = 30.0
+    zone_id: str = Field(..., max_length=200)
+    name: str = Field(..., max_length=200)
+    pair_ids: list[str] = Field(default_factory=list, max_length=100)
+    vacancy_timeout: float = Field(default=30.0, ge=1.0, le=3600.0)
 
 
 class UpdateConfigRequest(BaseModel):
@@ -119,7 +125,7 @@ def create_router(
         }
 
     @router.post("/zones")
-    async def create_zone(body: CreateZoneRequest):
+    async def create_zone(body: CreateZoneRequest, user: dict = Depends(require_auth)):
         """Create a new RF motion zone."""
         zone = zone_manager.add_zone(
             zone_id=body.zone_id,
@@ -138,7 +144,7 @@ def create_router(
         return zone.to_dict()
 
     @router.delete("/zones/{zone_id}")
-    async def delete_zone(zone_id: str):
+    async def delete_zone(zone_id: str, user: dict = Depends(require_auth)):
         """Delete a zone."""
         removed = zone_manager.remove_zone(zone_id)
         if not removed:
@@ -166,7 +172,7 @@ def create_router(
         }
 
     @router.put("/nodes/position")
-    async def set_node_position(body: SetNodePositionRequest):
+    async def set_node_position(body: SetNodePositionRequest, user: dict = Depends(require_auth)):
         """Set a node's position."""
         detector.set_node_position(body.node_id, (body.x, body.y))
         return {"node_id": body.node_id, "set": True}
@@ -197,7 +203,7 @@ def create_router(
         }
 
     @router.put("/config")
-    async def update_config(body: UpdateConfigRequest):
+    async def update_config(body: UpdateConfigRequest, user: dict = Depends(require_auth)):
         """Update detector configuration."""
         if body.static_threshold is not None:
             detector._static_threshold = body.static_threshold

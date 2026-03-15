@@ -12,8 +12,14 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 if TYPE_CHECKING:
     from .plugin import FederationPlugin
@@ -102,7 +108,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return result
 
     @router.post("/sites")
-    async def add_site(req: AddSiteRequest):
+    async def add_site(req: AddSiteRequest, user: dict = Depends(require_auth)):
         """Register a new federated site."""
         if FederatedSite is None:
             raise HTTPException(
@@ -127,7 +133,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return {"site_id": site_id, "name": site.name}
 
     @router.delete("/sites/{site_id}")
-    async def remove_site(site_id: str):
+    async def remove_site(site_id: str, user: dict = Depends(require_auth)):
         """Remove a federated site."""
         if not plugin.remove_site(site_id):
             raise HTTPException(status_code=404, detail="Site not found")
@@ -146,7 +152,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
     # -- Intelligence package routes ----------------------------------------
 
     @router.post("/intel-packages")
-    async def create_intel_package(req: IntelPackageRequest):
+    async def create_intel_package(req: IntelPackageRequest, user: dict = Depends(require_auth)):
         """Create an intelligence package from selected targets.
 
         Bundles targets, their events, dossiers, and evidence into a
@@ -194,7 +200,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return pkg
 
     @router.post("/intel-packages/{package_id}/finalize")
-    async def finalize_intel_package(package_id: str):
+    async def finalize_intel_package(package_id: str, user: dict = Depends(require_auth)):
         """Finalize a package, marking it ready for transmission."""
         result = plugin.finalize_intel_package(package_id)
         if result.get("error"):
@@ -202,7 +208,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return result
 
     @router.post("/intel-packages/{package_id}/transmit")
-    async def transmit_intel_package(package_id: str):
+    async def transmit_intel_package(package_id: str, user: dict = Depends(require_auth)):
         """Transmit a finalized package to its destination site via MQTT."""
         result = plugin.transmit_intel_package(package_id)
         if result.get("error"):
@@ -210,7 +216,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return result
 
     @router.post("/intel-packages/import")
-    async def import_intel_package(req: IntelPackageImportRequest):
+    async def import_intel_package(req: IntelPackageImportRequest, user: dict = Depends(require_auth)):
         """Import an intelligence package from another site.
 
         Validates the package and imports targets, events, and dossiers
@@ -224,7 +230,7 @@ def create_router(plugin: FederationPlugin) -> APIRouter:
         return result
 
     @router.delete("/intel-packages/{package_id}")
-    async def delete_intel_package(package_id: str):
+    async def delete_intel_package(package_id: str, user: dict = Depends(require_auth)):
         """Delete an intelligence package."""
         if not plugin.delete_intel_package(package_id):
             raise HTTPException(status_code=404, detail="Package not found")

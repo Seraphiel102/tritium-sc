@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 # Trilateration — may not be available if tritium-lib is still building.
 try:
@@ -146,14 +152,14 @@ def create_router(
         return {"targets": targets, "count": len(targets)}
 
     @router.post("/targets")
-    async def add_target(body: AddTargetRequest):
+    async def add_target(body: AddTargetRequest, user: dict = Depends(require_auth)):
         """Add a tracked BLE target."""
         s = _require_store()
         target = s.add_target(body.mac, body.label, body.color)
         return {"target": target}
 
     @router.delete("/targets/{mac:path}")
-    async def remove_target(mac: str):
+    async def remove_target(mac: str, user: dict = Depends(require_auth)):
         """Remove a tracked BLE target."""
         s = _require_store()
         removed = s.remove_target(mac)
@@ -188,7 +194,7 @@ def create_router(
         return {"positions": positions, "count": len(positions)}
 
     @router.put("/nodes/{node_id}/position")
-    async def set_node_position(node_id: str, body: SetNodePositionRequest):
+    async def set_node_position(node_id: str, body: SetNodePositionRequest, user: dict = Depends(require_auth)):
         """Set a sensor node's position."""
         s = _require_store()
         s.set_node_position(
@@ -202,7 +208,7 @@ def create_router(
         return {"node_id": node_id, "set": True}
 
     @router.delete("/nodes/{node_id}/position")
-    async def remove_node_position(node_id: str):
+    async def remove_node_position(node_id: str, user: dict = Depends(require_auth)):
         """Remove a sensor node's position."""
         s = _require_store()
         removed = s.remove_node_position(node_id)
@@ -276,7 +282,7 @@ def create_router(
     # -- BLE threat classification -----------------------------------------
 
     @router.post("/known")
-    async def add_known_ble(body: AddKnownBLERequest):
+    async def add_known_ble(body: AddKnownBLERequest, user: dict = Depends(require_auth)):
         """Add a MAC address to the known BLE devices list."""
         if ble_classifier is None:
             raise HTTPException(
@@ -345,14 +351,14 @@ def create_router(
         return {"targets": targets, "count": len(targets)}
 
     @wifi_router.post("/targets")
-    async def add_wifi_target(body: AddWifiTargetRequest):
+    async def add_wifi_target(body: AddWifiTargetRequest, user: dict = Depends(require_auth)):
         """Add a tracked WiFi target."""
         s = _require_store()
         target = s.add_wifi_target(body.bssid, body.label, ssid=body.ssid, color=body.color)
         return {"target": target}
 
     @wifi_router.delete("/targets/{bssid:path}")
-    async def remove_wifi_target(bssid: str):
+    async def remove_wifi_target(bssid: str, user: dict = Depends(require_auth)):
         """Remove a tracked WiFi target."""
         s = _require_store()
         removed = s.remove_wifi_target(bssid)

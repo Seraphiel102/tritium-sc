@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 if TYPE_CHECKING:
     from .plugin import FleetDashboardPlugin
@@ -155,7 +161,7 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
     # -- Fleet coordination routes -----------------------------------------
 
     @router.post("/command")
-    async def send_fleet_command(request: FleetCommandRequest):
+    async def send_fleet_command(request: FleetCommandRequest, user: dict = Depends(require_auth)):
         """Send a command to all devices in a group.
 
         Supported command_type values:
@@ -185,7 +191,7 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
         return result
 
     @router.get("/commands")
-    async def list_fleet_commands(limit: int = 50):
+    async def list_fleet_commands(limit: int = Query(default=50, ge=1, le=500)):
         """List recent fleet commands with status."""
         commands = plugin.get_fleet_commands(limit=limit)
         return {"commands": commands, "count": len(commands)}
@@ -225,13 +231,13 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
         return {"template": template}
 
     @router.post("/templates")
-    async def create_template(request: ConfigTemplateRequest):
+    async def create_template(request: ConfigTemplateRequest, user: dict = Depends(require_auth)):
         """Create a new custom configuration template."""
         template = plugin.create_config_template(request.model_dump())
         return {"template": template}
 
     @router.post("/templates/{template_id}/apply")
-    async def apply_template(template_id: str, request: ApplyTemplateRequest):
+    async def apply_template(template_id: str, request: ApplyTemplateRequest, user: dict = Depends(require_auth)):
         """Apply a configuration template to all devices in a group.
 
         Sends config_update commands to each device with template parameters.
@@ -298,7 +304,7 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
         return snapshot
 
     @router.get("/analytics/history")
-    async def get_analytics_history(hours: int = 24):
+    async def get_analytics_history(hours: int = Query(default=24, ge=1, le=720)):
         """Get historical fleet analytics snapshots."""
         history = plugin.get_analytics_history(hours=hours)
         return {"snapshots": history, "count": len(history), "hours": hours}
@@ -312,7 +318,7 @@ def create_router(plugin: FleetDashboardPlugin) -> APIRouter:
     # -- Remote diagnostics routes -----------------------------------------
 
     @router.post("/devices/{device_id}/diagnostics")
-    async def request_diagnostics(device_id: str, request: DiagnosticRequest):
+    async def request_diagnostics(device_id: str, request: DiagnosticRequest, user: dict = Depends(require_auth)):
         """Request a diagnostic dump from a specific edge device via MQTT.
 
         Sends a diag_dump command to the device. The device responds with

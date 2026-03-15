@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 from .feeds import ThreatFeedManager, ThreatIndicator, INDICATOR_TYPES
 
@@ -20,11 +26,11 @@ from .feeds import ThreatFeedManager, ThreatIndicator, INDICATOR_TYPES
 # -- Request / response models ------------------------------------------------
 
 class AddIndicatorRequest(BaseModel):
-    indicator_type: str
-    value: str
-    threat_level: str = "suspicious"
-    source: str = "manual"
-    description: str = ""
+    indicator_type: str = Field(..., max_length=100)
+    value: str = Field(..., max_length=500)
+    threat_level: str = Field(default="suspicious", max_length=50)
+    source: str = Field(default="manual", max_length=200)
+    description: str = Field(default="", max_length=2000)
 
 
 class CheckRequest(BaseModel):
@@ -33,8 +39,8 @@ class CheckRequest(BaseModel):
 
 
 class ImportRequest(BaseModel):
-    content: str
-    format: str = "json"  # json or csv
+    content: str = Field(..., max_length=10_000_000)  # 10MB max
+    format: str = Field(default="json", pattern=r"^(json|csv)$")
 
 
 # -- Router factory ------------------------------------------------------------
@@ -63,7 +69,7 @@ def create_router(manager: ThreatFeedManager) -> APIRouter:
     # -- Add indicator ---------------------------------------------------------
 
     @router.post("/")
-    async def add_indicator(body: AddIndicatorRequest):
+    async def add_indicator(body: AddIndicatorRequest, user: dict = Depends(require_auth)):
         """Add a single threat indicator."""
         if body.indicator_type not in INDICATOR_TYPES:
             raise HTTPException(
@@ -83,7 +89,7 @@ def create_router(manager: ThreatFeedManager) -> APIRouter:
     # -- Remove indicator ------------------------------------------------------
 
     @router.delete("/{indicator_type}/{value:path}")
-    async def remove_indicator(indicator_type: str, value: str):
+    async def remove_indicator(indicator_type: str, value: str, user: dict = Depends(require_auth)):
         """Remove a threat indicator by type and value."""
         removed = manager.remove_indicator(indicator_type, value)
         if not removed:
@@ -108,7 +114,7 @@ def create_router(manager: ThreatFeedManager) -> APIRouter:
     # -- Import from content ---------------------------------------------------
 
     @router.post("/import")
-    async def import_indicators(body: ImportRequest):
+    async def import_indicators(body: ImportRequest, user: dict = Depends(require_auth)):
         """Import indicators from JSON or CSV content string."""
         try:
             count = manager.load_indicators_from_content(

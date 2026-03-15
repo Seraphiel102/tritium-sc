@@ -15,17 +15,23 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 
 class WatchlistAddRequest(BaseModel):
     """Request to add a plate to the watchlist."""
-    plate_number: str
-    reason: str = ""
-    priority: str = "normal"
-    owner: str = ""
-    vehicle_description: str = ""
+    plate_number: str = Field(..., max_length=20)
+    reason: str = Field(default="", max_length=500)
+    priority: str = Field(default="normal", pattern=r"^(low|normal|high|critical)$")
+    owner: str = Field(default="", max_length=200)
+    vehicle_description: str = Field(default="", max_length=500)
     alert_on_match: bool = True
 
 
@@ -61,7 +67,7 @@ def create_router(plugin: Any) -> APIRouter:
         return {"watchlist": plugin.get_watchlist()}
 
     @router.post("/watchlist")
-    async def add_to_watchlist(req: WatchlistAddRequest):
+    async def add_to_watchlist(req: WatchlistAddRequest, user: dict = Depends(require_auth)):
         """Add a plate to the watchlist."""
         entry = plugin.add_to_watchlist(
             plate_number=req.plate_number,
@@ -74,7 +80,7 @@ def create_router(plugin: Any) -> APIRouter:
         return {"status": "added", "entry": entry}
 
     @router.delete("/watchlist/{plate_number}")
-    async def remove_from_watchlist(plate_number: str):
+    async def remove_from_watchlist(plate_number: str, user: dict = Depends(require_auth)):
         """Remove a plate from the watchlist."""
         removed = plugin.remove_from_watchlist(plate_number)
         if removed:
@@ -92,7 +98,7 @@ def create_router(plugin: Any) -> APIRouter:
         }
 
     @router.get("/detections")
-    async def get_detections(count: int = 50):
+    async def get_detections(count: int = Query(default=50, ge=1, le=1000)):
         """Get recent plate detections."""
         detections = plugin.get_recent_detections(count=count)
         return {"detections": detections, "count": len(detections)}

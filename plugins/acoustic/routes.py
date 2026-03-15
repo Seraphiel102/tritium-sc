@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 
 class ClassifyRequest(BaseModel):
@@ -103,13 +109,13 @@ def create_router(plugin: Any) -> APIRouter:
         return result
 
     @router.get("/events")
-    async def get_events(count: int = 50):
+    async def get_events(count: int = Query(default=50, ge=1, le=1000)):
         """Return recent classified acoustic events."""
         events = plugin.get_recent_events(count)
         return {"events": events, "count": len(events)}
 
     @router.get("/timeline")
-    async def get_timeline(count: int = 100):
+    async def get_timeline(count: int = Query(default=100, ge=1, le=2000)):
         """Return acoustic event timeline with severity/color data.
 
         Events include severity classification and color coding
@@ -119,7 +125,7 @@ def create_router(plugin: Any) -> APIRouter:
         return {"events": events, "count": len(events)}
 
     @router.get("/localizations")
-    async def get_localizations(count: int = 50):
+    async def get_localizations(count: int = Query(default=50, ge=1, le=1000)):
         """Return recent sound source localization results.
 
         Returns triangulated positions from multi-node TDoA.
@@ -128,7 +134,7 @@ def create_router(plugin: Any) -> APIRouter:
         return {"localizations": results, "count": len(results)}
 
     @router.post("/sensors/register")
-    async def register_sensor(body: SensorRegisterRequest):
+    async def register_sensor(body: SensorRegisterRequest, user: dict = Depends(require_auth)):
         """Register a sensor's position for acoustic localization."""
         plugin.register_sensor(body.sensor_id, body.lat, body.lon)
         return {
@@ -178,7 +184,7 @@ def create_router(plugin: Any) -> APIRouter:
         return {"status": "buffered", "result": None}
 
     @router.get("/tdoa/results")
-    async def get_tdoa_results(count: int = 50):
+    async def get_tdoa_results(count: int = Query(default=50, ge=1, le=1000)):
         """Return recent TDoA localization results."""
         results = plugin.get_tdoa_results(count)
         return {"results": results, "count": len(results)}

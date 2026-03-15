@@ -37,13 +37,13 @@ class ActionModel(BaseModel):
 
 
 class RuleCreateRequest(BaseModel):
-    name: str
-    trigger: str
-    conditions: list[ConditionModel] = Field(default_factory=list)
-    actions: list[ActionModel] = Field(default_factory=list)
+    name: str = Field(..., max_length=200)
+    trigger: str = Field(..., max_length=200)
+    conditions: list[ConditionModel] = Field(default_factory=list, max_length=50)
+    actions: list[ActionModel] = Field(default_factory=list, max_length=50)
     enabled: bool = True
-    cooldown_seconds: float = 0.0
-    description: str = ""
+    cooldown_seconds: float = Field(default=0.0, ge=0.0, le=86400.0)
+    description: str = Field(default="", max_length=2000)
 
 
 class RuleUpdateRequest(BaseModel):

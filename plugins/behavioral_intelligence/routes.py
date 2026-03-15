@@ -41,22 +41,22 @@ except ImportError:
 
 
 class AlertCreateRequest(BaseModel):
-    pattern_id: str
-    target_id: str = ""
-    name: str = ""
-    description: str = ""
-    severity: str = "medium"
-    deviation_threshold: float = 0.5
-    cooldown_seconds: float = 3600.0
+    pattern_id: str = Field(..., max_length=200)
+    target_id: str = Field(default="", max_length=200)
+    name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=2000)
+    severity: str = Field(default="medium", pattern=r"^(low|medium|high|critical)$")
+    deviation_threshold: float = Field(default=0.5, ge=0.0, le=10.0)
+    cooldown_seconds: float = Field(default=3600.0, ge=0.0, le=86400.0)
     enabled: bool = True
 
 
 class AlertUpdateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    severity: str | None = None
-    deviation_threshold: float | None = None
-    cooldown_seconds: float | None = None
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    severity: str | None = Field(default=None, pattern=r"^(low|medium|high|critical)$")
+    deviation_threshold: float | None = Field(default=None, ge=0.0, le=10.0)
+    cooldown_seconds: float | None = Field(default=None, ge=0.0, le=86400.0)
     enabled: bool | None = None
 
 
@@ -110,6 +110,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
     @router.get("/anomalies")
     async def list_anomalies(target_id: str | None = None, limit: int = 50):
         """List recent pattern anomalies."""
+        limit = max(1, min(limit, 500))
         anomalies = plugin.detector.get_anomalies(target_id, limit)
         return {
             "anomalies": [a.model_dump() for a in anomalies],
@@ -249,7 +250,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
     @router.post("/clusters/refresh")
-    async def refresh_clusters(user: dict = Depends(optional_auth)):
+    async def refresh_clusters(user: dict = Depends(require_auth)):
         """Force re-computation of behavior clusters.
 
         Resets the clustering timer and runs analysis immediately.

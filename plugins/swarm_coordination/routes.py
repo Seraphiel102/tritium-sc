@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import require_auth
 
@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 
 
 class SwarmCreateRequest(BaseModel):
-    name: str = ""
-    formation: str = "line"
-    spacing: float = 5.0
+    name: str = Field(default="", max_length=200)
+    formation: str = Field(default="line", max_length=50)
+    spacing: float = Field(default=5.0, ge=0.1, le=1000.0)
 
 
 class MemberAddRequest(BaseModel):
@@ -29,11 +29,11 @@ class MemberAddRequest(BaseModel):
 
 
 class SwarmCommandRequest(BaseModel):
-    command: str = "hold"
-    waypoints: Optional[list[list[float]]] = None
-    formation: Optional[str] = None
-    spacing: Optional[float] = None
-    max_speed: Optional[float] = None
+    command: str = Field(default="hold", max_length=50)
+    waypoints: Optional[list[list[float]]] = Field(default=None, max_length=500)
+    formation: Optional[str] = Field(default=None, max_length=50)
+    spacing: Optional[float] = Field(default=None, ge=0.1, le=1000.0)
+    max_speed: Optional[float] = Field(default=None, ge=0.0, le=100.0)
 
 
 def create_router(plugin: SwarmCoordinationPlugin) -> APIRouter:

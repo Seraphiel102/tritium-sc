@@ -16,8 +16,14 @@ import shutil
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+try:
+    from app.auth import require_auth
+except ImportError:
+    async def require_auth():  # type: ignore[misc]
+        return {"sub": "anonymous"}
 
 from .store import FloorPlanStore
 
@@ -25,11 +31,11 @@ from .store import FloorPlanStore
 # -- Request / response models ------------------------------------------------
 
 class CreateFloorPlanRequest(BaseModel):
-    name: str
-    building: str = ""
-    floor_level: int = 0
-    opacity: float = 0.7
-    rotation: float = 0.0
+    name: str = Field(..., max_length=200)
+    building: str = Field(default="", max_length=200)
+    floor_level: int = Field(default=0, ge=-10, le=200)
+    opacity: float = Field(default=0.7, ge=0.0, le=1.0)
+    rotation: float = Field(default=0.0, ge=-360.0, le=360.0)
 
 
 class UpdateFloorPlanRequest(BaseModel):
@@ -95,7 +101,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         return {"floorplans": plans, "count": len(plans)}
 
     @router.post("")
-    async def create_floorplan(body: CreateFloorPlanRequest):
+    async def create_floorplan(body: CreateFloorPlanRequest, user: dict = Depends(require_auth)):
         """Create a new floor plan (metadata only, upload image separately)."""
         plan = store.create_plan(
             name=body.name,
@@ -115,6 +121,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         name: str = Form(""),
         building: str = Form(""),
         floor_level: int = Form(0),
+        user: dict = Depends(require_auth),
     ):
         """Upload a floor plan image and create metadata.
 
@@ -188,7 +195,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         return {"floorplan": plan}
 
     @router.put("/{plan_id}")
-    async def update_floorplan(plan_id: str, body: UpdateFloorPlanRequest):
+    async def update_floorplan(plan_id: str, body: UpdateFloorPlanRequest, user: dict = Depends(require_auth)):
         """Update floor plan metadata (bounds, anchors, status, etc.)."""
         updates = body.model_dump(exclude_none=True)
         plan = store.update_plan(plan_id, updates)
@@ -197,7 +204,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         return {"floorplan": plan}
 
     @router.delete("/{plan_id}")
-    async def delete_floorplan(plan_id: str):
+    async def delete_floorplan(plan_id: str, user: dict = Depends(require_auth)):
         """Delete a floor plan and its image file."""
         removed = store.delete_plan(plan_id)
         if not removed:
@@ -234,7 +241,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
     # -- Room management -------------------------------------------------------
 
     @router.post("/{plan_id}/rooms")
-    async def add_room(plan_id: str, body: AddRoomRequest):
+    async def add_room(plan_id: str, body: AddRoomRequest, user: dict = Depends(require_auth)):
         """Add a room/zone to a floor plan."""
         room_data = body.model_dump()
         room = store.add_room(plan_id, room_data)
@@ -243,7 +250,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         return {"room": room}
 
     @router.delete("/{plan_id}/rooms/{room_id}")
-    async def remove_room(plan_id: str, room_id: str):
+    async def remove_room(plan_id: str, room_id: str, user: dict = Depends(require_auth)):
         """Remove a room from a floor plan."""
         removed = store.remove_room(plan_id, room_id)
         if not removed:
@@ -304,7 +311,7 @@ def create_router(store: FloorPlanStore) -> APIRouter:
         return {"fingerprints": fps, "count": len(fps)}
 
     @router.delete("/fingerprints/clear")
-    async def clear_fingerprints(plan_id: Optional[str] = None):
+    async def clear_fingerprints(plan_id: Optional[str] = None, user: dict = Depends(require_auth)):
         """Clear WiFi fingerprints."""
         count = store.clear_fingerprints(plan_id=plan_id)
         return {"cleared": count}
