@@ -109,8 +109,8 @@ class TestDemoController:
         )
         ctrl.start()
         status = ctrl.status()
-        # 1 BLE + 1 Mesh + 1 Camera + 1 Fusion = 4 generators
-        assert status["generator_count"] == 4
+        # 1 BLE + 1 Mesh + 1 Camera + 1 Fusion + 1 RL + 1 Trilat = 6 generators
+        assert status["generator_count"] == 6
         ctrl.stop()
 
     def test_generators_produce_events(self):

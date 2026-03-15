@@ -384,3 +384,139 @@ class CameraDetectionGenerator(_BaseGenerator):
             vx=vx, vy=vy,
             confidence=self._rng.uniform(0.7, 0.95),
         ))
+
+
+# ── Multi-Node BLE Trilateration Demo Generator ─────────────────────────
+
+# Three fixed edge nodes at known positions around a neighborhood area.
+# A handful of BLE targets move between them so the trilateration engine
+# always has >= 3 RSSI readings and can compute a live position.
+
+_TRILAT_NODES: list[dict] = [
+    {"node_id": "trilat-node-north", "lat": 37.7760, "lon": -122.4180},
+    {"node_id": "trilat-node-east",  "lat": 37.7745, "lon": -122.4160},
+    {"node_id": "trilat-node-west",  "lat": 37.7745, "lon": -122.4200},
+]
+
+_TRILAT_BLE_TARGETS: list[dict] = [
+    {"mac": "TT:RI:LA:T0:00:01", "name": "Trilat-Phone-A"},
+    {"mac": "TT:RI:LA:T0:00:02", "name": "Trilat-Watch-B"},
+    {"mac": "TT:RI:LA:T0:00:03", "name": "Trilat-Tag-C"},
+]
+
+
+@dataclass
+class _TrilatTargetState:
+    """Moving BLE target for trilateration demo."""
+    mac: str
+    name: str
+    lat: float
+    lon: float
+    heading: float = 0.0  # radians
+
+
+class TrilaterationDemoGenerator(_BaseGenerator):
+    """Generates multi-node BLE sightings that exercise the trilateration engine.
+
+    Simulates 3 fixed edge nodes and 3 moving BLE targets.  Each tick,
+    every node "sees" every target with an RSSI computed from the
+    distance between node and target (path-loss model).  This feeds the
+    trilateration engine which computes a live position from 3 readings.
+
+    Publishes ``fleet.ble_presence`` events (one per node per tick) so
+    the EdgeTrackerPlugin picks them up identically to real hardware.
+    Also publishes ``trilat:position_update`` with computed positions
+    for direct frontend consumption.
+    """
+
+    def __init__(
+        self,
+        interval: float = 3.0,
+        tx_power: float = -59.0,
+        path_loss_exp: float = 2.5,
+    ) -> None:
+        super().__init__(interval=interval)
+        self._tx_power = tx_power
+        self._path_loss_exp = path_loss_exp
+        self._targets: list[_TrilatTargetState] = []
+        self._rng = random.Random(314)
+        self._tick_count = 0
+
+    def start(self, event_bus: EventBus) -> None:
+        # Initialize target states near the center of the 3 nodes
+        center_lat = sum(n["lat"] for n in _TRILAT_NODES) / len(_TRILAT_NODES)
+        center_lon = sum(n["lon"] for n in _TRILAT_NODES) / len(_TRILAT_NODES)
+        self._targets = []
+        for cfg in _TRILAT_BLE_TARGETS:
+            self._targets.append(_TrilatTargetState(
+                mac=cfg["mac"],
+                name=cfg["name"],
+                lat=center_lat + self._rng.uniform(-0.0005, 0.0005),
+                lon=center_lon + self._rng.uniform(-0.0005, 0.0005),
+                heading=self._rng.uniform(0, 2 * math.pi),
+            ))
+        super().start(event_bus)
+
+    def _tick(self) -> None:
+        assert self._event_bus is not None
+        self._tick_count += 1
+
+        # Move targets (walking speed ~1.4 m/s)
+        drift = 0.0000126 * self._interval
+        for t in self._targets:
+            t.heading += self._rng.gauss(0, 0.5)
+            t.lat += math.cos(t.heading) * drift
+            t.lon += math.sin(t.heading) * drift
+
+        # For each node, publish a fleet.ble_presence with RSSI for all targets
+        for node in _TRILAT_NODES:
+            devices = []
+            for t in self._targets:
+                dist_m = self._haversine_m(
+                    node["lat"], node["lon"], t.lat, t.lon
+                )
+                # Path-loss RSSI model: RSSI = tx_power - 10 * n * log10(d)
+                dist_m = max(dist_m, 0.5)  # clamp to avoid log(0)
+                rssi = self._tx_power - 10 * self._path_loss_exp * math.log10(dist_m)
+                rssi += self._rng.gauss(0, 2)  # noise
+                rssi = max(-100, min(-20, rssi))
+                devices.append({
+                    "mac": t.mac,
+                    "name": t.name,
+                    "rssi": round(rssi),
+                    "device_type": "phone" if "Phone" in t.name else "wearable",
+                })
+
+            self._event_bus.publish("fleet.ble_presence", {
+                "node_id": node["node_id"],
+                "node_lat": node["lat"],
+                "node_lon": node["lon"],
+                "devices": devices,
+                "count": len(devices),
+            })
+
+        # Publish computed positions for frontend overlay
+        positions = []
+        for t in self._targets:
+            positions.append({
+                "mac": t.mac,
+                "name": t.name,
+                "lat": round(t.lat, 8),
+                "lon": round(t.lon, 8),
+            })
+
+        self._event_bus.publish("trilat:position_update", {
+            "positions": positions,
+            "nodes": [
+                {"node_id": n["node_id"], "lat": n["lat"], "lon": n["lon"]}
+                for n in _TRILAT_NODES
+            ],
+            "tick": self._tick_count,
+        })
+
+    @staticmethod
+    def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Approximate distance in meters between two lat/lon points."""
+        dlat = (lat2 - lat1) * 111320
+        dlon = (lon2 - lon1) * 111320 * math.cos(math.radians((lat1 + lat2) / 2))
+        return math.sqrt(dlat * dlat + dlon * dlon)

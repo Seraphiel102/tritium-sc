@@ -96,6 +96,7 @@ import { initCommandPalette, openCommandPalette } from './command-palette.js';
 import { createTacticalBanner } from './tactical-banner.js';
 import { createMapQuickToggles } from './map-quick-toggles.js';
 import { TargetTrailManager } from './target-trails.js';
+import { HandoffLineManager } from './handoff-lines.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -304,6 +305,10 @@ function init() {
     // Target trail manager (speed-colored movement trails on map)
     const trailManager = new TargetTrailManager();
     trailManager.start();
+
+    // Handoff line visualization — animated arcs when targets move between sensors
+    const handoffManager = new HandoffLineManager();
+    handoffManager.start();
 
     // Check URL for shared map view
     checkShareHash();

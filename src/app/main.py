@@ -112,6 +112,8 @@ from app.routers.amy_personality import router as amy_personality_router
 from app.routers.rate_limit_dashboard import router as rate_limit_dashboard_router
 from app.routers.command_history import router as command_history_router
 from app.routers.security_status import router as security_status_router
+from app.routers.dwell import router as dwell_router
+from app.routers.mesh_environment import router as mesh_environment_router
 
 
 # ---------------------------------------------------------------------------
@@ -1292,6 +1294,8 @@ app.include_router(amy_personality_router)
 app.include_router(rate_limit_dashboard_router)
 app.include_router(command_history_router)
 app.include_router(security_status_router)
+app.include_router(dwell_router)
+app.include_router(mesh_environment_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"

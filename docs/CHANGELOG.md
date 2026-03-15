@@ -14,6 +14,21 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 121: Multi-Node Trilateration Demo + Target Handoff Visualization
+
+| Change | Verification |
+|--------|-------------|
+| TrilaterationDemoGenerator: 3 fixed edge nodes at known lat/lon + 3 moving BLE targets | Code review |
+| Path-loss RSSI model: RSSI = tx_power - 10*n*log10(distance) with Gaussian noise | Code review |
+| Demo mode start() wires TrilaterationDemoGenerator (interval=3s) | Code review |
+| Demo mode status() reports TrilaterationDemoGenerator state | Code review |
+| HandoffLineManager: MapLibre GeoJSON layer for animated handoff arcs | Code review |
+| Handoff arcs: dashed lines, confidence-based color (cyan/yellow/red), fade-out over 4s | Code review |
+| WS bridge: edge:target_handoff + trilat:position_update added to broadcast list | Code review |
+| main.js: HandoffLineManager instantiated and started alongside TargetTrailManager | Code review |
+| Orphan router: dwell.py registered in main.py (was unlinked since Wave 113) | Code review |
+| Orphan router: mesh_environment.py registered in main.py (was unlinked) | Code review |
+
 ## 2026-03-15 — Wave 120: Security Audit + WebSocket Token Refresh + Security Status
 
 | Change | Verification |

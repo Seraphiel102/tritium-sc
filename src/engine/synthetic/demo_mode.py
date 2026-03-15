@@ -29,6 +29,7 @@ from engine.synthetic.data_generators import (
     BLEScanGenerator,
     CameraDetectionGenerator,
     MeshtasticNodeGenerator,
+    TrilaterationDemoGenerator,
 )
 from engine.synthetic.fusion_scenario import FusionScenario
 from engine.synthetic.rl_training_generator import RLTrainingGenerator
@@ -82,6 +83,7 @@ class DemoController:
         self._camera_gens: list[CameraDetectionGenerator] = []
         self._fusion: FusionScenario | None = None
         self._rl_training: RLTrainingGenerator | None = None
+        self._trilat_demo: TrilaterationDemoGenerator | None = None
 
     @property
     def active(self) -> bool:
@@ -141,6 +143,12 @@ class DemoController:
         )
         self._rl_training.start()
 
+        # Multi-node trilateration demo — 3 fixed nodes + 3 moving BLE targets.
+        # Feeds fleet.ble_presence events so the trilateration engine computes
+        # live positions from 3 RSSI readings per target.
+        self._trilat_demo = TrilaterationDemoGenerator(interval=3.0)
+        self._trilat_demo.start(self._event_bus)
+
         self._active = True
         self._event_bus.publish("demo:started", {
             "ble_devices": self._ble_device_count,
@@ -181,6 +189,10 @@ class DemoController:
         if self._rl_training is not None:
             self._rl_training.stop()
             self._rl_training = None
+
+        if self._trilat_demo is not None:
+            self._trilat_demo.stop()
+            self._trilat_demo = None
 
         self._active = False
         self._event_bus.publish("demo:stopped", {})
@@ -253,6 +265,17 @@ class DemoController:
                     "interval": 3.0,
                 },
                 "training_store": rl_stats.get("training_store"),
+            })
+
+        if self._trilat_demo is not None:
+            generators.append({
+                "name": "TrilaterationDemoGenerator",
+                "running": self._trilat_demo.running,
+                "config": {
+                    "targets": 3,
+                    "nodes": 3,
+                    "interval": 3.0,
+                },
             })
 
         uptime = None

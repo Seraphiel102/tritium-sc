@@ -941,6 +941,10 @@ def start_headless_event_bridge(event_bus, loop: asyncio.AbstractEventLoop,
                     # Edge tracker BLE and WiFi updates
                     "edge:ble_update",
                     "edge:wifi_update",
+                    # Edge target handoff events
+                    "edge:target_handoff",
+                    # Trilateration position updates
+                    "trilat:position_update",
                     # Dossier lifecycle
                     "dossier_created",
                     # Federation events
