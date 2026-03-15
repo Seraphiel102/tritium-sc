@@ -361,17 +361,20 @@ class UnitBehaviors:
 
         # Only fire at vision-confirmed targets
         target = self._nearest_in_range(drone, hostiles, vision_state=vision_state)
-        if target is None:
-            return
+        if target is not None:
+            # Ammo check
+            if drone.ammo_count == 0:
+                return
 
-        # Ammo check
-        if drone.ammo_count == 0:
-            return
-
-        # Fire if in range (engaging state, or no FSM set, terrain LOS check)
-        ptype = _WEAPON_TYPES.get(drone.asset_type, "nerf_dart")
-        self._combat.fire(drone, target, projectile_type=ptype,
-                          terrain_map=self._terrain_map)
+            # Fire if in range (engaging state, or no FSM set, terrain LOS check)
+            ptype = _WEAPON_TYPES.get(drone.asset_type, "nerf_dart")
+            self._combat.fire(drone, target, projectile_type=ptype,
+                              terrain_map=self._terrain_map)
+        elif hostiles and self._game_mode_type == "battle":
+            # No target in weapon range — pursue nearest hostile.
+            # During active battle, idle drones should hunt hostiles instead
+            # of waiting for them to wander into weapon range.
+            self._pursue_nearest_hostile(drone, hostiles)
 
     def _rover_behavior(
         self,
@@ -404,13 +407,16 @@ class UnitBehaviors:
 
         # Only fire at vision-confirmed targets
         target = self._nearest_in_range(rover, hostiles, vision_state=vision_state)
-        if target is None:
-            return
-
-        # Fire if in range (terrain LOS check)
-        ptype = _WEAPON_TYPES.get(rover.asset_type, "nerf_dart")
-        self._combat.fire(rover, target, projectile_type=ptype,
-                          terrain_map=self._terrain_map)
+        if target is not None:
+            # Fire if in range (terrain LOS check)
+            ptype = _WEAPON_TYPES.get(rover.asset_type, "nerf_dart")
+            self._combat.fire(rover, target, projectile_type=ptype,
+                              terrain_map=self._terrain_map)
+        elif hostiles and self._game_mode_type == "battle":
+            # No target in weapon range — pursue nearest hostile.
+            # During active battle, idle rovers should advance toward hostiles
+            # instead of waiting for them to wander into weapon range.
+            self._pursue_nearest_hostile(rover, hostiles)
 
     def _graphling_behavior(
         self,
@@ -980,6 +986,72 @@ class UnitBehaviors:
                     best_dist = dist
                     best = enemy
         return best
+
+    def _pursue_nearest_hostile(
+        self,
+        unit: SimulationTarget,
+        hostiles: dict[str, SimulationTarget],
+    ) -> None:
+        """Move a friendly unit toward the nearest hostile (any distance).
+
+        Called when no hostile is within weapon_range. Assigns a waypoint
+        path so the unit actively hunts instead of standing idle.
+        Only re-paths when the unit has no waypoints or the target moved >30m.
+        Skips turrets and stationary units.
+        """
+        if unit.speed <= 0:
+            return  # Turrets can't move
+        if unit.status in ("eliminated", "destroyed", "escaped"):
+            return
+
+        # Keep unit in active status during pursuit
+        if unit.status in ("arrived", "idle"):
+            unit.status = "active"
+
+        # Find nearest hostile at any distance
+        best = None
+        best_dist = float("inf")
+        for enemy in hostiles.values():
+            if enemy.status != "active":
+                continue
+            dx = enemy.position[0] - unit.position[0]
+            dy = enemy.position[1] - unit.position[1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist < best_dist:
+                best_dist = dist
+                best = enemy
+
+        if best is None:
+            return
+
+        # Face the target
+        dx = best.position[0] - unit.position[0]
+        dy = best.position[1] - unit.position[1]
+        unit.heading = math.degrees(math.atan2(dx, dy))
+
+        # Only re-path when unit has no waypoints, arrived, or target moved
+        need_repath = not unit.waypoints or unit.status == "arrived"
+        if not need_repath:
+            last_wp = unit.waypoints[-1] if unit.waypoints else None
+            if last_wp is not None:
+                ddx = best.position[0] - last_wp[0]
+                ddy = best.position[1] - last_wp[1]
+                if math.sqrt(ddx * ddx + ddy * ddy) > 30.0:
+                    need_repath = True
+
+        if need_repath:
+            if self._router is not None:
+                path = self._router(
+                    tuple(unit.position[:2]),
+                    tuple(best.position[:2]),
+                    unit.asset_type,
+                    unit.alliance,
+                )
+                unit.waypoints = list(path) if path else [best.position[:2]]
+            else:
+                unit.waypoints = [best.position[:2]]
+            unit._waypoint_index = 0
+            unit.status = "active"
 
     # -- Mission-type behaviors ---------------------------------------------------
 

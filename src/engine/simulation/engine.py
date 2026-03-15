@@ -1167,10 +1167,12 @@ class SimulationEngine:
                 if (abs(x) > self._map_bounds or abs(y) > self._map_bounds):
                     target.status = "escaped"
 
-            # Stall detection: hostiles stuck or oscillating for 15+s escape.
+            # Stall detection: hostiles stuck or oscillating for 45+s escape.
             # Uses distance-based check — if net displacement from the
             # recorded position is < 3m, increment the stall counter.
-            # At 150 ticks (15s at 10Hz), the hostile is force-escaped.
+            # At 450 ticks (45s at 10Hz), the hostile is force-escaped.
+            # Previously 15s was too aggressive — hostiles pathing toward
+            # defenders on large maps would escape before reaching combat range.
             if target.alliance == "hostile" and target.status == "active":
                 tid = target.target_id
                 pos = target.position
@@ -1182,7 +1184,7 @@ class SimulationEngine:
                     if dist < 3.0:
                         ticks = self._stall_ticks.get(tid, 0) + 1
                         self._stall_ticks[tid] = ticks
-                        if ticks >= 150:  # 15 seconds at 10Hz
+                        if ticks >= 450:  # 45 seconds at 10Hz
                             target.status = "escaped"
                     else:
                         # Moved significantly — reset stall tracking
@@ -1635,10 +1637,27 @@ class SimulationEngine:
             else:
                 return (self._map_min, coord)
 
-        # Combat: spawn at 40-65% of bounds for faster engagement
-        # (previously 70-95% caused 60-120s dead air before first contact)
-        frac = random.uniform(0.40, 0.65)
-        radius = self._map_max * frac
+        # Combat: spawn near a random friendly defender at 80-150m distance.
+        # This guarantees hostiles enter weapon range within 5-15 seconds
+        # instead of 60-120s dead air on large maps (500m+).
+        # Fall back to center-based spawn if no friendlies are alive.
+        with self._lock:
+            alive_friendlies = [
+                t for t in self._targets.values()
+                if t.alliance == "friendly" and t.is_combatant
+                and t.status in ("active", "idle", "stationary")
+            ]
+
+        if alive_friendlies:
+            # Pick a random friendly as the anchor point
+            anchor = random.choice(alive_friendlies)
+            anchor_x, anchor_y = anchor.position[0], anchor.position[1]
+            # Spawn at 80-150m from the anchor (just outside weapon range)
+            spawn_dist = random.uniform(80.0, 150.0)
+        else:
+            # No friendlies — spawn near center
+            anchor_x, anchor_y = 0.0, 0.0
+            spawn_dist = random.uniform(50.0, 100.0)
 
         # Direction-constrained angle
         _DIR_ARCS = {
@@ -1666,8 +1685,11 @@ class SimulationEngine:
             # "random" or unknown -- full perimeter
             angle = random.uniform(0, 2 * math.pi)
 
-        x = radius * math.cos(angle)
-        y = radius * math.sin(angle)
+        x = anchor_x + spawn_dist * math.cos(angle)
+        y = anchor_y + spawn_dist * math.sin(angle)
+        # Clamp to map bounds
+        x = max(-self._map_bounds, min(self._map_bounds, x))
+        y = max(-self._map_bounds, min(self._map_bounds, y))
         return (x, y)
 
     def _compute_poi_buildings(self) -> list[tuple[float, float]]:
