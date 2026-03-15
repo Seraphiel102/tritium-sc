@@ -475,6 +475,73 @@ class TestCameraFeedsRoutes:
 
 
 @pytest.mark.unit
+class TestCameraFeedsCompatRoute:
+    """Test the GET /api/camera-feeds/ compatibility endpoint."""
+
+    def _make_client(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from plugins.camera_feeds.plugin import CameraFeedsPlugin
+        from plugins.camera_feeds.routes import create_router
+
+        app = FastAPI()
+        plugin = CameraFeedsPlugin()
+        app.include_router(create_router(plugin))
+        return TestClient(app), plugin
+
+    def test_list_feeds_empty(self):
+        client, _ = self._make_client()
+        resp = client.get("/api/camera-feeds/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_list_feeds_returns_flat_array(self):
+        client, plugin = self._make_client()
+        from plugins.camera_feeds.sources import CameraSourceConfig
+        plugin.register_source(CameraSourceConfig(
+            source_id="feed-1", source_type="mqtt", name="Front Door",
+        ))
+        resp = client.get("/api/camera-feeds/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+        feed = data[0]
+        assert feed["id"] == "feed-1"
+        assert feed["name"] == "Front Door"
+        assert feed["status"] == "offline"
+        assert "stream_url" in feed
+
+    def test_add_source_with_lat_lng(self):
+        client, _ = self._make_client()
+        resp = client.post("/api/camera-feeds/sources", json={
+            "source_id": "geo-cam",
+            "source_type": "mqtt",
+            "name": "Geo Camera",
+            "lat": 33.12,
+            "lng": -97.56,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["lat"] == 33.12
+        assert data["lng"] == -97.56
+
+    def test_lat_lng_in_feed_list(self):
+        client, plugin = self._make_client()
+        from plugins.camera_feeds.sources import CameraSourceConfig
+        plugin.register_source(CameraSourceConfig(
+            source_id="loc-cam", source_type="mqtt",
+            name="Located", extra={"lat": 40.0, "lng": -74.0},
+        ))
+        resp = client.get("/api/camera-feeds/")
+        data = resp.json()
+        assert data[0]["lat"] == 40.0
+        assert data[0]["lng"] == -74.0
+
+
+@pytest.mark.unit
 class TestCameraFeedsLoader:
     """Test the loader shim."""
 

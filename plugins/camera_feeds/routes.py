@@ -31,6 +31,8 @@ class AddSourceRequest(BaseModel):
     height: int = 480
     fps: int = 10
     uri: str = ""
+    lat: float | None = None
+    lng: float | None = None
     extra: dict = {}
 
 
@@ -38,6 +40,30 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
     """Create FastAPI router for camera feed endpoints."""
 
     router = APIRouter(prefix="/api/camera-feeds", tags=["camera-feeds"])
+
+    @router.get("/")
+    async def list_feeds():
+        """Compatibility endpoint — returns sources as a flat list.
+
+        The camera-feeds panel fetches GET /api/camera-feeds/ and expects
+        an array of camera objects with ``id``, ``name``, ``status``,
+        ``stream_url``, and ``latest_detection`` keys.
+        """
+        sources = plugin.list_sources()
+        feeds = []
+        for s in sources:
+            feeds.append({
+                "id": s.get("source_id", s.get("id", "")),
+                "name": s.get("name", ""),
+                "status": "streaming" if s.get("running") else "offline",
+                "stream_url": f"/api/camera-feeds/sources/{s.get('source_id', '')}/mjpeg",
+                "latest_detection": None,
+                "lat": s.get("lat"),
+                "lng": s.get("lng"),
+                "source_type": s.get("source_type", ""),
+                "uri": s.get("uri", ""),
+            })
+        return feeds
 
     @router.get("/sources")
     async def list_sources():
@@ -61,6 +87,11 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
     @router.post("/sources", status_code=201)
     async def add_source(request: AddSourceRequest):
         """Add a new camera source."""
+        extra = dict(request.extra)
+        if request.lat is not None:
+            extra["lat"] = request.lat
+        if request.lng is not None:
+            extra["lng"] = request.lng
         config = CameraSourceConfig(
             source_id=request.source_id,
             source_type=request.source_type,
@@ -69,7 +100,7 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
             height=request.height,
             fps=request.fps,
             uri=request.uri,
-            extra=request.extra,
+            extra=extra,
         )
         try:
             source = plugin.register_source(config)

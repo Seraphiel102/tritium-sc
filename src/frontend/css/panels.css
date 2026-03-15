@@ -3346,6 +3346,98 @@
     min-height: 20px;
 }
 
+.cf-toolbar-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+/* --- Add Camera Modal --- */
+.cf-add-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: rgba(10, 10, 15, 0.92);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12px;
+    overflow-y: auto;
+}
+
+.cf-add-modal-content {
+    width: 90%;
+    max-width: 360px;
+    background: var(--surface-2, #12121a);
+    border: 1px solid var(--cyan, #00f0ff);
+    border-radius: 6px;
+    box-shadow: 0 0 24px rgba(0, 240, 255, 0.15);
+}
+
+.cf-add-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+    color: var(--cyan, #00f0ff);
+    font-size: 0.85rem;
+}
+
+.cf-add-form {
+    padding: 10px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cf-form-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #8892b0);
+}
+
+.cf-form-input {
+    background: var(--surface-1, #0e0e14);
+    border: 1px solid var(--border, rgba(255,255,255,0.1));
+    border-radius: 3px;
+    color: var(--text, #e6e6e6);
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 0.8rem;
+}
+
+.cf-form-input:focus {
+    outline: none;
+    border-color: var(--cyan, #00f0ff);
+    box-shadow: 0 0 6px rgba(0, 240, 255, 0.2);
+}
+
+.cf-form-row {
+    display: flex;
+    gap: 8px;
+}
+
+.cf-form-half {
+    flex: 1;
+    min-width: 0;
+}
+
+.cf-add-error {
+    color: var(--magenta, #ff2a6d);
+    font-size: 0.7rem;
+    padding: 4px 0;
+}
+
+.cf-add-submit {
+    margin-top: 4px;
+    width: 100%;
+    text-align: center;
+    cursor: pointer;
+}
+
 
 /* ========================================
    Graph Explorer Panel

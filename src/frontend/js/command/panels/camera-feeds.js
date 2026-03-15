@@ -4,6 +4,7 @@
 // Camera Feeds Panel — Live camera feed grid with MJPEG streaming
 // Fetches camera list from /api/camera-feeds/, shows grid of thumbnails
 // with live MJPEG preview, status indicators, and latest detection info.
+// Includes Add Camera modal for UX Loop 8.
 
 import { EventBus } from '../events.js';
 import { _esc, _timeAgo } from '../panel-utils.js';
@@ -31,7 +32,10 @@ export const CameraFeedsPanelDef = {
         el.innerHTML = `
             <div class="cf-toolbar">
                 <span class="cf-count mono" data-bind="cf-count">0 feeds</span>
-                <button class="panel-action-btn panel-action-btn-primary" data-action="cf-refresh">REFRESH</button>
+                <div class="cf-toolbar-actions">
+                    <button class="panel-action-btn" data-action="cf-add" title="Add a new camera source">+ ADD CAMERA</button>
+                    <button class="panel-action-btn panel-action-btn-primary" data-action="cf-refresh">REFRESH</button>
+                </div>
             </div>
             <div class="cf-grid" data-bind="cf-grid">
                 <div class="panel-empty">Loading camera feeds...</div>
@@ -46,6 +50,56 @@ export const CameraFeedsPanelDef = {
                 </div>
                 <div class="cf-overlay-detection mono" data-bind="cf-overlay-detection"></div>
             </div>
+            <div class="cf-add-modal" data-bind="cf-add-modal" style="display:none">
+                <div class="cf-add-modal-content">
+                    <div class="cf-add-modal-header">
+                        <span class="mono">ADD CAMERA</span>
+                        <button class="panel-btn cf-overlay-close" data-action="cf-add-close">&times;</button>
+                    </div>
+                    <form class="cf-add-form" data-bind="cf-add-form">
+                        <label class="cf-form-label">
+                            <span class="mono">NAME</span>
+                            <input type="text" name="name" placeholder="Front Door Camera" required class="cf-form-input" />
+                        </label>
+                        <label class="cf-form-label">
+                            <span class="mono">TYPE</span>
+                            <select name="source_type" class="cf-form-input">
+                                <option value="rtsp">RTSP</option>
+                                <option value="mjpeg">MJPEG</option>
+                                <option value="mqtt">MQTT</option>
+                                <option value="usb">USB</option>
+                                <option value="synthetic">Synthetic</option>
+                            </select>
+                        </label>
+                        <label class="cf-form-label">
+                            <span class="mono">URL / URI</span>
+                            <input type="text" name="uri" placeholder="rtsp://192.168.1.100:554/stream" class="cf-form-input" />
+                        </label>
+                        <div class="cf-form-row">
+                            <label class="cf-form-label cf-form-half">
+                                <span class="mono">LATITUDE</span>
+                                <input type="number" name="lat" step="any" placeholder="33.1234" class="cf-form-input" />
+                            </label>
+                            <label class="cf-form-label cf-form-half">
+                                <span class="mono">LONGITUDE</span>
+                                <input type="number" name="lng" step="any" placeholder="-97.5678" class="cf-form-input" />
+                            </label>
+                        </div>
+                        <div class="cf-form-row">
+                            <label class="cf-form-label cf-form-half">
+                                <span class="mono">WIDTH</span>
+                                <input type="number" name="width" value="640" min="160" max="3840" class="cf-form-input" />
+                            </label>
+                            <label class="cf-form-label cf-form-half">
+                                <span class="mono">HEIGHT</span>
+                                <input type="number" name="height" value="480" min="120" max="2160" class="cf-form-input" />
+                            </label>
+                        </div>
+                        <div class="cf-add-error mono" data-bind="cf-add-error" style="display:none"></div>
+                        <button type="submit" class="panel-action-btn panel-action-btn-primary cf-add-submit">REGISTER CAMERA</button>
+                    </form>
+                </div>
+            </div>
         `;
         return el;
     },
@@ -59,6 +113,11 @@ export const CameraFeedsPanelDef = {
         const overlayDetectionEl = bodyEl.querySelector('[data-bind="cf-overlay-detection"]');
         const refreshBtn = bodyEl.querySelector('[data-action="cf-refresh"]');
         const closeOverlayBtn = bodyEl.querySelector('[data-action="cf-close-overlay"]');
+        const addBtn = bodyEl.querySelector('[data-action="cf-add"]');
+        const addModal = bodyEl.querySelector('[data-bind="cf-add-modal"]');
+        const addCloseBtn = bodyEl.querySelector('[data-action="cf-add-close"]');
+        const addForm = bodyEl.querySelector('[data-bind="cf-add-form"]');
+        const addError = bodyEl.querySelector('[data-bind="cf-add-error"]');
 
         let cameras = [];
         let activeStreamImgs = [];
@@ -71,11 +130,81 @@ export const CameraFeedsPanelDef = {
             panel._applyTransform();
         }
 
+        // --- Add Camera Modal ---
+        function showAddModal() {
+            if (addModal) addModal.style.display = '';
+            if (addForm) addForm.reset();
+            if (addError) addError.style.display = 'none';
+        }
+
+        function hideAddModal() {
+            if (addModal) addModal.style.display = 'none';
+        }
+
+        async function submitAddCamera(e) {
+            e.preventDefault();
+            if (addError) addError.style.display = 'none';
+            const fd = new FormData(addForm);
+            const name = (fd.get('name') || '').trim();
+            if (!name) {
+                showAddError('Name is required');
+                return;
+            }
+            // Generate a source_id from the name
+            const sourceId = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || ('cam_' + Date.now());
+            const payload = {
+                source_id: sourceId,
+                source_type: fd.get('source_type') || 'rtsp',
+                name: name,
+                uri: (fd.get('uri') || '').trim(),
+                width: parseInt(fd.get('width'), 10) || 640,
+                height: parseInt(fd.get('height'), 10) || 480,
+                fps: 10,
+                extra: {},
+            };
+            const latVal = fd.get('lat');
+            const lngVal = fd.get('lng');
+            if (latVal && latVal.trim()) payload.lat = parseFloat(latVal);
+            if (lngVal && lngVal.trim()) payload.lng = parseFloat(lngVal);
+
+            try {
+                const resp = await fetch('/api/camera-feeds/sources', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showAddError(err.detail || `Error ${resp.status}`);
+                    return;
+                }
+                hideAddModal();
+                // Refresh the camera list and emit event for map markers
+                await fetchCameras();
+                EventBus.emit('cameras:changed', { cameras });
+            } catch (ex) {
+                showAddError(ex.message || 'Network error');
+            }
+        }
+
+        function showAddError(msg) {
+            if (addError) {
+                addError.textContent = msg;
+                addError.style.display = '';
+            }
+        }
+
+        if (addBtn) addBtn.addEventListener('click', showAddModal);
+        if (addCloseBtn) addCloseBtn.addEventListener('click', hideAddModal);
+        if (addForm) addForm.addEventListener('submit', submitAddCamera);
+
         function renderGrid() {
             if (!gridEl) return;
 
             if (cameras.length === 0) {
-                gridEl.innerHTML = '<div class="panel-empty">No camera feeds available</div>';
+                gridEl.innerHTML = '<div class="panel-empty">No camera feeds available.<br><span class="mono" style="color:var(--cyan,#00f0ff);cursor:pointer" data-action="cf-add-inline">+ Add a camera</span></div>';
+                const inlineAdd = gridEl.querySelector('[data-action="cf-add-inline"]');
+                if (inlineAdd) inlineAdd.addEventListener('click', showAddModal);
                 if (countEl) countEl.textContent = '0 feeds';
                 return;
             }
@@ -101,6 +230,8 @@ export const CameraFeedsPanelDef = {
                         </div>`;
                 }
 
+                const streamUrl = cam.stream_url || `/api/camera-feeds/sources/${cam.id}/mjpeg`;
+
                 return `
                     <div class="cf-card" data-camera-id="${_esc(cam.id)}" data-status="${_esc(status)}">
                         <div class="cf-card-header">
@@ -109,7 +240,7 @@ export const CameraFeedsPanelDef = {
                         </div>
                         <div class="cf-card-thumb">
                             ${status !== 'offline'
-                                ? `<img class="cf-thumb-img" data-stream-src="${_esc(cam.stream_url || `/api/camera-feeds/${cam.id}/stream`)}" alt="${_esc(cam.name || cam.id)}" />`
+                                ? `<img class="cf-thumb-img" data-stream-src="${_esc(streamUrl)}" alt="${_esc(cam.name || cam.id)}" />`
                                 : '<div class="cf-thumb-offline">OFFLINE</div>'
                             }
                         </div>
@@ -147,7 +278,7 @@ export const CameraFeedsPanelDef = {
             if (overlayEl) overlayEl.style.display = '';
             if (overlayNameEl) overlayNameEl.textContent = cam.name || cam.id;
             if (overlayImg) {
-                overlayImg.src = cam.stream_url || `/api/camera-feeds/${camId}/stream`;
+                overlayImg.src = cam.stream_url || `/api/camera-feeds/sources/${camId}/mjpeg`;
             }
             if (overlayDetectionEl && cam.latest_detection) {
                 const d = cam.latest_detection;
@@ -175,6 +306,8 @@ export const CameraFeedsPanelDef = {
                 const data = await resp.json();
                 cameras = Array.isArray(data) ? data : (data.cameras || data.feeds || []);
                 renderGrid();
+                // Notify map layer about camera positions
+                EventBus.emit('cameras:changed', { cameras });
             } catch (_) {
                 cameras = [];
                 renderGrid();
@@ -185,10 +318,14 @@ export const CameraFeedsPanelDef = {
         if (refreshBtn) refreshBtn.addEventListener('click', fetchCameras);
         if (closeOverlayBtn) closeOverlayBtn.addEventListener('click', hideOverlay);
 
-        // Close overlay on Escape
+        // Close overlay/modal on Escape
         function onKeyDown(e) {
-            if (e.key === 'Escape' && overlayEl && overlayEl.style.display !== 'none') {
-                hideOverlay();
+            if (e.key === 'Escape') {
+                if (addModal && addModal.style.display !== 'none') {
+                    hideAddModal();
+                } else if (overlayEl && overlayEl.style.display !== 'none') {
+                    hideOverlay();
+                }
             }
         }
         document.addEventListener('keydown', onKeyDown);

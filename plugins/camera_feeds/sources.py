@@ -102,7 +102,7 @@ class CameraSourceBase(ABC):
 
     def to_dict(self) -> dict:
         """Serializable metadata dict."""
-        return {
+        d = {
             "source_id": self.config.source_id,
             "source_type": self.config.source_type,
             "name": self.config.name or self.config.source_id,
@@ -114,6 +114,12 @@ class CameraSourceBase(ABC):
             "frame_count": self._frame_count,
             "created_at": self._created_at,
         }
+        # Expose location if present
+        if "lat" in self.config.extra:
+            d["lat"] = self.config.extra["lat"]
+        if "lng" in self.config.extra:
+            d["lng"] = self.config.extra["lng"]
+        return d
 
 
 class SyntheticSource(CameraSourceBase):

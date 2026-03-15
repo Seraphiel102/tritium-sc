@@ -448,6 +448,9 @@ function _createMap(mapDiv) {
             }
         });
 
+        // Camera markers from camera-feeds plugin
+        EventBus.on('cameras:changed', _onCamerasChanged);
+
         // Apply the initial mode (default: observe) so visual state matches
         setMapMode(_state.currentMode || 'observe');
 
@@ -2189,6 +2192,183 @@ function _clearHazardZones() {
 }
 
 // ============================================================
+// Geofence Zone Overlay (polygon zones + occupancy labels)
+// ============================================================
+
+const GEOFENCE_ZONES_SOURCE = 'geofence-zones-source';
+const GEOFENCE_ZONES_FILL   = 'geofence-zones-fill';
+const GEOFENCE_ZONES_STROKE = 'geofence-zones-stroke';
+const GEOFENCE_ZONES_LABEL  = 'geofence-zones-label';
+const GEOFENCE_LABEL_SOURCE = 'geofence-label-source';
+
+const GEOFENCE_ZONE_COLORS = {
+    restricted: { fill: 'rgba(255,42,109,0.15)', stroke: '#ff2a6d' },
+    monitored:  { fill: 'rgba(0,240,255,0.12)',  stroke: '#00f0ff' },
+    safe:       { fill: 'rgba(5,255,161,0.10)',   stroke: '#05ffa1' },
+};
+
+/**
+ * Fetch geofence zones + occupancy and render on the MapLibre map.
+ * Called on slow tick (~1Hz).
+ */
+function _updateGeofenceZones() {
+    if (!_state.map || !_state.initialized) return;
+    if (!_state.showHazardZones) {
+        _clearGeofenceZones();
+        return;
+    }
+
+    // Use cached data, refresh periodically
+    if (!_state._geofenceZones) _state._geofenceZones = [];
+    if (!_state._geofenceOccupancy) _state._geofenceOccupancy = {};
+
+    const now = Date.now();
+    if (!_state._lastGeofenceFetch || now - _state._lastGeofenceFetch > 10000) {
+        _state._lastGeofenceFetch = now;
+        fetch('/api/geofence/zones')
+            .then(r => r.ok ? r.json() : [])
+            .then(data => {
+                if (Array.isArray(data)) _state._geofenceZones = data;
+                _renderGeofenceZones();
+            })
+            .catch(() => {});
+        fetch('/api/geofence/occupancy')
+            .then(r => r.ok ? r.json() : {})
+            .then(data => {
+                if (data && typeof data === 'object') _state._geofenceOccupancy = data;
+                _renderGeofenceZones();
+            })
+            .catch(() => {});
+    }
+}
+
+function _renderGeofenceZones() {
+    if (!_state.map || !_state.initialized) return;
+    const zones = _state._geofenceZones || [];
+    const occupancy = _state._geofenceOccupancy || {};
+
+    if (zones.length === 0) {
+        _clearGeofenceZones();
+        return;
+    }
+
+    const features = [];
+    const labelFeatures = [];
+
+    for (const zone of zones) {
+        const pts = zone.polygon;
+        if (!pts || pts.length < 3) continue;
+
+        const colors = GEOFENCE_ZONE_COLORS[zone.zone_type] || GEOFENCE_ZONE_COLORS.monitored;
+
+        // Convert game coords to [lng, lat] ring
+        const ring = pts.map(p => {
+            const ll = _gameToLngLat(p[0], p[1]);
+            return [ll[0], ll[1]];
+        });
+        // Close the ring
+        if (ring.length > 0) ring.push(ring[0]);
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [ring] },
+            properties: {
+                zone_id: zone.zone_id,
+                fill_color: colors.fill,
+                stroke_color: colors.stroke,
+            },
+        });
+
+        // Centroid for label
+        const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+        const ll = _gameToLngLat(cx, cy);
+        const occ = occupancy[zone.zone_id] || 0;
+        const label = occ > 0
+            ? `${zone.name.toUpperCase()}\n${occ} INSIDE`
+            : zone.name.toUpperCase();
+
+        labelFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [ll[0], ll[1]] },
+            properties: {
+                label: label,
+                color: colors.stroke,
+                zone_type: zone.zone_type.toUpperCase(),
+            },
+        });
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const labelGeojson = { type: 'FeatureCollection', features: labelFeatures };
+
+    if (_state.map.getSource(GEOFENCE_ZONES_SOURCE)) {
+        _state.map.getSource(GEOFENCE_ZONES_SOURCE).setData(geojson);
+    } else {
+        _state.map.addSource(GEOFENCE_ZONES_SOURCE, { type: 'geojson', data: geojson });
+        _state.map.addLayer({
+            id: GEOFENCE_ZONES_FILL,
+            type: 'fill',
+            source: GEOFENCE_ZONES_SOURCE,
+            paint: {
+                'fill-color': ['get', 'fill_color'],
+                'fill-opacity': 0.6,
+            },
+        });
+        _state.map.addLayer({
+            id: GEOFENCE_ZONES_STROKE,
+            type: 'line',
+            source: GEOFENCE_ZONES_SOURCE,
+            paint: {
+                'line-color': ['get', 'stroke_color'],
+                'line-width': 2,
+                'line-dasharray': [6, 4],
+            },
+        });
+    }
+
+    if (_state.map.getSource(GEOFENCE_LABEL_SOURCE)) {
+        _state.map.getSource(GEOFENCE_LABEL_SOURCE).setData(labelGeojson);
+    } else {
+        _state.map.addSource(GEOFENCE_LABEL_SOURCE, { type: 'geojson', data: labelGeojson });
+        _state.map.addLayer({
+            id: GEOFENCE_ZONES_LABEL,
+            type: 'symbol',
+            source: GEOFENCE_LABEL_SOURCE,
+            layout: {
+                'text-field': ['get', 'label'],
+                'text-font': ['Open Sans Bold'],
+                'text-size': 11,
+                'text-anchor': 'center',
+                'text-allow-overlap': true,
+            },
+            paint: {
+                'text-color': ['get', 'color'],
+                'text-halo-color': 'rgba(10,10,20,0.8)',
+                'text-halo-width': 1.5,
+            },
+        });
+    }
+}
+
+function _clearGeofenceZones() {
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(GEOFENCE_ZONES_LABEL))
+                _state.map.removeLayer(GEOFENCE_ZONES_LABEL);
+            if (_state.map.getLayer(GEOFENCE_ZONES_FILL))
+                _state.map.removeLayer(GEOFENCE_ZONES_FILL);
+            if (_state.map.getLayer(GEOFENCE_ZONES_STROKE))
+                _state.map.removeLayer(GEOFENCE_ZONES_STROKE);
+            if (_state.map.getSource(GEOFENCE_ZONES_SOURCE))
+                _state.map.removeSource(GEOFENCE_ZONES_SOURCE);
+            if (_state.map.getSource(GEOFENCE_LABEL_SOURCE))
+                _state.map.removeSource(GEOFENCE_LABEL_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+}
+
+// ============================================================
 // Hostile Objective Lines Overlay
 // ============================================================
 
@@ -3178,12 +3358,13 @@ function _updateUnits() {
     // Combat status bar at bottom of map
     if (slowTick) _updateCombatStatusBar();
 
-    // Slow-tick overlays: hostile objectives, crowd density, cover points, hostile intel
+    // Slow-tick overlays: hostile objectives, crowd density, cover points, hostile intel, geofence zones
     if (slowTick) {
         _updateHostileObjectives();
         _updateCrowdDensity();
         _updateCoverPoints();
         _updateHostileIntel();
+        _updateGeofenceZones();
 
         // Prune stale recentlyFired entries (>5s old)
         const pruneThreshold = performance.now() - 5000;
@@ -8173,6 +8354,95 @@ export function centerOnAction() {
             center: [sumLng / count, sumLat / count],
             zoom: Math.max(_state.map.getZoom(), 17),
             duration: 1000,
+        });
+    }
+}
+
+// ── Camera Markers ─────────────────────────────────────────────────────
+// Shows camera icons on the tactical map for cameras that have lat/lng.
+
+const CAMERA_SOURCE_ID = 'tritium-camera-markers';
+const CAMERA_LAYER_CIRCLE = 'tritium-camera-circle';
+const CAMERA_LAYER_LABEL = 'tritium-camera-label';
+
+function _onCamerasChanged(data) {
+    if (!_state.map || !data || !data.cameras) return;
+    const cameras = data.cameras.filter(c => c.lat != null && c.lng != null);
+    const geojson = {
+        type: 'FeatureCollection',
+        features: cameras.map(c => ({
+            type: 'Feature',
+            properties: {
+                id: c.id || c.source_id || '',
+                name: c.name || c.id || 'Camera',
+                status: c.status || 'offline',
+            },
+            geometry: {
+                type: 'Point',
+                coordinates: [c.lng, c.lat],
+            },
+        })),
+    };
+
+    if (_state.map.getSource(CAMERA_SOURCE_ID)) {
+        _state.map.getSource(CAMERA_SOURCE_ID).setData(geojson);
+    } else {
+        _state.map.addSource(CAMERA_SOURCE_ID, { type: 'geojson', data: geojson });
+
+        // Camera circle marker
+        _state.map.addLayer({
+            id: CAMERA_LAYER_CIRCLE,
+            type: 'circle',
+            source: CAMERA_SOURCE_ID,
+            paint: {
+                'circle-radius': 8,
+                'circle-color': [
+                    'match', ['get', 'status'],
+                    'streaming', '#05ffa1',
+                    'connecting', '#fcee0a',
+                    '#ff2a6d',
+                ],
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#00f0ff',
+                'circle-opacity': 0.85,
+            },
+        });
+
+        // Camera label
+        _state.map.addLayer({
+            id: CAMERA_LAYER_LABEL,
+            type: 'symbol',
+            source: CAMERA_SOURCE_ID,
+            layout: {
+                'text-field': ['concat', 'CAM ', ['get', 'name']],
+                'text-size': 11,
+                'text-offset': [0, 1.4],
+                'text-anchor': 'top',
+                'text-font': ['Open Sans Bold'],
+            },
+            paint: {
+                'text-color': '#00f0ff',
+                'text-halo-color': '#0a0a0f',
+                'text-halo-width': 1.5,
+            },
+        });
+
+        // Click to fly and open camera panel
+        _state.map.on('click', CAMERA_LAYER_CIRCLE, (e) => {
+            if (e.features && e.features.length > 0) {
+                const props = e.features[0].properties;
+                const coords = e.features[0].geometry.coordinates;
+                _state.map.flyTo({ center: coords, zoom: 19, duration: 600 });
+                EventBus.emit('camera:selected', { id: props.id, name: props.name });
+            }
+        });
+
+        // Pointer cursor on hover
+        _state.map.on('mouseenter', CAMERA_LAYER_CIRCLE, () => {
+            _state.map.getCanvas().style.cursor = 'pointer';
+        });
+        _state.map.on('mouseleave', CAMERA_LAYER_CIRCLE, () => {
+            _state.map.getCanvas().style.cursor = '';
         });
     }
 }
