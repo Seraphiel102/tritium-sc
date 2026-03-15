@@ -4187,6 +4187,103 @@
     background: rgba(0, 240, 255, 0.2);
 }
 
+/* Tag target buttons */
+.tdm-tag-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.tdm-tag-btn {
+    flex: 1;
+    padding: 6px 4px;
+    font-size: 0.6rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 2px;
+    letter-spacing: 0.5px;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.tdm-tag-friendly {
+    background: rgba(5, 255, 161, 0.1);
+    border: 1px solid rgba(5, 255, 161, 0.4);
+    color: #05ffa1;
+}
+
+.tdm-tag-friendly:hover:not(:disabled) {
+    background: rgba(5, 255, 161, 0.25);
+}
+
+.tdm-tag-hostile {
+    background: rgba(255, 42, 109, 0.1);
+    border: 1px solid rgba(255, 42, 109, 0.4);
+    color: #ff2a6d;
+}
+
+.tdm-tag-hostile:hover:not(:disabled) {
+    background: rgba(255, 42, 109, 0.25);
+}
+
+.tdm-tag-vip {
+    background: rgba(252, 238, 10, 0.1);
+    border: 1px solid rgba(252, 238, 10, 0.4);
+    color: #fcee0a;
+}
+
+.tdm-tag-vip:hover:not(:disabled) {
+    background: rgba(252, 238, 10, 0.25);
+}
+
+.tdm-tag-btn:disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+
+/* RL Classification display */
+.tdm-rl-class {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: rgba(5, 255, 161, 0.06);
+    border: 1px solid rgba(5, 255, 161, 0.2);
+    border-radius: 3px;
+    margin-top: 4px;
+}
+
+.tdm-rl-type {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #e0e0e0;
+}
+
+.tdm-rl-conf {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+
+.tdm-rl-label {
+    font-size: 0.5rem;
+    color: rgba(224, 224, 224, 0.35);
+    margin-left: auto;
+    font-style: italic;
+}
+
+/* Dossier action button highlight */
+.tdm-action-dossier {
+    border-color: rgba(255, 42, 109, 0.4);
+    color: #ff2a6d;
+    background: rgba(255, 42, 109, 0.1);
+}
+
+.tdm-action-dossier:hover {
+    background: rgba(255, 42, 109, 0.2);
+}
+
 @media (max-width: 600px) {
     .tdm-body { flex-direction: column; }
     .tdm-col-right { width: 100%; }

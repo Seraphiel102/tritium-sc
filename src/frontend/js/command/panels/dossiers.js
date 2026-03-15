@@ -271,6 +271,11 @@ export const DossiersPanelDef = {
                     ` : ''}
 
                     <div class="dossier-section">
+                        <div class="dossier-section-title">SIGNAL HISTORY</div>
+                        <canvas class="dossier-signal-chart" data-bind="dossier-signal-chart" width="400" height="100"></canvas>
+                    </div>
+
+                    <div class="dossier-section">
                         <div class="dossier-section-title">SIGNALS (${signals.length})</div>
                         <div class="dossier-signal-timeline">${signalHtml}</div>
                     </div>
@@ -397,6 +402,12 @@ export const DossiersPanelDef = {
                 _drawPositionTrail(canvas, positions);
             }
 
+            // Signal history sparkline chart
+            const signalChart = container.querySelector('[data-bind="dossier-signal-chart"]');
+            if (signalChart) {
+                _fetchAndDrawSignalHistory(signalChart, dossierId);
+            }
+
             // Stop keyboard propagation on inputs
             container.querySelectorAll('input').forEach(inp => {
                 inp.addEventListener('keydown', (e) => e.stopPropagation());
@@ -472,6 +483,180 @@ export const DossiersPanelDef = {
             ctx.fillStyle = '#00f0ff';
             ctx.font = '9px monospace';
             ctx.fillText('NOW', lx + 6, ly + 3);
+        }
+
+        // ---------------------------------------------------------------
+        // Signal history sparkline chart
+        // ---------------------------------------------------------------
+
+        async function _fetchAndDrawSignalHistory(canvas, dossierId) {
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+
+            // Draw loading state
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, w, h);
+            ctx.fillStyle = 'rgba(224, 224, 224, 0.3)';
+            ctx.font = '9px monospace';
+            ctx.fillText('Loading signal history...', 10, h / 2);
+
+            try {
+                const resp = await fetch(`/api/dossiers/${encodeURIComponent(dossierId)}/signal-history?limit=200`);
+                if (!resp.ok) {
+                    _drawEmptyChart(ctx, w, h, 'No signal data available');
+                    return;
+                }
+                const data = await resp.json();
+                const timeline = data.timeline || [];
+                if (timeline.length === 0) {
+                    _drawEmptyChart(ctx, w, h, 'No signal data available');
+                    return;
+                }
+                _drawSignalSparkline(ctx, w, h, timeline);
+            } catch (_) {
+                _drawEmptyChart(ctx, w, h, 'Failed to load signal data');
+            }
+        }
+
+        function _drawEmptyChart(ctx, w, h, msg) {
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, w, h);
+            ctx.fillStyle = 'rgba(224, 224, 224, 0.25)';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(msg, w / 2, h / 2);
+            ctx.textAlign = 'start';
+        }
+
+        function _drawSignalSparkline(ctx, w, h, timeline) {
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, w, h);
+
+            const pad = { top: 14, right: 10, bottom: 18, left: 36 };
+            const plotW = w - pad.left - pad.right;
+            const plotH = h - pad.top - pad.bottom;
+
+            // Extract RSSI values; filter for numeric rssi entries
+            const points = timeline
+                .filter(t => t.rssi != null || (t.data && t.data.rssi != null))
+                .map(t => ({
+                    ts: t.timestamp || 0,
+                    rssi: t.rssi ?? (t.data && t.data.rssi) ?? -80,
+                }))
+                .sort((a, b) => a.ts - b.ts);
+
+            if (points.length === 0) {
+                _drawEmptyChart(ctx, w, h, 'No RSSI data in signal history');
+                return;
+            }
+
+            // Find bounds
+            let minRssi = Infinity, maxRssi = -Infinity;
+            let minTs = Infinity, maxTs = -Infinity;
+            for (const p of points) {
+                if (p.rssi < minRssi) minRssi = p.rssi;
+                if (p.rssi > maxRssi) maxRssi = p.rssi;
+                if (p.ts < minTs) minTs = p.ts;
+                if (p.ts > maxTs) maxTs = p.ts;
+            }
+            // Ensure some range
+            if (maxRssi === minRssi) { maxRssi += 5; minRssi -= 5; }
+            if (maxTs === minTs) maxTs = minTs + 60;
+
+            const tsRange = maxTs - minTs;
+            const rssiRange = maxRssi - minRssi;
+
+            function toX(ts) { return pad.left + ((ts - minTs) / tsRange) * plotW; }
+            function toY(rssi) { return pad.top + plotH - ((rssi - minRssi) / rssiRange) * plotH; }
+
+            // Draw grid lines (horizontal)
+            ctx.strokeStyle = 'rgba(0, 240, 255, 0.08)';
+            ctx.lineWidth = 0.5;
+            for (let r = Math.ceil(minRssi / 10) * 10; r <= maxRssi; r += 10) {
+                const y = toY(r);
+                ctx.beginPath();
+                ctx.moveTo(pad.left, y);
+                ctx.lineTo(w - pad.right, y);
+                ctx.stroke();
+
+                // Y-axis label
+                ctx.fillStyle = 'rgba(224, 224, 224, 0.3)';
+                ctx.font = '7px monospace';
+                ctx.textAlign = 'right';
+                ctx.fillText(`${r}`, pad.left - 3, y + 3);
+            }
+
+            // Title
+            ctx.fillStyle = '#00f0ff';
+            ctx.font = '8px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText('RSSI (dBm) over time', pad.left, 10);
+
+            // Time axis labels
+            ctx.fillStyle = 'rgba(224, 224, 224, 0.3)';
+            ctx.font = '7px monospace';
+            ctx.textAlign = 'center';
+            const startDate = new Date(minTs * 1000);
+            const endDate = new Date(maxTs * 1000);
+            const fmt = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            ctx.fillText(fmt(startDate), pad.left, h - 3);
+            ctx.fillText(fmt(endDate), w - pad.right, h - 3);
+
+            // Draw gradient fill under the sparkline
+            const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
+            gradient.addColorStop(0, 'rgba(0, 240, 255, 0.15)');
+            gradient.addColorStop(1, 'rgba(0, 240, 255, 0.01)');
+
+            ctx.beginPath();
+            ctx.moveTo(toX(points[0].ts), toY(points[0].rssi));
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(toX(points[i].ts), toY(points[i].rssi));
+            }
+            // Close path for fill
+            ctx.lineTo(toX(points[points.length - 1].ts), pad.top + plotH);
+            ctx.lineTo(toX(points[0].ts), pad.top + plotH);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Draw sparkline
+            ctx.beginPath();
+            ctx.strokeStyle = '#00f0ff';
+            ctx.lineWidth = 1.5;
+            ctx.moveTo(toX(points[0].ts), toY(points[0].rssi));
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(toX(points[i].ts), toY(points[i].rssi));
+            }
+            ctx.stroke();
+
+            // Draw dots at each data point (limit to avoid clutter)
+            const step = Math.max(1, Math.floor(points.length / 40));
+            for (let i = 0; i < points.length; i += step) {
+                const x = toX(points[i].ts);
+                const y = toY(points[i].rssi);
+                const rssiColor = points[i].rssi > -50 ? '#05ffa1' : points[i].rssi > -70 ? '#fcee0a' : '#ff2a6d';
+                ctx.fillStyle = rssiColor;
+                ctx.beginPath();
+                ctx.arc(x, y, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            // Always draw last point
+            if (points.length > 1) {
+                const last = points[points.length - 1];
+                const lx = toX(last.ts);
+                const ly = toY(last.rssi);
+                ctx.fillStyle = '#00f0ff';
+                ctx.beginPath();
+                ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#00f0ff';
+                ctx.font = '7px monospace';
+                ctx.textAlign = 'left';
+                ctx.fillText(`${last.rssi} dBm`, lx + 5, ly + 3);
+            }
+
+            ctx.textAlign = 'start';
         }
 
         // ---------------------------------------------------------------
@@ -577,6 +762,25 @@ export const DossiersPanelDef = {
         const refreshInterval = setInterval(fetchList, 15000);
         panel._unsubs.push(() => clearInterval(refreshInterval));
         panel._unsubs.push(() => clearTimeout(typeaheadTimer));
+
+        // Listen for dossier:load-target event from target detail modal
+        const _onLoadTarget = (data) => {
+            if (data && data.target_id) {
+                selectedId = data.target_id;
+                loadDetail(data.target_id);
+                // Also try to highlight it in the list
+                setTimeout(() => {
+                    const item = listEl?.querySelector(`[data-dossier-id="${data.target_id}"]`);
+                    if (item) {
+                        listEl.querySelectorAll('.dossier-list-item').forEach(li =>
+                            li.classList.toggle('dossier-list-item-selected', li.dataset.dossierId === data.target_id));
+                        item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }, 300);
+            }
+        };
+        EventBus.on('dossier:load-target', _onLoadTarget);
+        panel._unsubs.push(() => EventBus.off('dossier:load-target', _onLoadTarget));
     },
 
     unmount(bodyEl) {
@@ -1027,6 +1231,14 @@ style.textContent = `
 .dossier-minimap {
     width: 100%;
     height: 140px;
+    border: 1px solid rgba(0, 240, 255, 0.15);
+    border-radius: 3px;
+}
+
+/* Signal history chart */
+.dossier-signal-chart {
+    width: 100%;
+    height: 100px;
     border: 1px solid rgba(0, 240, 255, 0.15);
     border-radius: 3px;
 }

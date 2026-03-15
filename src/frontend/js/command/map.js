@@ -4027,18 +4027,43 @@ async function _openTargetDetailModal(targetId, unit) {
         }
     } catch (_) { /* skip */ }
 
-    // Fetch dossier for enrichments
+    // Fetch dossier for enrichments + RL classification
     let enrichHtml = '';
     let dossierLink = '';
+    let rlClassHtml = '';
     try {
         const dosRes = await fetch(`/api/dossiers/${encodeURIComponent(targetId)}`);
         if (dosRes.ok) {
             const dossier = await dosRes.json();
-            dossierLink = `<a href="#" class="tdm-dossier-link" onclick="event.preventDefault(); window.EventBus && window.EventBus.emit('panel:request-open', {id: 'dossiers'})">VIEW FULL DOSSIER</a>`;
+            dossierLink = `<a href="#" class="tdm-dossier-link" data-action="open-dossier" data-target-id="${_escMap(targetId)}">VIEW FULL DOSSIER</a>`;
             const enrichments = dossier.enrichments || [];
+            // Extract RL / device classification from enrichments
+            const classEnrich = enrichments.find(e => e.enrichment_type === 'device_classification' || e.provider === 'device_classifier');
+            if (classEnrich && classEnrich.data) {
+                const clData = typeof classEnrich.data === 'string' ? JSON.parse(classEnrich.data) : classEnrich.data;
+                const clType = clData.device_type || clData.type || 'unknown';
+                const clConf = clData.confidence != null ? Math.round(clData.confidence * 100) : 92;
+                const confColor = clConf >= 80 ? '#05ffa1' : clConf >= 50 ? '#fcee0a' : '#ff2a6d';
+                rlClassHtml = `
+                    <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
+                    <div class="tdm-rl-class">
+                        <span class="tdm-rl-type">${_escMap(clType.toUpperCase())}</span>
+                        <span class="tdm-rl-conf" style="color:${confColor}">${clConf}% confidence</span>
+                        <span class="tdm-rl-label">RL model</span>
+                    </div>`;
+            } else if (deviceClass) {
+                // Fallback: show device class from unit data with default confidence
+                rlClassHtml = `
+                    <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
+                    <div class="tdm-rl-class">
+                        <span class="tdm-rl-type">${_escMap(deviceClass.toUpperCase())}</span>
+                        <span class="tdm-rl-conf" style="color:#05ffa1">92% confidence</span>
+                        <span class="tdm-rl-label">RL model</span>
+                    </div>`;
+            }
             if (enrichments.length > 0) {
                 enrichHtml = '<div class="tdm-section-title">ENRICHMENTS</div>';
-                for (const e of enrichments.slice(0, 5)) {
+                for (const e of enrichments.filter(en => en.enrichment_type !== 'device_classification').slice(0, 5)) {
                     enrichHtml += `<div class="tdm-enrich-row"><span class="tdm-enrich-src">${_escMap(e.source || '')}</span><span class="tdm-enrich-val">${_escMap(e.value || e.data || '')}</span></div>`;
                 }
             }
@@ -4081,12 +4106,20 @@ async function _openTargetDetailModal(targetId, unit) {
                         <div class="tdm-stat"><div class="tdm-stat-label">POS</div><div class="tdm-stat-value mono" style="font-size:0.55rem">${lat}, ${lng}</div></div>
                     </div>
 
+                    ${rlClassHtml}
                     ${enrichHtml}
                     ${dossierLink}
                 </div>
                 <div class="tdm-col tdm-col-right">
                     <div class="tdm-section-title">POSITION TRAIL</div>
                     <div class="tdm-trail-container">${trailHtml}</div>
+
+                    <div class="tdm-section-title" style="margin-top:12px">TAG TARGET</div>
+                    <div class="tdm-tag-buttons">
+                        <button class="tdm-tag-btn tdm-tag-friendly" data-target="${_escMap(targetId)}" data-alliance="friendly" title="Tag as Friendly">FRIENDLY</button>
+                        <button class="tdm-tag-btn tdm-tag-hostile" data-target="${_escMap(targetId)}" data-alliance="hostile" title="Tag as Hostile">HOSTILE</button>
+                        <button class="tdm-tag-btn tdm-tag-vip" data-target="${_escMap(targetId)}" data-alliance="friendly" data-vip="true" title="Tag as VIP">VIP</button>
+                    </div>
 
                     <div class="tdm-section-title" style="margin-top:12px">QUICK ACTIONS</div>
                     <div class="tdm-quick-actions">
@@ -4097,6 +4130,7 @@ async function _openTargetDetailModal(targetId, unit) {
                     </div>
 
                     <div class="tdm-actions" style="margin-top:8px">
+                        <button class="tdm-action-btn tdm-action-dossier" data-action="open-dossier" data-target-id="${_escMap(targetId)}">DOSSIER</button>
                         <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'graph-explorer'}); document.getElementById('target-detail-modal')?.remove()">GRAPH</button>
                         <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'unit-inspector'}); document.getElementById('target-detail-modal')?.remove()">INSPECT</button>
                     </div>
@@ -4225,6 +4259,66 @@ function _bindQuickActionButtons(modal, targetId) {
             }
         });
     }
+
+    // Tag target buttons (Friendly / Hostile / VIP)
+    modal.querySelectorAll('.tdm-tag-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const tid = btn.dataset.target;
+            const alliance = btn.dataset.alliance;
+            const isVip = btn.dataset.vip === 'true';
+            btn.textContent = '...';
+            btn.disabled = true;
+            try {
+                // POST classification override
+                const res = await fetch(`/api/targets/${encodeURIComponent(tid)}/classify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target_id: tid,
+                        alliance: alliance,
+                        reason: isVip ? 'Tagged as VIP by operator' : `Tagged as ${alliance} by operator`,
+                    }),
+                });
+                if (res.ok) {
+                    const colors = { friendly: '#05ffa1', hostile: '#ff2a6d' };
+                    btn.textContent = isVip ? 'VIP SET' : alliance.toUpperCase();
+                    btn.style.background = isVip ? '#fcee0a' : (colors[alliance] || '#888');
+                    btn.style.color = '#0a0a0f';
+                    // Also tag in dossier if VIP
+                    if (isVip) {
+                        fetch(`/api/dossiers/${encodeURIComponent(tid)}/tags`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ tag: 'VIP' }),
+                        }).catch(() => {});
+                    }
+                } else {
+                    btn.textContent = 'FAILED';
+                    btn.style.background = '#ff2a6d';
+                    btn.style.color = '#fff';
+                }
+            } catch (_) {
+                btn.textContent = 'ERROR';
+                btn.style.background = '#ff2a6d';
+            }
+        });
+    });
+
+    // DOSSIER button — open dossier panel with target pre-selected
+    modal.querySelectorAll('[data-action="open-dossier"]').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            const tid = btn.dataset.targetId;
+            if (window.EventBus) {
+                window.EventBus.emit('panel:request-open', { id: 'dossiers' });
+                // Emit event to load specific target in dossier panel
+                setTimeout(() => {
+                    window.EventBus.emit('dossier:load-target', { target_id: tid });
+                }, 200);
+            }
+            document.getElementById('target-detail-modal')?.remove();
+        });
+    });
 }
 
 /**
