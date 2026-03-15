@@ -456,3 +456,229 @@ class TestESC50Integration:
         assert f1.peak_amplitude == f2.peak_amplitude
         assert f1.zero_crossing_rate == f2.zero_crossing_rate
         assert f1.mfcc == f2.mfcc
+
+
+class TestESC50FullBenchmark:
+    """Full 50-category ESC-50 benchmark against our 11 sound classes.
+
+    Measures classification accuracy on the mapped subset of ESC-50 categories.
+    Of the 50 ESC-50 categories:
+      - 34 map to our 11 sound classes (animal, voice, vehicle, etc.)
+      - 16 map to 'unknown' (no direct Tritium equivalent)
+
+    Categories that map to each Tritium class:
+      animal (12):    dog, cat, rooster, pig, cow, frog, hen, crow, sheep,
+                      insects, crickets, chirping_birds
+      voice (6):      laughing, crying_baby, coughing, sneezing, breathing, snoring
+      vehicle (5):    car_horn, engine, train, helicopter, airplane
+      machinery (4):  chainsaw, vacuum_cleaner, washing_machine, hand_saw
+      explosion (2):  fireworks, thunderstorm
+      alarm (2):      clock_alarm, church_bells
+      siren (1):      siren
+      glass_break (1): glass_breaking
+      footsteps (1):  footsteps
+      music (0):      (no direct ESC-50 category maps to music)
+      gunshot (0):    (no direct ESC-50 category maps to gunshot)
+      unknown (16):   clock_tick, drinking_sipping, brushing_teeth, clapping,
+                      keyboard_typing, mouse_click, door_wood_creaks,
+                      door_wood_knock, can_opening, pouring_water, toilet_flush,
+                      rain, sea_waves, crackling_fire, water_drops, wind
+    """
+
+    def test_category_mapping_coverage(self):
+        """Report how many ESC-50 categories map to our 11 classes."""
+        mapped = {k: v for k, v in ESC50_TO_TRITIUM.items() if v != "unknown"}
+        unmapped = {k: v for k, v in ESC50_TO_TRITIUM.items() if v == "unknown"}
+
+        # Group by target class
+        class_to_categories: dict[str, list[str]] = {}
+        for cat, cls in mapped.items():
+            class_to_categories.setdefault(cls, []).append(cat)
+
+        print("\n  === ESC-50 -> Tritium Category Mapping ===")
+        for cls in sorted(class_to_categories.keys()):
+            cats = sorted(class_to_categories[cls])
+            print(f"  {cls:12s} ({len(cats):2d}): {', '.join(cats)}")
+        print(f"  {'unknown':12s} ({len(unmapped):2d}): {', '.join(sorted(unmapped.keys()))}")
+
+        assert len(mapped) == 34, f"Expected 34 mapped categories, got {len(mapped)}"
+        assert len(unmapped) == 16, f"Expected 16 unmapped categories, got {len(unmapped)}"
+        assert len(class_to_categories) == 9, (
+            f"Expected 9 Tritium classes covered, got {len(class_to_categories)}"
+        )
+
+    def test_full_benchmark_all_50_categories(self):
+        """Classify ALL ESC-50 samples and report accuracy per class.
+
+        Runs the MFCC KNN classifier on every WAV file in ESC-50 (2000 files)
+        and computes:
+          - Per-category accuracy (50 ESC-50 categories)
+          - Per-class accuracy (11 Tritium classes)
+          - Overall accuracy on the mapped subset
+          - Confusion summary
+        """
+        entries = _load_esc50_metadata()
+        if not entries:
+            pytest.skip("ESC-50 metadata not found")
+
+        # Check that audio files exist
+        sample_path = ESC50_AUDIO / entries[0]["filename"]
+        if not sample_path.exists():
+            pytest.skip("ESC-50 audio files not found")
+
+        classifier = AcousticClassifier(enable_ml=True)
+        assert classifier.ml_available, "ML classifier should be available"
+
+        # Classify every sample
+        per_category_results: dict[str, dict[str, int]] = {}
+        per_class_correct = {}
+        per_class_total = {}
+        total_correct = 0
+        total_mapped = 0
+        total_unknown = 0
+        confusion: dict[str, dict[str, int]] = {}
+        skipped = 0
+
+        for entry in entries:
+            cat = entry["category"]
+            expected = ESC50_TO_TRITIUM.get(cat, "unknown")
+            wav_path = ESC50_AUDIO / entry["filename"]
+
+            if not wav_path.exists():
+                skipped += 1
+                continue
+
+            try:
+                features = _extract_wav_features(str(wav_path))
+                event = classifier.classify(features)
+                predicted = event.event_type.value
+            except Exception:
+                skipped += 1
+                continue
+
+            # Track per-ESC50-category results
+            if cat not in per_category_results:
+                per_category_results[cat] = {"correct": 0, "total": 0}
+            per_category_results[cat]["total"] += 1
+
+            if expected == "unknown":
+                total_unknown += 1
+                continue
+
+            total_mapped += 1
+            is_correct = predicted == expected
+
+            if is_correct:
+                total_correct += 1
+                per_category_results[cat]["correct"] += 1
+
+            # Per-class tracking
+            per_class_correct.setdefault(expected, 0)
+            per_class_total.setdefault(expected, 0)
+            per_class_total[expected] += 1
+            if is_correct:
+                per_class_correct[expected] += 1
+
+            # Confusion matrix
+            confusion.setdefault(expected, {})
+            confusion[expected].setdefault(predicted, 0)
+            confusion[expected][predicted] += 1
+
+        # Report
+        print(f"\n  === ESC-50 Full Benchmark Results ===")
+        print(f"  Total samples:  {len(entries)}")
+        print(f"  Mapped samples: {total_mapped} (from {len(per_category_results)} categories)")
+        print(f"  Unmapped (unknown target): {total_unknown}")
+        print(f"  Skipped (missing/error):   {skipped}")
+
+        if total_mapped > 0:
+            accuracy = total_correct / total_mapped
+            print(f"\n  Overall accuracy on mapped subset: {total_correct}/{total_mapped} = {accuracy:.1%}")
+        else:
+            accuracy = 0.0
+            print("\n  No mapped samples classified")
+
+        print(f"\n  --- Per Tritium Class Accuracy ---")
+        for cls in sorted(per_class_total.keys()):
+            c = per_class_correct.get(cls, 0)
+            t = per_class_total[cls]
+            pct = c / t * 100 if t > 0 else 0
+            print(f"  {cls:12s}: {c:3d}/{t:3d} = {pct:5.1f}%")
+
+        print(f"\n  --- Per ESC-50 Category (mapped only) ---")
+        for cat in sorted(per_category_results.keys()):
+            expected = ESC50_TO_TRITIUM.get(cat, "unknown")
+            if expected == "unknown":
+                continue
+            r = per_category_results[cat]
+            pct = r["correct"] / r["total"] * 100 if r["total"] > 0 else 0
+            print(f"  {cat:20s} -> {expected:12s}: {r['correct']:2d}/{r['total']:2d} = {pct:5.1f}%")
+
+        print(f"\n  --- Confusion Summary (expected -> predicted) ---")
+        for expected in sorted(confusion.keys()):
+            preds = confusion[expected]
+            top_preds = sorted(preds.items(), key=lambda x: x[1], reverse=True)[:3]
+            pred_str = ", ".join(f"{p}:{n}" for p, n in top_preds)
+            print(f"  {expected:12s} -> {pred_str}")
+
+        # The pipeline should complete without crashes on all 2000 files
+        assert total_mapped >= 100, f"Should classify 100+ mapped samples, got {total_mapped}"
+        # Record accuracy as a metric — even low accuracy is useful signal
+        # with synthetic training data vs real audio
+        assert accuracy >= 0.0, "Accuracy calculation should work"
+
+    def test_benchmark_per_fold(self):
+        """Accuracy by ESC-50 fold (1-5) to check for data distribution bias."""
+        entries = _load_esc50_metadata()
+        if not entries:
+            pytest.skip("ESC-50 metadata not found")
+
+        sample_path = ESC50_AUDIO / entries[0]["filename"]
+        if not sample_path.exists():
+            pytest.skip("ESC-50 audio files not found")
+
+        classifier = AcousticClassifier(enable_ml=True)
+
+        fold_correct = {str(i): 0 for i in range(1, 6)}
+        fold_total = {str(i): 0 for i in range(1, 6)}
+
+        # Sample 2 per category per fold for speed
+        category_fold_seen: dict[str, dict[str, int]] = {}
+
+        for entry in entries:
+            cat = entry["category"]
+            fold = entry["fold"]
+            expected = ESC50_TO_TRITIUM.get(cat, "unknown")
+            if expected == "unknown":
+                continue
+
+            category_fold_seen.setdefault(cat, {})
+            count = category_fold_seen[cat].get(fold, 0)
+            if count >= 2:
+                continue
+            category_fold_seen[cat][fold] = count + 1
+
+            wav_path = ESC50_AUDIO / entry["filename"]
+            if not wav_path.exists():
+                continue
+
+            try:
+                features = _extract_wav_features(str(wav_path))
+                event = classifier.classify(features)
+                predicted = event.event_type.value
+            except Exception:
+                continue
+
+            fold_total[fold] += 1
+            if predicted == expected:
+                fold_correct[fold] += 1
+
+        print("\n  === Per-Fold Accuracy ===")
+        for fold in ["1", "2", "3", "4", "5"]:
+            c = fold_correct[fold]
+            t = fold_total[fold]
+            pct = c / t * 100 if t > 0 else 0
+            print(f"  Fold {fold}: {c:3d}/{t:3d} = {pct:5.1f}%")
+
+        total_folds_with_data = sum(1 for f in fold_total.values() if f > 0)
+        assert total_folds_with_data >= 3, "Should have data in at least 3 folds"

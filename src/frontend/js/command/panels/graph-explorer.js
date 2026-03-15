@@ -329,38 +329,118 @@ class ForceGraph {
 
     _drawEdge(ctx, a, b, edge) {
         const color = edgeConfidenceColor(edge.confidence);
+
+        // Line thickness varies with confidence
+        const lineWidth = 0.5 + edge.confidence * 2.0;
+
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.6;
+        ctx.lineWidth = lineWidth;
+        ctx.globalAlpha = 0.4 + edge.confidence * 0.4;
         ctx.stroke();
         ctx.globalAlpha = 1.0;
 
-        // Edge label at midpoint
+        // Arrowhead (directional edge indicator)
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = dx / len;
+        const ny = dy / len;
+        const arrowX = b.x - nx * NODE_RADIUS;
+        const arrowY = b.y - ny * NODE_RADIUS;
+        const arrowSize = 6 + edge.confidence * 3;
+        ctx.beginPath();
+        ctx.moveTo(arrowX, arrowY);
+        ctx.lineTo(
+            arrowX - arrowSize * nx + arrowSize * 0.4 * ny,
+            arrowY - arrowSize * ny - arrowSize * 0.4 * nx,
+        );
+        ctx.lineTo(
+            arrowX - arrowSize * nx - arrowSize * 0.4 * ny,
+            arrowY - arrowSize * ny + arrowSize * 0.4 * nx,
+        );
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.7;
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+
+        // Edge label at midpoint: relationship type + confidence score
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+
+        // Offset label perpendicular to edge to avoid overlap with line
+        const perpX = -ny * 10;
+        const perpY = nx * 10;
+        const labelX = mx + perpX;
+        const labelY = my + perpY;
+
+        // Build label text: TYPE (NN%)
+        const confPct = Math.round(edge.confidence * 100);
+        let labelText = '';
         if (edge.label) {
-            const mx = (a.x + b.x) / 2;
-            const my = (a.y + b.y) / 2;
-            ctx.font = EDGE_LABEL_FONT;
-            ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            // Background for readability
-            const tw = ctx.measureText(edge.label).width + 6;
-            ctx.fillStyle = '#0a0a0f';
-            ctx.globalAlpha = 0.7;
-            ctx.fillRect(mx - tw / 2, my - 6, tw, 12);
-            ctx.globalAlpha = 1.0;
-            ctx.fillStyle = color;
-            ctx.fillText(edge.label, mx, my);
+            // Format relationship type: CARRIES, DETECTED_WITH, etc.
+            const relType = edge.label.toUpperCase().replace(/[_ ]/g, '_');
+            labelText = `${relType} (${confPct}%)`;
+        } else {
+            labelText = `${confPct}%`;
         }
+
+        ctx.font = EDGE_LABEL_FONT;
+        // Background pill for readability
+        const tw = ctx.measureText(labelText).width + 8;
+        const th = 14;
+        ctx.fillStyle = '#0a0a0f';
+        ctx.globalAlpha = 0.85;
+        // Rounded rect background
+        const rx = labelX - tw / 2;
+        const ry = labelY - th / 2;
+        const radius = 3;
+        ctx.beginPath();
+        ctx.moveTo(rx + radius, ry);
+        ctx.lineTo(rx + tw - radius, ry);
+        ctx.quadraticCurveTo(rx + tw, ry, rx + tw, ry + radius);
+        ctx.lineTo(rx + tw, ry + th - radius);
+        ctx.quadraticCurveTo(rx + tw, ry + th, rx + tw - radius, ry + th);
+        ctx.lineTo(rx + radius, ry + th);
+        ctx.quadraticCurveTo(rx, ry + th, rx, ry + th - radius);
+        ctx.lineTo(rx, ry + radius);
+        ctx.quadraticCurveTo(rx, ry, rx + radius, ry);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border matching edge color
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 0.5;
+        ctx.globalAlpha = 0.5;
+        ctx.stroke();
+
+        // Label text
+        ctx.globalAlpha = 1.0;
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelText, labelX, labelY);
     }
 
     _drawLegend(ctx, w, h) {
         const x0 = 8;
-        const y0 = h - 90;
         const lineH = 16;
+
+        // Collect unique relationship types from edges
+        const relTypes = new Set();
+        for (const edge of this.edges) {
+            if (edge.label) relTypes.add(edge.label.toUpperCase().replace(/[_ ]/g, '_'));
+        }
+
+        // Calculate legend height
+        const entityCount = Object.keys(NODE_COLORS).length - 1; // minus 'unknown'
+        const relCount = relTypes.size;
+        const confBands = EDGE_CONFIDENCE_COLORS.length;
+        const legendH = 24 + entityCount * lineH + (relCount > 0 ? 20 + relCount * lineH : 0) + 20 + confBands * lineH + 8;
+        const y0 = h - legendH;
 
         ctx.font = LEGEND_FONT;
         ctx.textAlign = 'left';
@@ -369,9 +449,10 @@ class ForceGraph {
         // Background
         ctx.fillStyle = '#0a0a0f';
         ctx.globalAlpha = 0.8;
-        ctx.fillRect(x0, y0 - 4, 110, 88);
+        ctx.fillRect(x0, y0 - 4, 150, legendH + 4);
         ctx.globalAlpha = 1.0;
 
+        // -- Entity types --
         ctx.fillStyle = '#666';
         ctx.fillText('ENTITY TYPES', x0 + 4, y0 + 4);
 
@@ -386,6 +467,62 @@ class ForceGraph {
             ctx.fillStyle = '#aaa';
             ctx.fillText(type.toUpperCase(), x0 + 22, y);
             row++;
+        }
+
+        let yOffset = y0 + 18 + row * lineH;
+
+        // -- Relationship types (dynamic from current graph) --
+        if (relTypes.size > 0) {
+            yOffset += 6;
+            ctx.fillStyle = '#666';
+            ctx.fillText('RELATIONSHIPS', x0 + 4, yOffset);
+            yOffset += 14;
+
+            const relColors = ['#00f0ff', '#ff2a6d', '#05ffa1', '#fcee0a', '#bb88ff'];
+            let ri = 0;
+            for (const relType of relTypes) {
+                const rc = relColors[ri % relColors.length];
+                // Draw line sample
+                ctx.beginPath();
+                ctx.moveTo(x0 + 4, yOffset);
+                ctx.lineTo(x0 + 18, yOffset);
+                ctx.strokeStyle = rc;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                // Arrow head
+                ctx.beginPath();
+                ctx.moveTo(x0 + 18, yOffset);
+                ctx.lineTo(x0 + 14, yOffset - 3);
+                ctx.lineTo(x0 + 14, yOffset + 3);
+                ctx.closePath();
+                ctx.fillStyle = rc;
+                ctx.fill();
+                // Label
+                ctx.fillStyle = '#aaa';
+                ctx.fillText(relType, x0 + 22, yOffset);
+                yOffset += lineH;
+                ri++;
+            }
+        }
+
+        // -- Confidence bands --
+        yOffset += 6;
+        ctx.fillStyle = '#666';
+        ctx.fillText('CONFIDENCE', x0 + 4, yOffset);
+        yOffset += 14;
+
+        for (const band of EDGE_CONFIDENCE_COLORS) {
+            ctx.beginPath();
+            ctx.moveTo(x0 + 4, yOffset);
+            ctx.lineTo(x0 + 18, yOffset);
+            ctx.strokeStyle = band.color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            const lo = Math.round(band.min * 100);
+            const hi = Math.round(band.max * 100);
+            ctx.fillStyle = '#aaa';
+            ctx.fillText(`${lo}-${hi}%`, x0 + 22, yOffset);
+            yOffset += lineH;
         }
     }
 
