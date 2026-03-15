@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 108: Proximity Alerts + Mesh Chat Bridge + Investigation Auto-Close
+
+| Change | Verification |
+|--------|-------------|
+| ProximityMonitor engine: scans target pairs, fires alerts when different-alliance targets breach distance threshold | 11 unit tests |
+| REST API /api/proximity/ — rules CRUD, active breaches, recent alerts, acknowledgement | Unit tested |
+| Meshtastic chat bridge: operator-to-mesh MQTT subscription for bidirectional mesh/operator chat | Unit tested |
+| Investigation auto-close: check_auto_close() schedules and closes investigations when all entities resolved | 10 unit tests |
+| Investigation auto-close: configurable delay (default 30min), annotation trail, threat/alliance checking | Unit tested |
+
 ## 2026-03-14 — Wave 107: Security + Mesh Chat + CoT Export + Amy Learning
 
 | Change | Verification |
