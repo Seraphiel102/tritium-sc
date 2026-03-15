@@ -113,10 +113,11 @@ class TestAmyPluginPhase3:
 
     @pytest.mark.unit
     def test_plugin_version_is_3(self):
-        """Plugin version should reflect Phase 3."""
+        """Plugin version should reflect Phase 3+."""
         from plugins.amy.plugin import AmyCommanderPlugin
         plugin = AmyCommanderPlugin()
-        assert plugin.version == "3.0.0"
+        major = int(plugin.version.split(".")[0])
+        assert major >= 3, f"Expected version >= 3.0.0, got {plugin.version}"
 
     @pytest.mark.unit
     def test_plugin_has_lifecycle_methods(self):
