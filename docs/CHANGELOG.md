@@ -14,6 +14,80 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 165: Quality + Maintenance
+
+| Change | Verification |
+|--------|-------------|
+| STATUS.md and changelogs updated through Wave 165 | Complete |
+
+---
+
+## 2026-03-15 — Wave 164: Robot Icons + Dispatch Viz (Loop 3)
+
+| Change | Verification |
+|--------|-------------|
+| Robot hex icons on tactical map | Code review |
+| Robot status popup — battery, heading, speed, task | Code review |
+| Dispatch line visualization — animated line to destination | Code review |
+| Village Idiot Loop 5 audit — 7/8 pass | Visually verified |
+
+---
+
+## 2026-03-15 — Wave 163: Kill Feed + Zone Occupancy + Camera UI (Loops 4, 5, 8)
+
+| Change | Verification |
+|--------|-------------|
+| Kill feed panel during combat | Code review |
+| Zone occupancy labels + dossier events | Code review |
+| Add camera UI + camera map markers | Code review |
+| GeofenceEngine wired to TargetTracker | Code review |
+
+---
+
+## 2026-03-15 — Wave 162: Geofence Alerts + Target Tagging (Loops 5, 6)
+
+| Change | Verification |
+|--------|-------------|
+| Geofence crossing notifications — toast + alerts | Code review |
+| Target tagging UI — friendly/hostile/VIP | Code review |
+| RL classification in target detail modal | Code review |
+| Panel auto-position overlap fix | Code review |
+
+---
+
+## 2026-03-15 — Wave 161: Welcome Tooltip + NATO Markers (Loop 1)
+
+| Change | Verification |
+|--------|-------------|
+| Welcome tooltip on first visit | Code review |
+| NATO marker symbology | Code review |
+| Click-to-inspect verified | Visually verified |
+| OllamaFleet LAN scan | Code review |
+
+---
+
+## 2026-03-15 — Wave 160: Demo Button + Click-to-Inspect (Loops 1, 4, 6)
+
+| Change | Verification |
+|--------|-------------|
+| Demo start button in header bar | Code review |
+| Click-to-inspect target detail modal | Code review |
+| Amy initialization fix — combat response | Code review |
+
+---
+
+## 2026-03-15 — Wave 159: Layer Toggles + UI Fixes
+
+| Change | Verification |
+|--------|-------------|
+| Fold layer toggles into panel | Code review |
+| CSP fix for openfreemap/maplibre/blob | Code review |
+| Fix targets not rendering — map load fallback | Code review |
+| Disable setup wizard auto-open | Code review |
+| Reduce default panels to amy+minimap | Code review |
+
+---
+
 ## 2026-03-15 — Wave 158: Maintenance
 
 | Change | Verification |
