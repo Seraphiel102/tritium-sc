@@ -19,6 +19,8 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from tritium_lib.models import DailyPattern
+
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
@@ -106,50 +108,38 @@ async def get_target_activity_heatmap(
                     dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                     hourly_bins[dt.hour] += 1
 
-    total = sum(hourly_bins)
-    peak_count = max(hourly_bins)
-    peak_hour = hourly_bins.index(peak_count) if peak_count > 0 else 0
+    # Use DailyPattern model from tritium-lib for analysis
+    pattern = DailyPattern(
+        target_id=target_id,
+        hourly_counts=hourly_bins,
+    )
+    pattern.recompute()
 
-    # Compute regularity score (normalized entropy)
-    import math
-    if total > 0:
-        max_entropy = math.log(24)
-        entropy = 0.0
-        for c in hourly_bins:
-            if c > 0:
-                p = c / total
-                entropy -= p * math.log(p)
-        regularity_score = round(1.0 - (entropy / max_entropy), 4)
-    else:
-        regularity_score = 0.0
-
-    # Classify pattern
-    daytime_count = sum(hourly_bins[6:18])
-    nighttime_count = total - daytime_count
-    if total == 0:
+    # Classify pattern using model properties
+    if pattern.total_sightings == 0:
         pattern_type = "no_data"
-    elif daytime_count > 0 and nighttime_count == 0:
+    elif pattern.is_daytime_only:
         pattern_type = "daytime_only"
-    elif nighttime_count > 0 and daytime_count == 0:
+    elif pattern.is_nighttime_only:
         pattern_type = "nighttime_only"
-    elif daytime_count > nighttime_count * 3:
-        pattern_type = "mostly_daytime"
-    elif nighttime_count > daytime_count * 3:
-        pattern_type = "mostly_nighttime"
     else:
-        pattern_type = "mixed"
-
-    threshold = peak_count * 0.05 if peak_count > 0 else 0
-    quiet_hours = [h for h in range(24) if hourly_bins[h] <= threshold]
+        daytime_count = sum(hourly_bins[6:18])
+        nighttime_count = pattern.total_sightings - daytime_count
+        if daytime_count > nighttime_count * 3:
+            pattern_type = "mostly_daytime"
+        elif nighttime_count > daytime_count * 3:
+            pattern_type = "mostly_nighttime"
+        else:
+            pattern_type = "mixed"
 
     return JSONResponse(content={
         "target_id": target_id,
-        "hourly_counts": hourly_bins,
-        "peak_hour": peak_hour,
-        "peak_count": peak_count,
-        "quiet_hours": quiet_hours,
-        "total_sightings": total,
-        "regularity_score": regularity_score,
+        "hourly_counts": pattern.hourly_counts,
+        "peak_hour": pattern.peak_hour,
+        "peak_count": max(pattern.hourly_counts),
+        "quiet_hours": pattern.quiet_hours,
+        "total_sightings": pattern.total_sightings,
+        "regularity_score": pattern.regularity_score,
         "pattern_type": pattern_type,
         "time_window_hours": hours,
         "generated_at": now,

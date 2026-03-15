@@ -27,6 +27,12 @@ from typing import Optional
 
 from loguru import logger
 
+from tritium_lib.models import (
+    AcousticTrainingExample,
+    AcousticTrainingSet,
+    TrainingSource,
+)
+
 
 class AcousticEventType(str, Enum):
     """Types of acoustic events that can be classified."""
@@ -605,6 +611,43 @@ class MFCCClassifier:
     @property
     def is_trained(self) -> bool:
         return self._trained
+
+    def to_training_set(self) -> AcousticTrainingSet:
+        """Export the current training data as an AcousticTrainingSet model.
+
+        Converts the raw tuple training data into structured
+        AcousticTrainingExample instances for persistence or analysis.
+        """
+        ts = AcousticTrainingSet(name="acoustic_classifier")
+        for label, fv in self._training_vectors:
+            # Un-normalize the feature vector to recover original values
+            orig_fv = [
+                v * s + m
+                for v, m, s in zip(fv, self._feature_means, self._feature_stds)
+            ]
+            ts.add(AcousticTrainingExample(
+                audio_features=orig_fv,
+                label=label,
+                source=TrainingSource.SYNTHETIC,
+            ))
+        return ts
+
+    @classmethod
+    def from_training_set(cls, training_set: AcousticTrainingSet, k: int = 3) -> "MFCCClassifier":
+        """Create and train an MFCCClassifier from an AcousticTrainingSet.
+
+        Args:
+            training_set: Structured training data from tritium-lib.
+            k: Number of nearest neighbors for KNN.
+
+        Returns:
+            A trained MFCCClassifier instance.
+        """
+        classifier = cls(k=k)
+        tuples = training_set.to_training_data()
+        if tuples:
+            classifier.train(tuples)
+        return classifier
 
 
 class AcousticClassifier:

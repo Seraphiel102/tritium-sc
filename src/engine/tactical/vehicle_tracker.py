@@ -18,6 +18,8 @@ import math
 import time
 from typing import Optional
 
+from tritium_lib.models import VehicleTrack, heading_to_label
+
 logger = logging.getLogger("vehicle_tracker")
 
 # Vehicle YOLO class names
@@ -191,6 +193,22 @@ class VehicleBehavior:
             score += 0.08
 
         return min(1.0, max(0.0, round(score, 3)))
+
+    def to_vehicle_track(self) -> VehicleTrack:
+        """Export as a tritium-lib VehicleTrack model."""
+        pos = self.positions[-1][:2] if self.positions else (0.0, 0.0)
+        return VehicleTrack(
+            target_id=self.target_id,
+            speed_mph=round(self.speed_mph, 1),
+            heading=round(self.heading, 1),
+            stopped_duration_s=round(self.stopped_duration_s, 1),
+            suspicious_score=min(1.0, max(0.0, self.get_suspicious_score())),
+            vehicle_class=self.vehicle_class,
+            position=pos,
+            last_positions=list(self.positions),
+            direction_label=self.direction_label,
+            is_parked=self.is_parked,
+        )
 
     def to_dict(self) -> dict:
         """Export vehicle behavior as a dictionary."""

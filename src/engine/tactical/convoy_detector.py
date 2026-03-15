@@ -33,6 +33,13 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from tritium_lib.models import (
+    Convoy,
+    ConvoyFormation,
+    ConvoySummary,
+    ConvoyStatus,
+)
+
 logger = logging.getLogger(__name__)
 
 # Detection thresholds
@@ -241,19 +248,46 @@ class ConvoyDetector:
         with self._lock:
             return [dict(c) for c in self._active_convoys.values()]
 
-    def get_summary(self) -> dict:
-        """Return convoy detection summary."""
+    def get_summary(self) -> ConvoySummary:
+        """Return convoy detection summary as a ConvoySummary model."""
         with self._lock:
             active = [c for c in self._active_convoys.values() if c["status"] == "active"]
             scores = [c["suspicious_score"] for c in active]
-            return {
-                "total_convoys": len(self._active_convoys),
-                "active_convoys": len(active),
-                "total_members": sum(len(c["member_target_ids"]) for c in active),
-                "avg_suspicious_score": round(sum(scores) / len(scores), 3) if scores else 0.0,
-                "highest_suspicious_score": round(max(scores), 3) if scores else 0.0,
-                "largest_convoy_size": max((len(c["member_target_ids"]) for c in active), default=0),
-            }
+            return ConvoySummary(
+                total_convoys=len(self._active_convoys),
+                active_convoys=len(active),
+                total_members=sum(len(c["member_target_ids"]) for c in active),
+                avg_suspicious_score=round(sum(scores) / len(scores), 3) if scores else 0.0,
+                highest_suspicious_score=round(max(scores), 3) if scores else 0.0,
+                largest_convoy_size=max((len(c["member_target_ids"]) for c in active), default=0),
+            )
+
+    def to_convoy_model(self, convoy_data: dict) -> Convoy:
+        """Convert an internal convoy dict to a tritium-lib Convoy model."""
+        from datetime import datetime, timezone
+        first_seen = convoy_data.get("first_seen")
+        last_seen = convoy_data.get("last_seen")
+        return Convoy(
+            convoy_id=convoy_data.get("convoy_id", ""),
+            member_target_ids=convoy_data.get("member_target_ids", []),
+            speed_avg_mps=convoy_data.get("speed_avg_mps", 0.0),
+            heading_avg_deg=convoy_data.get("heading_avg_deg", 0.0),
+            heading_variance_deg=convoy_data.get("heading_variance_deg", 0.0),
+            speed_variance_mps=convoy_data.get("speed_variance_mps", 0.0),
+            center_lat=convoy_data.get("center_x", 0.0),
+            center_lng=convoy_data.get("center_y", 0.0),
+            duration_s=convoy_data.get("duration_s", 0.0),
+            suspicious_score=convoy_data.get("suspicious_score", 0.0),
+            status=ConvoyStatus(convoy_data.get("status", "active")),
+            first_seen=(
+                datetime.fromtimestamp(first_seen, tz=timezone.utc)
+                if isinstance(first_seen, (int, float)) else None
+            ),
+            last_seen=(
+                datetime.fromtimestamp(last_seen, tz=timezone.utc)
+                if isinstance(last_seen, (int, float)) else None
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
