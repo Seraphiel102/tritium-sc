@@ -179,6 +179,12 @@ const _state = {
     patrolMode: false,      // true when placing patrol waypoints
     patrolUnitId: null,     // unit ID for patrol mode
     patrolWaypoints: [],    // accumulated patrol waypoints
+    patrolDrawMode: false,       // true when drawing a patrol route (multi-waypoint)
+    patrolDrawUnitId: null,      // unit ID being assigned the drawn route
+    patrolDrawWaypoints: [],     // [{x, y}, ...] game coords accumulated during drawing
+    patrolDrawMarkers: [],       // MapLibre Marker instances for numbered waypoints
+    patrolDrawHudEl: null,       // DOM element for drawing status HUD
+    patrolDrawMouseLngLat: null, // current mouse position for rubber-band line
     aimMode: false,         // true when setting aim direction
     aimUnitId: null,        // unit ID for aim mode
 
@@ -393,6 +399,9 @@ function _createMap(mapDiv) {
         // Add compact map legend
         _createMapLegend();
 
+        // Add patrol route drawing button
+        _createPatrolDrawButton();
+
         // Combat effects system
         _initEffects();
 
@@ -409,6 +418,9 @@ function _createMap(mapDiv) {
         EventBus.on('map:waypoint', _onDropWaypoint);
         EventBus.on('unit:patrol-mode', _onPatrolModeEnter);
         EventBus.on('unit:aim-mode', _onAimModeEnter);
+        EventBus.on('patrol:drawRoute', _onPatrolDrawRouteStart);
+        EventBus.on('map:drawFinish', _onDrawFinishML);
+        EventBus.on('map:drawCancel', _onDrawCancelML);
         EventBus.on('tak:center-on-client', (data) => {
             if (data && (data.lat !== undefined || data.x !== undefined)) {
                 _onCenterOnUnit(data);
@@ -435,6 +447,7 @@ function _createMap(mapDiv) {
     });
 
     _state.map.on('click', _onMapClick);
+    _state.map.on('dblclick', _onMapDblClick);
     _state.map.on('contextmenu', _onMapRightClick);
     _state.map.on('mousemove', _onMapMouseMove);
     _state.map.on('moveend', _updateLayerHud);
@@ -1317,6 +1330,12 @@ function _clearSetupGhost() {
  * Handle mousemove on the map — update ghost preview in setup mode.
  */
 function _onMapMouseMove(e) {
+    // Patrol draw mode: update rubber-band line to mouse cursor
+    if (_state.patrolDrawMode && _state.patrolDrawWaypoints.length > 0) {
+        _state.patrolDrawMouseLngLat = [e.lngLat.lng, e.lngLat.lat];
+        _updatePatrolDrawPreview();
+    }
+
     if (_state.currentMode !== 'setup') return;
     const lngLat = [e.lngLat.lng, e.lngLat.lat];
     _updateSetupGhost(lngLat);
@@ -6374,6 +6393,48 @@ function _createMapLegend() {
 }
 
 // ============================================================
+// Patrol Route Drawing Toolbar Button
+// ============================================================
+
+function _createPatrolDrawButton() {
+    if (document.getElementById('patrol-draw-btn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'patrol-draw-btn';
+    btn.title = 'Draw Patrol Route (click to place waypoints on map)';
+    btn.style.cssText = [
+        'position:absolute; bottom:110px; left:12px; z-index:10;',
+        'width:36px; height:36px; border-radius:6px;',
+        'background:rgba(6,6,9,0.85); border:1px solid rgba(5,255,161,0.3);',
+        'color:#05ffa1; cursor:pointer; pointer-events:auto;',
+        'display:flex; align-items:center; justify-content:center;',
+        'font-family:"JetBrains Mono",monospace; font-size:14px;',
+        'backdrop-filter:blur(4px); transition:all 0.15s;',
+    ].join('');
+    // Use a simple path/route icon (Unicode)
+    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#05ffa1" stroke-width="1.5">
+        <circle cx="3" cy="3" r="2"/>
+        <circle cx="15" cy="7" r="2"/>
+        <circle cx="9" cy="15" r="2"/>
+        <line x1="5" y1="3" x2="13" y2="7"/>
+        <line x1="15" y1="9" x2="11" y2="15"/>
+    </svg>`;
+
+    btn.addEventListener('mouseenter', () => {
+        btn.style.borderColor = '#05ffa1';
+        btn.style.boxShadow = '0 0 8px rgba(5,255,161,0.4)';
+    });
+    btn.addEventListener('mouseleave', () => {
+        btn.style.borderColor = 'rgba(5,255,161,0.3)';
+        btn.style.boxShadow = 'none';
+    });
+    btn.addEventListener('click', () => {
+        EventBus.emit('patrol:drawRoute', { unitId: null });
+    });
+
+    _state.container.appendChild(btn);
+}
+
+// ============================================================
 // Viewport reporting (LOD system)
 // ============================================================
 
@@ -6703,6 +6764,478 @@ function _onPatrolModeEnter(data) {
     console.log(`[MAP-ML] Patrol mode: click map to set patrol points for ${data.id}`);
 }
 
+// ============================================================
+// Patrol Route Drawing Tool (multi-waypoint with live preview)
+// ============================================================
+
+const PATROL_DRAW_SOURCE = 'patrol-draw-source';
+const PATROL_DRAW_LINE   = 'patrol-draw-line';
+const PATROL_DRAW_RUBBER = 'patrol-draw-rubber';
+const PATROL_DRAW_DOTS   = 'patrol-draw-dots';
+
+/**
+ * Enter patrol route drawing mode.
+ * Emitted by patrol panel "DRAW ROUTE" button or toolbar button.
+ */
+function _onPatrolDrawRouteStart(data) {
+    // Cancel any existing draw mode
+    if (_state.patrolDrawMode) _patrolDrawCleanup();
+
+    _state.patrolDrawMode = true;
+    _state.patrolDrawUnitId = data?.unitId || null;
+    _state.patrolDrawWaypoints = [];
+    _state.patrolDrawMarkers = [];
+    _state.patrolDrawMouseLngLat = null;
+
+    if (_state.container) _state.container.style.cursor = 'crosshair';
+
+    // Disable map double-click zoom during drawing
+    if (_state.map) _state.map.doubleClickZoom.disable();
+
+    // Create the drawing preview GeoJSON source and layers
+    _initPatrolDrawLayers();
+
+    // Show HUD
+    _showPatrolDrawHud();
+
+    const unit = _state.patrolDrawUnitId || 'unassigned';
+    EventBus.emit('toast:show', {
+        message: `Drawing patrol route${unit !== 'unassigned' ? ' for ' + unit : ''}. Click to place waypoints. Double-click or Enter to finish. Escape to cancel.`,
+        type: 'info',
+    });
+    console.log(`[MAP-ML] Patrol draw mode started for: ${unit}`);
+}
+
+/**
+ * Add a waypoint during patrol draw mode.
+ */
+function _patrolDrawAddWaypoint(gamePos, lngLat) {
+    const idx = _state.patrolDrawWaypoints.length + 1;
+    _state.patrolDrawWaypoints.push({ x: gamePos.x, y: gamePos.y });
+
+    // Add a numbered DOM marker at the waypoint position
+    const el = document.createElement('div');
+    el.className = 'patrol-draw-wp-marker';
+    el.style.cssText = `
+        width: 24px; height: 24px;
+        border-radius: 50%;
+        background: #05ffa1;
+        border: 2px solid #003322;
+        color: #0a0a0f;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        box-shadow: 0 0 8px rgba(5, 255, 161, 0.6);
+    `;
+    el.textContent = String(idx);
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(lngLat)
+        .addTo(_state.map);
+
+    _state.patrolDrawMarkers.push(marker);
+
+    // Update preview line GeoJSON
+    _updatePatrolDrawPreview();
+
+    // Update HUD
+    _updatePatrolDrawHud();
+}
+
+/**
+ * Build GeoJSON for the patrol draw preview (placed waypoints + rubber-band to cursor).
+ */
+function _buildPatrolDrawGeoJSON() {
+    const features = [];
+    const wps = _state.patrolDrawWaypoints;
+
+    if (wps.length >= 2) {
+        // Solid line through placed waypoints
+        const coords = wps.map(w => _gameToLngLat(w.x, w.y));
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: { kind: 'placed' },
+        });
+    }
+
+    // Rubber-band line from last waypoint to mouse cursor
+    if (wps.length >= 1 && _state.patrolDrawMouseLngLat) {
+        const lastWp = wps[wps.length - 1];
+        const lastLL = _gameToLngLat(lastWp.x, lastWp.y);
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [lastLL, _state.patrolDrawMouseLngLat] },
+            properties: { kind: 'rubber' },
+        });
+    }
+
+    // Point features at each waypoint (for circle layer)
+    for (let i = 0; i < wps.length; i++) {
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: _gameToLngLat(wps[i].x, wps[i].y) },
+            properties: { index: i },
+        });
+    }
+
+    return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Initialize MapLibre source and layers for patrol draw preview.
+ */
+function _initPatrolDrawLayers() {
+    if (!_state.map) return;
+
+    // Clean up any leftover layers from a previous draw
+    _removePatrolDrawLayers();
+
+    _state.map.addSource(PATROL_DRAW_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+    });
+
+    // Dashed line for placed waypoints
+    _state.map.addLayer({
+        id: PATROL_DRAW_LINE,
+        type: 'line',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['all', ['==', '$type', 'LineString'], ['==', ['get', 'kind'], 'placed']],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': '#05ffa1',
+            'line-width': 3,
+            'line-opacity': 0.85,
+            'line-dasharray': [4, 3],
+        },
+    });
+
+    // Rubber-band line (thinner, more transparent)
+    _state.map.addLayer({
+        id: PATROL_DRAW_RUBBER,
+        type: 'line',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['all', ['==', '$type', 'LineString'], ['==', ['get', 'kind'], 'rubber']],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': '#05ffa1',
+            'line-width': 2,
+            'line-opacity': 0.4,
+            'line-dasharray': [2, 4],
+        },
+    });
+
+    // Glow dots at each waypoint
+    _state.map.addLayer({
+        id: PATROL_DRAW_DOTS,
+        type: 'circle',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['==', '$type', 'Point'],
+        paint: {
+            'circle-radius': 6,
+            'circle-color': '#05ffa1',
+            'circle-opacity': 0.9,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#003322',
+        },
+    });
+}
+
+/**
+ * Remove patrol draw preview layers and source.
+ */
+function _removePatrolDrawLayers() {
+    if (!_state.map) return;
+    try {
+        if (_state.map.getLayer(PATROL_DRAW_DOTS)) _state.map.removeLayer(PATROL_DRAW_DOTS);
+        if (_state.map.getLayer(PATROL_DRAW_RUBBER)) _state.map.removeLayer(PATROL_DRAW_RUBBER);
+        if (_state.map.getLayer(PATROL_DRAW_LINE)) _state.map.removeLayer(PATROL_DRAW_LINE);
+        if (_state.map.getSource(PATROL_DRAW_SOURCE)) _state.map.removeSource(PATROL_DRAW_SOURCE);
+    } catch (_e) { /* layers may not exist */ }
+}
+
+/**
+ * Update the GeoJSON data for patrol draw preview.
+ */
+function _updatePatrolDrawPreview() {
+    if (!_state.map || !_state.map.getSource(PATROL_DRAW_SOURCE)) return;
+    const geojson = _buildPatrolDrawGeoJSON();
+    _state.map.getSource(PATROL_DRAW_SOURCE).setData(geojson);
+}
+
+/**
+ * Show the patrol drawing HUD (top-center status bar).
+ */
+function _showPatrolDrawHud() {
+    if (_state.patrolDrawHudEl) _state.patrolDrawHudEl.remove();
+    const hud = document.createElement('div');
+    hud.id = 'patrol-draw-hud';
+    hud.style.cssText = `
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100;
+        background: rgba(10, 10, 15, 0.9);
+        border: 1px solid #05ffa1;
+        border-radius: 6px;
+        padding: 8px 18px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: #05ffa1;
+        pointer-events: none;
+        text-align: center;
+        box-shadow: 0 0 12px rgba(5, 255, 161, 0.3);
+    `;
+    hud.innerHTML = 'PATROL ROUTE: 0 waypoints placed &mdash; click to add &mdash; double-click/Enter to finish &mdash; Escape to cancel';
+    const container = _state.container || document.getElementById('map-container');
+    if (container) container.appendChild(hud);
+    _state.patrolDrawHudEl = hud;
+}
+
+/**
+ * Update the patrol drawing HUD with current waypoint count.
+ */
+function _updatePatrolDrawHud() {
+    if (!_state.patrolDrawHudEl) return;
+    const n = _state.patrolDrawWaypoints.length;
+    const unit = _state.patrolDrawUnitId || 'unassigned';
+    _state.patrolDrawHudEl.innerHTML =
+        `PATROL ROUTE for <span style="color:#00f0ff">${unit}</span>: ` +
+        `<span style="color:#fcee0a">${n}</span> waypoint${n !== 1 ? 's' : ''} placed &mdash; ` +
+        (n < 2 ? 'click to add (need 2+)' : 'double-click/Enter to finish') +
+        ' &mdash; Escape to cancel';
+}
+
+/**
+ * Finish patrol route drawing: prompt for name and POST to API.
+ */
+function _patrolDrawFinish() {
+    if (!_state.patrolDrawMode) return;
+    const wps = _state.patrolDrawWaypoints.slice();
+    const unitId = _state.patrolDrawUnitId;
+
+    if (wps.length < 2) {
+        EventBus.emit('toast:show', { message: 'Need at least 2 waypoints for a patrol route', type: 'alert' });
+        return;
+    }
+
+    // Clean up drawing state and visuals
+    _patrolDrawCleanup();
+
+    // Show a name prompt modal
+    _showPatrolRouteNamePrompt(wps, unitId);
+}
+
+/**
+ * Show a modal dialog prompting for route name, loop preference, and speed.
+ */
+function _showPatrolRouteNamePrompt(waypoints, unitId) {
+    const overlay = document.createElement('div');
+    overlay.id = 'patrol-route-prompt-overlay';
+    overlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 9999;
+        background: rgba(0,0,0,0.6);
+        display: flex; align-items: center; justify-content: center;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: #0e0e14;
+        border: 1px solid #05ffa1;
+        border-radius: 8px;
+        padding: 24px;
+        width: 360px;
+        font-family: "JetBrains Mono", monospace;
+        color: #e0e0e0;
+        box-shadow: 0 0 30px rgba(5, 255, 161, 0.2);
+    `;
+
+    const defaultName = unitId ? `Patrol-${unitId}` : `Patrol-${Date.now().toString(36)}`;
+
+    modal.innerHTML = `
+        <div style="color:#05ffa1; font-size:14px; font-weight:bold; margin-bottom:16px;">SAVE PATROL ROUTE</div>
+        <div style="margin-bottom:12px;">
+            <label style="font-size:11px; color:#888;">ROUTE NAME</label><br>
+            <input id="patrol-route-name" type="text" value="${defaultName}" style="
+                width:100%; box-sizing:border-box; padding:6px 10px; margin-top:4px;
+                background:#1a1a2e; border:1px solid #333; border-radius:4px;
+                color:#e0e0e0; font-family:inherit; font-size:12px;
+            ">
+        </div>
+        <div style="margin-bottom:12px; display:flex; gap:16px;">
+            <label style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px;">
+                <input id="patrol-route-loop" type="checkbox" checked> LOOP
+            </label>
+            <div style="flex:1;">
+                <label style="font-size:11px; color:#888;">SPEED</label><br>
+                <input id="patrol-route-speed" type="number" value="1.0" min="0.1" max="20" step="0.1" style="
+                    width:80px; padding:4px 8px; margin-top:4px;
+                    background:#1a1a2e; border:1px solid #333; border-radius:4px;
+                    color:#e0e0e0; font-family:inherit; font-size:12px;
+                ">
+            </div>
+        </div>
+        <div style="font-size:11px; color:#888; margin-bottom:16px;">
+            ${waypoints.length} waypoints${unitId ? ' for <span style="color:#00f0ff">' + unitId + '</span>' : ''}
+        </div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button id="patrol-route-cancel-btn" style="
+                padding:6px 16px; background:#1a1a2e; border:1px solid #555;
+                border-radius:4px; color:#aaa; cursor:pointer; font-family:inherit; font-size:11px;
+            ">CANCEL</button>
+            <button id="patrol-route-save-btn" style="
+                padding:6px 16px; background:#05ffa1; border:none;
+                border-radius:4px; color:#0a0a0f; cursor:pointer; font-family:inherit; font-size:11px; font-weight:bold;
+            ">SAVE ROUTE</button>
+        </div>
+    `;
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Focus the name input
+    const nameInput = document.getElementById('patrol-route-name');
+    if (nameInput) { nameInput.focus(); nameInput.select(); }
+
+    function close() { overlay.remove(); }
+
+    function save() {
+        const name = (document.getElementById('patrol-route-name')?.value || defaultName).trim();
+        const loop = document.getElementById('patrol-route-loop')?.checked ?? true;
+        const speed = parseFloat(document.getElementById('patrol-route-speed')?.value) || 1.0;
+        close();
+
+        // POST to patrol routes API
+        const wpsArray = waypoints.map(w => [w.x, w.y]);
+        fetch('/api/patrols/routes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, waypoints: wpsArray, loop, speed }),
+        }).then(resp => {
+            if (!resp.ok) throw new Error('API error');
+            return resp.json();
+        }).then(route => {
+            EventBus.emit('toast:show', {
+                message: `Patrol route "${name}" saved (${waypoints.length} waypoints)`,
+                type: 'info',
+            });
+            console.log('[MAP-ML] Patrol route created:', route);
+
+            // If a unit was specified, assign it to the route
+            if (unitId && route.route_id) {
+                fetch('/api/patrols/assign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ route_id: route.route_id, asset_id: unitId }),
+                }).then(r => {
+                    if (r.ok) {
+                        EventBus.emit('toast:show', {
+                            message: `${unitId} assigned to patrol "${name}"`,
+                            type: 'info',
+                        });
+                    }
+                }).catch(() => {});
+
+                // Also send the patrol command via Amy for simulation engine
+                const wpsJson = JSON.stringify(wpsArray);
+                fetch('/api/amy/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'patrol', params: [unitId, wpsJson] }),
+                }).catch(() => {});
+            }
+        }).catch(err => {
+            console.error('[MAP-ML] Failed to create patrol route:', err);
+            EventBus.emit('toast:show', { message: 'Failed to save patrol route', type: 'alert' });
+        });
+    }
+
+    document.getElementById('patrol-route-cancel-btn')?.addEventListener('click', close);
+    document.getElementById('patrol-route-save-btn')?.addEventListener('click', save);
+
+    // Enter in name input saves, Escape closes
+    function onKey(e) {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    }
+    overlay.addEventListener('keydown', onKey);
+}
+
+/**
+ * Cancel patrol route drawing and clean up.
+ */
+function _patrolDrawCancel() {
+    if (!_state.patrolDrawMode) return;
+    _patrolDrawCleanup();
+    EventBus.emit('toast:show', { message: 'Patrol route drawing cancelled', type: 'info' });
+}
+
+/**
+ * Clean up all patrol draw state, markers, layers, and HUD.
+ */
+function _patrolDrawCleanup() {
+    _state.patrolDrawMode = false;
+    _state.patrolDrawUnitId = null;
+    _state.patrolDrawWaypoints = [];
+    _state.patrolDrawMouseLngLat = null;
+
+    // Remove numbered markers
+    for (const m of _state.patrolDrawMarkers) {
+        m.remove();
+    }
+    _state.patrolDrawMarkers = [];
+
+    // Remove preview layers
+    _removePatrolDrawLayers();
+
+    // Remove HUD
+    if (_state.patrolDrawHudEl) {
+        _state.patrolDrawHudEl.remove();
+        _state.patrolDrawHudEl = null;
+    }
+
+    // Restore cursor
+    if (_state.container) _state.container.style.cursor = '';
+
+    // Re-enable double-click zoom
+    if (_state.map) _state.map.doubleClickZoom.enable();
+}
+
+/**
+ * Handle double-click on map: finish patrol draw if active.
+ */
+function _onMapDblClick(e) {
+    if (_state.patrolDrawMode && _state.patrolDrawWaypoints.length >= 2) {
+        e.preventDefault();
+        _patrolDrawFinish();
+        return;
+    }
+}
+
+/**
+ * Handle map:drawFinish event (Enter key) in MapLibre context.
+ */
+function _onDrawFinishML() {
+    if (_state.patrolDrawMode) {
+        _patrolDrawFinish();
+    }
+}
+
+/**
+ * Handle map:drawCancel event (Escape key) in MapLibre context.
+ */
+function _onDrawCancelML() {
+    if (_state.patrolDrawMode) {
+        _patrolDrawCancel();
+    }
+}
+
 /**
  * Handle unit:aim-mode — enter aim targeting mode.
  * Click on the map to set aim direction for the unit.
@@ -6794,14 +7327,12 @@ function _onMapClick(e) {
         return;
     }
 
-    // Patrol mode: add waypoint for patrol route
+    // Patrol mode (legacy 2-click): add waypoint for patrol route
     if (_state.patrolMode && _state.patrolUnitId) {
         const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
         if (!_state.patrolWaypoints) _state.patrolWaypoints = [];
         _state.patrolWaypoints.push({ x: game.x, y: game.y });
-        // Show transient marker at waypoint
         _onDropWaypoint({ x: game.x, y: game.y, unitId: _state.patrolUnitId });
-        // After 2+ points, send patrol via Amy command (no control lock needed)
         if (_state.patrolWaypoints.length >= 2) {
             const wpsJson = JSON.stringify(_state.patrolWaypoints.map(w => [w.x, w.y]));
             fetch('/api/amy/command', {
@@ -6822,6 +7353,13 @@ function _onMapClick(e) {
             _state.patrolWaypoints = [];
             if (_state.container) _state.container.style.cursor = '';
         }
+        return;
+    }
+
+    // Patrol draw mode: add waypoint to multi-point route drawing
+    if (_state.patrolDrawMode) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        _patrolDrawAddWaypoint(game, [e.lngLat.lng, e.lngLat.lat]);
         return;
     }
 

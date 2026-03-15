@@ -27,6 +27,7 @@ export const PatrolPanelDef = {
                 <div class="panel-empty">No patrol routes</div>
             </div>
             <div class="patrol-actions">
+                <button class="panel-action-btn" data-action="draw-new-route" style="color:#05ffa1;border-color:#05ffa1">DRAW NEW ROUTE</button>
                 <button class="panel-action-btn" data-action="patrol-all">PATROL ALL</button>
                 <button class="panel-action-btn" data-action="recall-all">RECALL ALL</button>
             </div>
@@ -37,6 +38,7 @@ export const PatrolPanelDef = {
     mount(bodyEl, panel) {
         const summaryEl = bodyEl.querySelector('[data-bind="summary"]');
         const listEl = bodyEl.querySelector('[data-bind="list"]');
+        const drawNewBtn = bodyEl.querySelector('[data-action="draw-new-route"]');
         const patrolAllBtn = bodyEl.querySelector('[data-action="patrol-all"]');
         const recallAllBtn = bodyEl.querySelector('[data-action="recall-all"]');
 
@@ -160,6 +162,13 @@ export const PatrolPanelDef = {
             TritiumStore.on('units', renderList),
             TritiumStore.on('game.phase', renderList),
         );
+
+        // Draw new route button
+        if (drawNewBtn) {
+            drawNewBtn.addEventListener('click', () => {
+                EventBus.emit('patrol:drawRoute', { unitId: null });
+            });
+        }
 
         // Batch actions
         if (patrolAllBtn) {

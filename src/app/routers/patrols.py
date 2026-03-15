@@ -114,6 +114,25 @@ async def list_routes():
     return [_route_response(r) for r in manager.list_routes()]
 
 
+@router.get("/routes/{route_id}", response_model=RouteResponse)
+async def get_route(route_id: str):
+    """Get a patrol route by ID."""
+    manager = get_manager()
+    route = manager.get_route(route_id)
+    if route is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return _route_response(route)
+
+
+@router.delete("/routes/{route_id}")
+async def delete_route(route_id: str):
+    """Delete a patrol route (and unassign any assets on it)."""
+    manager = get_manager()
+    if not manager.remove_route(route_id):
+        raise HTTPException(status_code=404, detail="Route not found")
+    return {"status": "deleted", "route_id": route_id}
+
+
 # ------------------------------------------------------------------
 # Assignment
 # ------------------------------------------------------------------
