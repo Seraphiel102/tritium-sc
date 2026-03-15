@@ -3015,7 +3015,7 @@ button:disabled:hover {
     font-style: italic;
 }
 
-/* Kill feed */
+/* Kill feed -- z-index must be above floating panels (~100) */
 .war-elimination-feed,
 .war-kill-feed {
     position: absolute;
@@ -3026,7 +3026,7 @@ button:disabled:hover {
     flex-direction: column;
     gap: 3px;
     pointer-events: none;
-    z-index: 30;
+    z-index: 150;
 }
 .war-elimination-entry,
 .war-kill-entry {
@@ -3085,23 +3085,24 @@ button:disabled:hover {
     color: #ff2a6d;
 }
 
-/* Wave progress indicator — top-center of map */
+/* Wave progress indicator — top-center of map, above panels */
 .war-wave-counter {
     position: absolute;
     top: 8px;
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(10, 10, 20, 0.85);
-    border: 1px solid rgba(0, 240, 255, 0.3);
-    padding: 4px 16px;
+    background: rgba(10, 10, 20, 0.92);
+    border: 1px solid rgba(0, 240, 255, 0.4);
+    padding: 6px 20px;
     border-radius: 3px;
     pointer-events: none;
-    z-index: 35;
+    z-index: 150;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    letter-spacing: 2px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 3px;
     color: #00f0ff;
-    text-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
 }
 
 /* BEGIN WAR / START BATTLE button container */

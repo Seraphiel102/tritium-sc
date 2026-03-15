@@ -201,7 +201,7 @@ function init() {
         renderUnitList();
     });
 
-    // Game state updates (header + game over overlay + auto-fog)
+    // Game state updates (header + game over overlay + auto-fog + auto-panels)
     TritiumStore.on('game.phase', (phase) => {
         // Show/hide game score in header
         const scoreArea = document.getElementById('game-score-area');
@@ -214,6 +214,12 @@ function init() {
             // Dismiss game-over overlay on reset
             const goOverlay = document.getElementById('game-over-overlay');
             if (goOverlay) goOverlay.hidden = true;
+        }
+
+        // Auto-open Game HUD panel when battle starts (countdown or active)
+        // so the operator can see wave/score/elimination stats and kill feed
+        if ((phase === 'countdown' || phase === 'active') && panelManager && !panelManager.isOpen('game')) {
+            panelManager.open('game');
         }
 
         // Auto-enable fog of war during battle, disable when idle
