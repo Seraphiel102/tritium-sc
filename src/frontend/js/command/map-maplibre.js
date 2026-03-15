@@ -3695,6 +3695,9 @@ function _createUnitMarker(id, unit, lngLat) {
 
     outer.addEventListener('mouseenter', () => {
         outer.classList.add('unit-marker-hovered');
+        // Raise z-index so hovered marker stays above overlapping neighbors
+        const markerContainer = outer.closest('.maplibregl-marker');
+        if (markerContainer) markerContainer.style.zIndex = '50';
         const u = TritiumStore.units.get(id);
         if (u) {
             const hpPct = u.maxHealth ? Math.round((u.health / u.maxHealth) * 100) : '?';
@@ -3720,6 +3723,10 @@ function _createUnitMarker(id, unit, lngLat) {
     });
     outer.addEventListener('mouseleave', () => {
         outer.classList.remove('unit-marker-hovered');
+        // Restore default z-index unless this marker is selected
+        const markerContainer = outer.closest('.maplibregl-marker');
+        const isSelected = _state.selectedUnitId === id || TritiumStore.get('map.selectedUnitId') === id;
+        if (markerContainer && !isSelected) markerContainer.style.zIndex = '';
         tooltip.style.display = 'none';
     });
 
@@ -3916,6 +3923,15 @@ function _applyMarkerStyle(el, unit) {
             '  pointer-events: none;',
             '  z-index: 5;',
             '  text-shadow: 0 0 3px currentColor;',
+            '}',
+            '',
+            '/* YOLO camera detection ring — dashed orange border */',
+            '@keyframes yolo-ring-pulse {',
+            '  0%, 100% { opacity: 0.6; box-shadow: 0 0 4px #ffa50044; }',
+            '  50% { opacity: 1.0; box-shadow: 0 0 10px #ffa50088, 0 0 20px #ffa50033; }',
+            '}',
+            '.unit-yolo-ring {',
+            '  animation: yolo-ring-pulse 2s ease-in-out infinite;',
             '}',
         ].join('\n');
         document.head.appendChild(css);
@@ -7275,10 +7291,16 @@ function _onSelectionChanged(unitId) {
         }
     }
 
-    // Re-render all markers to update selection highlight
+    // Re-render all markers to update selection highlight + z-index
     for (const [id, marker] of Object.entries(_state.unitMarkers)) {
         const unit = TritiumStore.units.get(id);
         if (unit) _updateMarkerElement(marker, unit);
+        // Raise selected marker above overlapping neighbors
+        const el = marker.getElement();
+        const container = el ? el.closest('.maplibregl-marker') : null;
+        if (container) {
+            container.style.zIndex = (id === unitId) ? '50' : '';
+        }
     }
     // Update weapon range circle for new selection (or clear if deselected)
     _updateWeaponRange();
@@ -9140,6 +9162,40 @@ function _onCamerasChanged(data) {
             },
         }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
     }
+}
+
+// ── Camera Click-to-Place ───────────────────────────────────────────────
+// When the camera-feeds panel requests a map location pick, register a
+// one-shot click handler that captures the lngLat and sends it back.
+
+function _onCameraPickLocation(data) {
+    if (!_state.map || !data || !data.active) return;
+
+    // Visual feedback: change cursor to crosshair
+    _state.map.getCanvas().style.cursor = 'crosshair';
+
+    function onMapClick(e) {
+        // Remove the one-shot handler
+        _state.map.off('click', onMapClick);
+        _state.map.getCanvas().style.cursor = '';
+
+        // Send coordinates back to the camera panel
+        EventBus.emit('camera:location-picked', {
+            lat: e.lngLat.lat,
+            lng: e.lngLat.lng,
+        });
+    }
+
+    // Register one-shot click handler
+    _state.map.on('click', onMapClick);
+
+    // Auto-cancel after 30 seconds if no click
+    setTimeout(() => {
+        _state.map.off('click', onMapClick);
+        if (_state.map.getCanvas().style.cursor === 'crosshair') {
+            _state.map.getCanvas().style.cursor = '';
+        }
+    }, 30000);
 }
 
 export function resetCamera() {

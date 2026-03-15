@@ -85,6 +85,9 @@ export const CameraFeedsPanelDef = {
                                 <input type="number" name="lng" step="any" placeholder="-97.5678" class="cf-form-input" />
                             </label>
                         </div>
+                        <button type="button" class="panel-action-btn cf-pick-map-btn" data-action="cf-pick-map" style="margin-bottom:8px;width:100%;color:#00f0ff;border-color:#00f0ff33">
+                            PICK LOCATION FROM MAP
+                        </button>
                         <div class="cf-form-row">
                             <label class="cf-form-label cf-form-half">
                                 <span class="mono">WIDTH</span>
@@ -118,9 +121,11 @@ export const CameraFeedsPanelDef = {
         const addCloseBtn = bodyEl.querySelector('[data-action="cf-add-close"]');
         const addForm = bodyEl.querySelector('[data-bind="cf-add-form"]');
         const addError = bodyEl.querySelector('[data-bind="cf-add-error"]');
+        const pickMapBtn = bodyEl.querySelector('[data-action="cf-pick-map"]');
 
         let cameras = [];
         let activeStreamImgs = [];
+        let pickingLocation = false;
 
         // Position at right side if no saved layout
         if (panel.def.defaultPosition.x === null) {
@@ -197,6 +202,36 @@ export const CameraFeedsPanelDef = {
         if (addBtn) addBtn.addEventListener('click', showAddModal);
         if (addCloseBtn) addCloseBtn.addEventListener('click', hideAddModal);
         if (addForm) addForm.addEventListener('submit', submitAddCamera);
+
+        // -- Pick location from map (click-to-place) --
+        function startPickingLocation() {
+            pickingLocation = true;
+            if (pickMapBtn) {
+                pickMapBtn.textContent = 'CLICK THE MAP TO SET LOCATION...';
+                pickMapBtn.style.color = '#fcee0a';
+                pickMapBtn.style.borderColor = '#fcee0a';
+            }
+            EventBus.emit('camera:pick-location', { active: true });
+        }
+
+        function onLocationPicked(data) {
+            if (!pickingLocation || !data) return;
+            pickingLocation = false;
+            if (pickMapBtn) {
+                pickMapBtn.textContent = 'PICK LOCATION FROM MAP';
+                pickMapBtn.style.color = '#00f0ff';
+                pickMapBtn.style.borderColor = '#00f0ff33';
+            }
+            // Fill in the lat/lng form fields
+            const latInput = addForm ? addForm.querySelector('[name="lat"]') : null;
+            const lngInput = addForm ? addForm.querySelector('[name="lng"]') : null;
+            if (latInput && data.lat != null) latInput.value = data.lat.toFixed(6);
+            if (lngInput && data.lng != null) lngInput.value = data.lng.toFixed(6);
+        }
+
+        if (pickMapBtn) pickMapBtn.addEventListener('click', startPickingLocation);
+        EventBus.on('camera:location-picked', onLocationPicked);
+        panel._unsubs.push(() => EventBus.off('camera:location-picked', onLocationPicked));
 
         function renderGrid() {
             if (!gridEl) return;

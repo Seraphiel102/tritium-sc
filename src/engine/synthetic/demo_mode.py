@@ -101,6 +101,10 @@ class DemoController:
         self._reid_demo: ReIDDemoGenerator | None = None
         self._robot_demo: RobotDemoGenerator | None = None
 
+        # Fleet heartbeat generator for fleet dashboard demo
+        self._fleet_hb_thread: threading.Thread | None = None
+        self._fleet_hb_running = False
+
         # Camera detection -> target tracker bridge
         self._cam_det_thread: threading.Thread | None = None
         self._cam_det_running = False
@@ -191,6 +195,10 @@ class DemoController:
         self._robot_demo = RobotDemoGenerator(interval=5.0)
         self._robot_demo.start(self._event_bus, self._target_tracker)
 
+        # Fleet heartbeats — synthetic sensor nodes so fleet dashboard
+        # shows 4 demo devices with realistic telemetry.
+        self._start_fleet_heartbeat_generator()
+
         self._active = True
         self._event_bus.publish("demo:started", {
             "ble_devices": self._ble_device_count,
@@ -246,6 +254,9 @@ class DemoController:
         if self._robot_demo is not None:
             self._robot_demo.stop()
             self._robot_demo = None
+
+        # Stop fleet heartbeat generator
+        self._stop_fleet_heartbeat_generator()
 
         # Remove demo cameras from camera_feeds plugin
         self._unregister_demo_cameras()
@@ -375,6 +386,86 @@ class DemoController:
                     )
                 except Exception as e:
                     logger.debug("Camera detection bridge error: %s", e)
+
+    # -- Fleet heartbeat generator for fleet dashboard demo ----------------
+
+    # 4 synthetic sensor nodes placed around the demo neighborhood
+    _DEMO_FLEET_NODES = [
+        {"device_id": "demo-node-alpha", "name": "Alpha-Node", "lat": 37.7752, "lng": -122.4190,
+         "firmware": "tritium-os-1.4.2", "device_group": "demo-perimeter"},
+        {"device_id": "demo-node-bravo", "name": "Bravo-Node", "lat": 37.7746, "lng": -122.4198,
+         "firmware": "tritium-os-1.4.2", "device_group": "demo-perimeter"},
+        {"device_id": "demo-node-charlie", "name": "Charlie-Node", "lat": 37.7749, "lng": -122.4185,
+         "firmware": "tritium-os-1.4.1", "device_group": "demo-interior"},
+        {"device_id": "demo-node-delta", "name": "Delta-Node", "lat": 37.7755, "lng": -122.4200,
+         "firmware": "tritium-os-1.4.2", "device_group": "demo-interior"},
+    ]
+
+    def _start_fleet_heartbeat_generator(self) -> None:
+        """Start generating fleet.heartbeat events for demo sensor nodes."""
+        self._fleet_hb_running = True
+        self._fleet_hb_thread = threading.Thread(
+            target=self._fleet_heartbeat_loop,
+            daemon=True,
+            name="demo-fleet-hb-gen",
+        )
+        self._fleet_hb_thread.start()
+        logger.info("Fleet heartbeat generator started: %d demo nodes",
+                     len(self._DEMO_FLEET_NODES))
+
+    def _stop_fleet_heartbeat_generator(self) -> None:
+        """Stop the fleet heartbeat generator."""
+        self._fleet_hb_running = False
+        if self._fleet_hb_thread is not None:
+            self._fleet_hb_thread.join(timeout=2.0)
+            self._fleet_hb_thread = None
+
+    def _fleet_heartbeat_loop(self) -> None:
+        """Emit fleet.heartbeat events every 15s for synthetic sensor nodes.
+
+        Publishes an initial batch immediately so the fleet dashboard
+        shows devices right away, then continues at 15s intervals.
+        """
+        import random as _random
+        rng = _random.Random(42)
+        # Per-node battery state (starts high, drains slowly)
+        batteries = {n["device_id"]: rng.uniform(0.7, 0.98) for n in self._DEMO_FLEET_NODES}
+        # Per-node uptime (starts around 1-12 hours)
+        uptimes = {n["device_id"]: rng.uniform(3600, 43200) for n in self._DEMO_FLEET_NODES}
+        tick = 0
+        first_pass = True
+
+        while self._fleet_hb_running:
+            for node in self._DEMO_FLEET_NODES:
+                did = node["device_id"]
+                tick += 1
+                # Slowly drain battery
+                batteries[did] = max(0.15, batteries[did] - rng.uniform(0.0001, 0.0005))
+                uptimes[did] += 15.0  # 15s heartbeat interval
+
+                heartbeat = {
+                    "device_id": did,
+                    "name": node["name"],
+                    "ip": f"10.0.1.{10 + self._DEMO_FLEET_NODES.index(node)}",
+                    "battery_pct": round(batteries[did] * 100, 1),
+                    "uptime_s": round(uptimes[did]),
+                    "free_heap": rng.randint(80000, 140000),
+                    "ble_count": rng.randint(2, 12),
+                    "wifi_count": rng.randint(3, 8),
+                    "version": node["firmware"],
+                    "rssi": rng.randint(-75, -35),
+                    "lat": node["lat"],
+                    "lng": node["lng"],
+                    "device_group": node["device_group"],
+                    "lifecycle_state": "active",
+                }
+                self._event_bus.publish("fleet.heartbeat", heartbeat)
+
+            if first_pass:
+                first_pass = False
+                time.sleep(2.0)  # Short delay on first pass for rapid display
+            else:
+                time.sleep(15.0)
 
     def get_scenario_info(self) -> dict:
         """Return fusion scenario description and live dossier state."""

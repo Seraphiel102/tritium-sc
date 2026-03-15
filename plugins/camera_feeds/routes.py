@@ -108,6 +108,23 @@ def create_router(plugin: CameraFeedsPlugin) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return source.to_dict()
 
+    @router.patch("/sources/{source_id}/position")
+    async def update_source_position(source_id: str, body: dict):
+        """Update a camera source's map position (lat/lng).
+
+        Used by the camera-feeds panel click-to-place feature (Loop 8).
+        """
+        source = plugin.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        lat = body.get("lat")
+        lng = body.get("lng")
+        if lat is not None:
+            source.config.extra["lat"] = float(lat)
+        if lng is not None:
+            source.config.extra["lng"] = float(lng)
+        return source.to_dict()
+
     @router.delete("/sources/{source_id}")
     async def remove_source(source_id: str):
         """Remove a camera source."""

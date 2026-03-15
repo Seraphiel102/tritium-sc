@@ -310,7 +310,11 @@ class TargetTracker:
                     continue
                 dx = existing.position[0] - cx
                 dy = existing.position[1] - cy
-                if (dx * dx + dy * dy) < 0.04:  # within ~0.2 normalized
+                dist_sq = dx * dx + dy * dy
+                # Adaptive threshold: if coords are in game space (meters),
+                # use 9 sq meters (3m radius); if normalized (0-1), use 0.04.
+                threshold = 9.0 if (abs(cx) > 2.0 or abs(cy) > 2.0) else 0.04
+                if dist_sq < threshold:  # within proximity
                     matched = existing
                     break
 
