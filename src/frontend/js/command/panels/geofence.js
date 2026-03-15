@@ -57,6 +57,7 @@ export const GeofencePanelDef = {
         let zones = [];
         let events = [];
         let activeTab = 'zones';
+        let zoneOccupancy = {}; // zone_id -> target count
 
         // Tab switching
         tabs.forEach(tab => {
@@ -82,10 +83,16 @@ export const GeofencePanelDef = {
                 const flags = [];
                 if (z.alert_on_enter) flags.push('ENTER');
                 if (z.alert_on_exit) flags.push('EXIT');
-                return `<li class="panel-list-item zone-item" data-zone-id="${_esc(z.zone_id)}" role="option">
-                    <span class="panel-dot" style="background:${color}"></span>
+                const hasAlerts = z.alert_on_enter || z.alert_on_exit;
+                const occupancy = zoneOccupancy[z.zone_id] || 0;
+                const occupancyLabel = occupancy > 0
+                    ? `<span style="color:${color};font-weight:600;font-size:0.42rem;margin-left:4px">${occupancy} inside</span>`
+                    : '';
+                const pulseClass = hasAlerts ? ' zone-alert-active' : '';
+                return `<li class="panel-list-item zone-item${pulseClass}" data-zone-id="${_esc(z.zone_id)}" role="option">
+                    <span class="panel-dot${hasAlerts ? ' zone-dot-pulse' : ''}" style="background:${color}"></span>
                     <span class="zone-item-info" style="flex:1;min-width:0">
-                        <span class="zone-item-name">${_esc(z.name)}</span>
+                        <span class="zone-item-name">${_esc(z.name)}${occupancyLabel}</span>
                         <span class="mono" style="font-size:0.42rem;color:var(--text-ghost)">${_esc(z.zone_type)} | ${vertices} pts | ${flags.join('+') || 'no alerts'}</span>
                     </span>
                     <button class="panel-btn zone-delete-btn" data-action="delete-zone" data-zone-id="${_esc(z.zone_id)}" title="Delete zone">&times;</button>
@@ -150,12 +157,29 @@ export const GeofencePanelDef = {
             }).join('');
         }
 
+        async function fetchOccupancy() {
+            // Fetch zone occupancy counts from the geofence zones endpoint
+            // Each zone may have an occupant_count or we derive from events
+            try {
+                const resp = await fetch('/api/geofence/occupancy');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && typeof data === 'object') {
+                        zoneOccupancy = data;
+                    }
+                }
+            } catch (_) {
+                // Occupancy endpoint may not exist yet; ignore gracefully
+            }
+        }
+
         async function fetchZones() {
             try {
                 const resp = await fetch('/api/geofence/zones');
                 if (!resp.ok) { zones = []; renderZones(); return; }
                 zones = await resp.json();
                 if (!Array.isArray(zones)) zones = [];
+                await fetchOccupancy();
                 renderZones();
             } catch (_) {
                 zones = [];
@@ -207,6 +231,26 @@ export const GeofencePanelDef = {
         };
         EventBus.on('geofence:zoneDrawn', onZoneDrawn);
         panel._unsubs.push(() => EventBus.off('geofence:zoneDrawn', onZoneDrawn));
+
+        // Live occupancy updates from WebSocket geofence events
+        const onGeofenceEnter = (data) => {
+            const zid = data.zone_id;
+            if (zid) {
+                zoneOccupancy[zid] = (zoneOccupancy[zid] || 0) + 1;
+                renderZones();
+            }
+        };
+        const onGeofenceExit = (data) => {
+            const zid = data.zone_id;
+            if (zid) {
+                zoneOccupancy[zid] = Math.max(0, (zoneOccupancy[zid] || 0) - 1);
+                renderZones();
+            }
+        };
+        EventBus.on('geofence:enter', onGeofenceEnter);
+        EventBus.on('geofence:exit', onGeofenceExit);
+        panel._unsubs.push(() => EventBus.off('geofence:enter', onGeofenceEnter));
+        panel._unsubs.push(() => EventBus.off('geofence:exit', onGeofenceExit));
 
         if (refreshBtn) refreshBtn.addEventListener('click', () => {
             fetchZones();

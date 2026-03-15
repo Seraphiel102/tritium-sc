@@ -925,6 +925,18 @@ const TrackedTargetControl = {
         const manufacturer = device.manufacturer || device.oui_manufacturer || '';
         const deviceClass = device.device_class || device.classification || '';
 
+        // RL classification with confidence
+        const rlClass = device.rl_classification || device.device_class || device.classification || '';
+        const rlConf = device.classification_confidence ?? device.confidence ?? null;
+        let classificationHtml = '';
+        if (rlClass) {
+            const confPct = rlConf != null ? Math.round(rlConf * 100) + '%' : '--';
+            const confColor = rlConf != null
+                ? (rlConf > 0.8 ? '#05ffa1' : rlConf > 0.5 ? '#fcee0a' : '#ff2a6d')
+                : 'var(--text-ghost)';
+            classificationHtml = `<div class="dc-stat-row"><span class="dc-label">CLASSIFICATION</span><span class="dc-value">${_esc(rlClass)} <span style="color:${confColor};font-size:0.45rem">(${confPct} confidence)</span></span></div>`;
+        }
+
         let rssiHtml = '--';
         if (rssi !== null) {
             const rssiColor = rssi > -50 ? '#05ffa1' : rssi > -70 ? '#fcee0a' : '#ff2a6d';
@@ -935,13 +947,17 @@ const TrackedTargetControl = {
                 </div>`;
         }
 
+        // Determine current tag for highlighting active button
+        const currentAlliance = (device.alliance || 'unknown').toLowerCase();
+
         return `
             <div class="dc-stats">
                 <div class="dc-stat-row"><span class="dc-label">TARGET ID</span><span class="dc-value" style="font-family:'JetBrains Mono',monospace;font-size:0.55rem">${_esc(device.id || '--')}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">NAME</span><span class="dc-value">${_esc(device.name || device.id || '--')}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">TYPE</span><span class="dc-value">${_esc(source)}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">ALLIANCE</span><span class="dc-value" style="color:${allianceColor};font-weight:600">${alliance}</span></div>
-                ${deviceClass ? `<div class="dc-stat-row"><span class="dc-label">CLASS</span><span class="dc-value">${_esc(deviceClass)}</span></div>` : ''}
+                ${classificationHtml}
+                ${deviceClass && deviceClass !== rlClass ? `<div class="dc-stat-row"><span class="dc-label">DEVICE CLASS</span><span class="dc-value">${_esc(deviceClass)}</span></div>` : ''}
                 ${manufacturer ? `<div class="dc-stat-row"><span class="dc-label">MANUFACTURER</span><span class="dc-value">${_esc(manufacturer)}</span></div>` : ''}
                 <div class="dc-stat-row"><span class="dc-label">RSSI</span><span class="dc-value">${rssiHtml}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">CONFIDENCE</span><span class="dc-value">${confidence}</span></div>
@@ -950,13 +966,86 @@ const TrackedTargetControl = {
                 <div class="dc-stat-row"><span class="dc-label">LAST SEEN</span><span class="dc-value" style="font-size:0.5rem">${lastSeen}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">STATUS</span><span class="dc-value">${(device.status || 'active').toUpperCase()}</span></div>
             </div>
+            <div class="tag-btn-row" data-bind="tag-buttons">
+                <button class="tag-btn tag-btn-friendly${currentAlliance === 'friendly' ? ' active' : ''}" data-tag="friendly">FRIENDLY</button>
+                <button class="tag-btn tag-btn-hostile${currentAlliance === 'hostile' ? ' active' : ''}" data-tag="hostile">HOSTILE</button>
+                <button class="tag-btn tag-btn-vip${device.vip ? ' active' : ''}" data-tag="vip">VIP</button>
+            </div>
         `;
     },
 
-    bind(container, device) {},
+    bind(container, device) {
+        // Wire tag buttons
+        const tagBtns = container.querySelectorAll('.tag-btn');
+        tagBtns.forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const tag = btn.dataset.tag;
+                const targetId = device.id;
+                if (!targetId) return;
+
+                try {
+                    if (tag === 'vip') {
+                        // VIP is a toggle — add a dossier note
+                        const isVip = btn.classList.contains('active');
+                        const newAlliance = isVip ? 'unknown' : device.alliance || 'unknown';
+                        await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_id: targetId,
+                                alliance: newAlliance,
+                                reason: isVip ? 'VIP tag removed' : 'Tagged as VIP',
+                            }),
+                        });
+                        device.vip = !isVip;
+                        btn.classList.toggle('active');
+                    } else {
+                        // Alliance tag — friendly or hostile
+                        const resp = await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_id: targetId,
+                                alliance: tag,
+                                reason: `Operator tagged as ${tag}`,
+                            }),
+                        });
+                        if (resp.ok) {
+                            device.alliance = tag;
+                            // Update active states
+                            tagBtns.forEach(b => {
+                                if (b.dataset.tag !== 'vip') {
+                                    b.classList.toggle('active', b.dataset.tag === tag);
+                                }
+                            });
+                            // Update alliance display
+                            const allianceRow = container.querySelector('.dc-label');
+                            const rows = container.querySelectorAll('.dc-stat-row');
+                            for (const row of rows) {
+                                const label = row.querySelector('.dc-label');
+                                const value = row.querySelector('.dc-value');
+                                if (label && value && label.textContent === 'ALLIANCE') {
+                                    const newAlliance = tag.toUpperCase();
+                                    const allianceColorMap = { FRIENDLY: '#05ffa1', HOSTILE: '#ff2a6d', UNKNOWN: '#aaa', NEUTRAL: '#fcee0a' };
+                                    value.style.color = allianceColorMap[newAlliance] || '#aaa';
+                                    value.textContent = newAlliance;
+                                    break;
+                                }
+                            }
+                            // Update store so map marker color updates
+                            const { TritiumStore } = await import('../store.js');
+                            TritiumStore.updateUnit(targetId, { alliance: tag });
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[TAG] Failed to tag target:', err);
+                }
+            });
+        });
+    },
 
     update(container, device) {
-        // Live update RSSI and last_seen
+        // Live update RSSI, last_seen, and classification
         const rows = container.querySelectorAll('.dc-stat-row');
         for (const row of rows) {
             const label = row.querySelector('.dc-label');
@@ -977,6 +1066,16 @@ const TrackedTargetControl = {
                 const allianceColor = { FRIENDLY: '#05ffa1', HOSTILE: '#ff2a6d', UNKNOWN: '#aaa', NEUTRAL: '#fcee0a' }[alliance] || '#aaa';
                 value.style.color = allianceColor;
                 value.textContent = alliance;
+            } else if (key === 'CLASSIFICATION') {
+                const rlClass = device.rl_classification || device.device_class || device.classification || '';
+                const rlConf = device.classification_confidence ?? device.confidence ?? null;
+                if (rlClass) {
+                    const confPct = rlConf != null ? Math.round(rlConf * 100) + '%' : '--';
+                    const confColor = rlConf != null
+                        ? (rlConf > 0.8 ? '#05ffa1' : rlConf > 0.5 ? '#fcee0a' : '#ff2a6d')
+                        : 'var(--text-ghost)';
+                    value.innerHTML = `${_esc(rlClass)} <span style="color:${confColor};font-size:0.45rem">(${confPct} confidence)</span>`;
+                }
             }
         }
     },

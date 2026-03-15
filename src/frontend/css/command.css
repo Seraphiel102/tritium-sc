@@ -1732,6 +1732,55 @@ body.v2 {
     line-height: 1.4;
 }
 
+/* Zone alert pulse animation — active alert indicator */
+.zone-dot-pulse {
+    animation: zoneDotPulse 1.5s ease-in-out infinite;
+}
+@keyframes zoneDotPulse {
+    0%, 100% { box-shadow: 0 0 2px currentColor; opacity: 1; }
+    50% { box-shadow: 0 0 8px currentColor, 0 0 16px currentColor; opacity: 0.7; }
+}
+.zone-alert-active {
+    border-left: 2px solid transparent;
+    animation: zoneAlertBorder 2s ease-in-out infinite;
+}
+@keyframes zoneAlertBorder {
+    0%, 100% { border-left-color: transparent; }
+    50% { border-left-color: var(--cyan); }
+}
+
+/* Tag buttons for target classification */
+.tag-btn-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+}
+.tag-btn {
+    flex: 1;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.45rem;
+    font-family: inherit;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    transition: all 0.15s ease;
+}
+.tag-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+.tag-btn-friendly { border-color: #05ffa1; color: #05ffa1; }
+.tag-btn-friendly:hover, .tag-btn-friendly.active { background: rgba(5, 255, 161, 0.15); }
+.tag-btn-hostile { border-color: #ff2a6d; color: #ff2a6d; }
+.tag-btn-hostile:hover, .tag-btn-hostile.active { background: rgba(255, 42, 109, 0.15); }
+.tag-btn-vip { border-color: #fcee0a; color: #fcee0a; }
+.tag-btn-vip:hover, .tag-btn-vip.active { background: rgba(252, 238, 10, 0.15); }
+
 /* Chat panel */
 .chat-overlay {
     position: fixed;

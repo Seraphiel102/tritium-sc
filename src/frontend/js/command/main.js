@@ -300,12 +300,16 @@ function init() {
     });
 
     // Geofence enter/exit push notifications — toast + notification bell
+    // Restricted zones = magenta (alert), monitored = cyan (amy), safe = green (robot)
     EventBus.on('notification:geofence', (data) => {
         const dir = data.direction === 'enter' ? 'ENTERED' : 'EXITED';
         const zone = data.zone_name || data.zone_id || '?';
-        const target = data.target_id || '?';
-        const severity = data.zone_type === 'restricted' ? 'alert' : 'info';
-        showToast(`GEOFENCE: ${target} ${dir} ${zone}`, severity);
+        const target = (data.target_id || '?').substring(0, 16);
+        const zoneType = data.zone_type || 'monitored';
+        const severity = zoneType === 'restricted' ? 'alert'
+            : zoneType === 'safe' ? 'robot'
+            : 'amy';
+        showToast(`GEOFENCE: Target ${target} ${dir} zone ${zone}`, severity);
         // Push as a notification for the bell badge
         EventBus.emit('notification:new', {
             id: `gf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
