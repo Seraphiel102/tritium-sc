@@ -1037,6 +1037,31 @@ function _drawGeofencePolygonZones(ctx) {
         // Convert all polygon points to screen coords
         const screenPts = pts.map(p => worldToScreen(p[0], p[1]));
 
+        const hasAlerts = zone.alert_on_enter || zone.alert_on_exit;
+        const occ = _state.geofenceOccupancy[zone.zone_id] || 0;
+        const isActive = occ > 0;
+        const isMonitoring = hasAlerts && !isActive;
+
+        // Pulse timing for monitoring/active zones
+        const now = Date.now() / 1000;
+        let fillAlpha = 1.0;
+        let strokeAlpha = 1.0;
+        let strokeWidth = 2;
+
+        if (isActive) {
+            // Active: fast strong pulse
+            const sin = Math.sin(now * 2.5);
+            fillAlpha = 0.7 + 0.3 * sin;
+            strokeAlpha = 0.7 + 0.3 * sin;
+            strokeWidth = 3 + 1.5 * sin;
+        } else if (isMonitoring) {
+            // Monitoring: slow subtle cyan pulse
+            const sin = Math.sin(now * 1.2);
+            fillAlpha = 0.4 + 0.15 * sin;
+            strokeAlpha = 0.5 + 0.2 * sin;
+            strokeWidth = 2 + 0.8 * sin;
+        }
+
         // Fill
         ctx.beginPath();
         for (let i = 0; i < screenPts.length; i++) {
@@ -1044,19 +1069,23 @@ function _drawGeofencePolygonZones(ctx) {
             else ctx.lineTo(screenPts[i].x, screenPts[i].y);
         }
         ctx.closePath();
+        ctx.globalAlpha = fillAlpha;
         ctx.fillStyle = colors.fill;
         ctx.fill();
+        ctx.globalAlpha = 1.0;
 
-        // Stroke — solid border
+        // Stroke — solid border with pulse
         ctx.beginPath();
         for (let i = 0; i < screenPts.length; i++) {
             if (i === 0) ctx.moveTo(screenPts[i].x, screenPts[i].y);
             else ctx.lineTo(screenPts[i].x, screenPts[i].y);
         }
         ctx.closePath();
-        ctx.strokeStyle = colors.stroke;
-        ctx.lineWidth = 2;
+        ctx.globalAlpha = strokeAlpha;
+        ctx.strokeStyle = isActive ? '#ff2a6d' : colors.stroke;
+        ctx.lineWidth = strokeWidth;
         ctx.stroke();
+        ctx.globalAlpha = 1.0;
 
         // Vertex dots
         for (const sp of screenPts) {
@@ -1076,13 +1105,25 @@ function _drawGeofencePolygonZones(ctx) {
             ctx.textAlign = 'center';
             ctx.fillText(zone.name.toUpperCase(), cx, cy);
 
-            // Zone type subtitle
+            // Zone type subtitle + monitoring status
+            const subtitleFontSize = Math.max(7, 9 * Math.min(_state.cam.zoom, 2));
             ctx.fillStyle = colors.label.replace('0.8', '0.4');
-            ctx.font = `${Math.max(7, 9 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.font = `${subtitleFontSize}px ${FONT_FAMILY}`;
             ctx.fillText(zone.zone_type.toUpperCase(), cx, cy + fontSize + 2);
 
+            // Monitoring badge — shown when zone is armed but no occupants
+            if (isMonitoring) {
+                const monY = cy + fontSize + 2 + subtitleFontSize + 2;
+                const monFontSize = Math.max(7, 9 * Math.min(_state.cam.zoom, 2));
+                const monSin = Math.sin(now * 1.2);
+                ctx.globalAlpha = 0.5 + 0.3 * monSin;
+                ctx.fillStyle = colors.stroke;
+                ctx.font = `bold ${monFontSize}px ${FONT_FAMILY}`;
+                ctx.fillText('MONITORING', cx, monY);
+                ctx.globalAlpha = 1.0;
+            }
+
             // Occupancy count badge
-            const occ = _state.geofenceOccupancy[zone.zone_id] || 0;
             if (occ > 0) {
                 const badgeY = cy + fontSize + 2 + fontSize;
                 const badgeFontSize = Math.max(9, 10 * Math.min(_state.cam.zoom, 2));

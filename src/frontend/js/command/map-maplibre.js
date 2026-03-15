@@ -434,7 +434,12 @@ function _createMap(mapDiv) {
         EventBus.on('patrol:drawRoute', _onPatrolDrawRouteStart);
         EventBus.on('geofence:drawZone', _onGeofenceDrawStart);
         // Re-fetch geofence zones when enter/exit events fire or zones change
-        EventBus.on('geofence:enter', () => { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); });
+        // Also flash the zone border in magenta briefly on enter
+        EventBus.on('geofence:enter', (data) => {
+            _state._lastGeofenceFetch = 0;
+            _updateGeofenceZones();
+            _flashGeofenceAlert(data);
+        });
         EventBus.on('geofence:exit', () => { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); });
         EventBus.on('zone:selected', (data) => {
             if (data && data.polygon) { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); }
@@ -2271,40 +2276,59 @@ const GEOFENCE_ZONE_COLORS = {
 // Geofence zone pulse animation state
 let _geofencePulseRAF = null;
 let _geofenceHasActiveZones = false;
+let _geofenceHasMonitoringZones = false;
 
 /**
- * Animate pulse effect on geofence zones that have occupants.
- * Oscillates fill-opacity and line-width for active zones using a sine wave.
+ * Animate pulse effect on geofence zones.
+ * - Monitoring zones (alert_on_enter/exit but no occupants): slow subtle cyan pulse on border
+ * - Active zones (occupants inside): faster, stronger pulse on fill + border
+ * Both states use sine wave oscillation for smooth animation.
  */
 function _geofencePulseLoop() {
-    if (!_state.map || !_state.initialized || !_geofenceHasActiveZones) {
+    if (!_state.map || !_state.initialized || (!_geofenceHasActiveZones && !_geofenceHasMonitoringZones)) {
         _geofencePulseRAF = null;
         return;
     }
     const t = Date.now() / 1000;
-    // Sine wave: oscillate between 0.25 and 0.75 for fill, 2 and 5 for stroke
-    const sin = Math.sin(t * 2.5); // ~0.4Hz pulse
-    const fillOpacity = 0.5 + 0.25 * sin;    // 0.25 .. 0.75
-    const lineWidth   = 3.5 + 1.5 * sin;     // 2 .. 5
-    const strokeOpacity = 0.7 + 0.3 * sin;   // 0.4 .. 1.0
+
+    // Active zones (occupants inside): fast strong pulse ~0.4Hz
+    const sinActive = Math.sin(t * 2.5);
+    const activeFillOpacity = 0.5 + 0.25 * sinActive;
+    const activeLineWidth   = 3.5 + 1.5 * sinActive;
+    const activeStrokeOp    = 0.7 + 0.3 * sinActive;
+
+    // Monitoring zones (armed, no occupants): slow subtle pulse ~0.2Hz
+    const sinMonitor = Math.sin(t * 1.2);
+    const monitorLineWidth  = 2.5 + 0.8 * sinMonitor;   // 1.7 .. 3.3
+    const monitorStrokeOp   = 0.5 + 0.2 * sinMonitor;   // 0.3 .. 0.7
+    const monitorFillOp     = 0.15 + 0.05 * sinMonitor;  // 0.10 .. 0.20
 
     try {
         if (_state.map.getLayer(GEOFENCE_ZONES_FILL)) {
             _state.map.setPaintProperty(GEOFENCE_ZONES_FILL, 'fill-opacity', [
-                'case', ['get', 'is_active'], fillOpacity, 0.6
+                'case',
+                ['get', 'is_active'], activeFillOpacity,
+                ['get', 'is_monitoring'], monitorFillOp,
+                0.15
             ]);
         }
         if (_state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
             _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', [
-                'case', ['get', 'is_active'], lineWidth, 3
+                'case',
+                ['get', 'is_active'], activeLineWidth,
+                ['get', 'is_monitoring'], monitorLineWidth,
+                2
             ]);
             _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-opacity', [
-                'case', ['get', 'is_active'], strokeOpacity, 1.0
+                'case',
+                ['get', 'is_active'], activeStrokeOp,
+                ['get', 'is_monitoring'], monitorStrokeOp,
+                0.6
             ]);
         }
         // Pulse the alert badge opacity
         if (_state.map.getLayer(GEOFENCE_ALERT_BADGE)) {
-            const badgeOpacity = 0.7 + 0.3 * sin;
+            const badgeOpacity = 0.7 + 0.3 * sinActive;
             _state.map.setPaintProperty(GEOFENCE_ALERT_BADGE, 'text-opacity', badgeOpacity);
         }
     } catch (_e) { /* layer may have been removed */ }
@@ -2393,6 +2417,7 @@ function _renderGeofenceZones() {
 
         const occ = occupancy[zone.zone_id] || 0;
         const isActive = occ > 0;
+        const isMonitoring = !!(zone.alert_on_enter || zone.alert_on_exit);
 
         features.push({
             type: 'Feature',
@@ -2402,6 +2427,7 @@ function _renderGeofenceZones() {
                 fill_color: colors.fill,
                 stroke_color: colors.stroke,
                 is_active: isActive,
+                is_monitoring: isMonitoring && !isActive,
             },
         });
 
@@ -2411,6 +2437,8 @@ function _renderGeofenceZones() {
         const ll = _gameToLngLat(cx, cy);
         const label = isActive
             ? `${zone.name.toUpperCase()}\n${occ} INSIDE`
+            : isMonitoring
+            ? `${zone.name.toUpperCase()}\nMONITORING`
             : zone.name.toUpperCase();
 
         labelFeatures.push({
@@ -2523,28 +2551,59 @@ function _renderGeofenceZones() {
         console.warn('[MAP-ML] Geofence alert badge layer failed:', _alertErr.message);
     }
 
-    // Manage pulse animation based on active zone state
+    // Check if any zone is monitoring (armed with alert_on_enter/exit)
+    const hasAnyMonitoring = zones.some(z => (z.alert_on_enter || z.alert_on_exit) && !(occupancy[z.zone_id] > 0));
+
+    // Manage pulse animation based on active/monitoring zone state
     _geofenceHasActiveZones = hasAnyActive;
-    if (hasAnyActive) {
+    _geofenceHasMonitoringZones = hasAnyMonitoring;
+    if (hasAnyActive || hasAnyMonitoring) {
         _startGeofencePulse();
     } else {
         _stopGeofencePulse();
-        // Reset paint properties to defaults when no zones are active
+        // Reset paint properties to defaults when no zones need animation
         try {
             if (_state.map.getLayer(GEOFENCE_ZONES_FILL)) {
-                _state.map.setPaintProperty(GEOFENCE_ZONES_FILL, 'fill-opacity', 0.6);
+                _state.map.setPaintProperty(GEOFENCE_ZONES_FILL, 'fill-opacity', 0.15);
             }
             if (_state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
-                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 3);
-                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-opacity', 1.0);
+                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 2);
+                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-opacity', 0.6);
             }
         } catch (_e) { /* ok */ }
     }
 }
 
+/**
+ * Briefly flash geofence zone borders in magenta when a target enters.
+ * Temporarily overrides stroke color to magenta, then restores after 800ms.
+ */
+function _flashGeofenceAlert(_data) {
+    if (!_state.map || !_state.initialized) return;
+    try {
+        if (!_state.map.getLayer(GEOFENCE_ZONES_STROKE)) return;
+        // Flash all zone strokes to magenta
+        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-color', '#ff2a6d');
+        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 5);
+        // Restore after 800ms
+        setTimeout(() => {
+            try {
+                if (_state.map && _state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
+                    _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-color', ['get', 'stroke_color']);
+                    // Width will be restored by the pulse loop or default
+                    if (!_geofenceHasActiveZones && !_geofenceHasMonitoringZones) {
+                        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 2);
+                    }
+                }
+            } catch (_e) { /* ok */ }
+        }, 800);
+    } catch (_e) { /* ok */ }
+}
+
 function _clearGeofenceZones() {
     _stopGeofencePulse();
     _geofenceHasActiveZones = false;
+    _geofenceHasMonitoringZones = false;
     try {
         if (_state.map) {
             if (_state.map.getLayer(GEOFENCE_ALERT_BADGE))
