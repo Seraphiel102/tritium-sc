@@ -17,9 +17,11 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
+
+from app.auth import require_auth
 
 router = APIRouter(prefix="/api", tags=["feedback"])
 
@@ -36,9 +38,10 @@ class FeedbackRequest(BaseModel):
 
 
 @router.post("/feedback")
-async def submit_feedback(feedback: FeedbackRequest):
+async def submit_feedback(feedback: FeedbackRequest, user: dict = Depends(require_auth)):
     """Submit operator feedback on a system decision.
 
+    Requires authentication to prevent training data poisoning.
     The feedback is stored in the training store for RL/ML pipelines.
     This allows the system to self-improve over time based on operator
     corrections.
@@ -55,12 +58,14 @@ async def submit_feedback(feedback: FeedbackRequest):
     try:
         from engine.intelligence.training_store import get_training_store
         store = get_training_store()
+        # Use authenticated user as operator, fall back to request body
+        operator = user.get("sub", feedback.operator) if user else feedback.operator
         row_id = store.log_feedback(
             target_id=feedback.target_id,
             decision_type=feedback.decision_type,
             correct=feedback.correct,
             notes=feedback.notes,
-            operator=feedback.operator,
+            operator=operator,
         )
     except Exception as e:
         logger.error(f"Failed to store feedback: {e}")

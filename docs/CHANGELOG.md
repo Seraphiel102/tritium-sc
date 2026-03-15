@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 112: Maintenance + Security
+
+| Change | Verification |
+|--------|-------------|
+| Security: POST /api/feedback now requires `require_auth` — prevents unauthenticated training data poisoning | Code change |
+| Feedback endpoint auto-fills operator from authenticated user identity | Code change |
+| Orphan router fix: proximity.py registered in main.py (was created in Wave 108 but never included) | Code change |
+| 5 orphan panels registered in main.js: acoustic-intelligence, behavioral-intelligence, map-replay, voice-command, wifi-fingerprint | Code change |
+| STATUS.md updated through Wave 112 with security audit section | Documentation |
+
 ## 2026-03-14 — Wave 111: Capacity Benchmarks, WS Stress Tests, Demo RL Training
 
 | Change | Verification |

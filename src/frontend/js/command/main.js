@@ -81,6 +81,11 @@ import { FloorPlanPanelDef } from './panels/floorplan.js';
 import { BuildingOccupancyPanelDef } from './panels/building-occupancy.js';
 import { AnalyticsDashboardPanelDef } from './panels/analytics-dashboard.js';
 import { SensorHealthPanelDef } from './panels/sensor-health.js';
+import { AcousticIntelligencePanelDef } from './panels/acoustic-intelligence.js';
+import { BehavioralIntelligencePanelDef } from './panels/behavioral-intelligence.js';
+import { MapReplayPanelDef } from './panels/map-replay.js';
+import { VoiceCommandPanelDef } from './panels/voice-command.js';
+import { WiFiFingerprintPanelDef } from './panels/wifi-fingerprint.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
@@ -603,6 +608,11 @@ function initPanelSystem(container) {
     panelManager.register(BuildingOccupancyPanelDef);
     panelManager.register(AnalyticsDashboardPanelDef);
     panelManager.register(SensorHealthPanelDef);
+    panelManager.register(AcousticIntelligencePanelDef);
+    panelManager.register(BehavioralIntelligencePanelDef);
+    panelManager.register(MapReplayPanelDef);
+    panelManager.register(VoiceCommandPanelDef);
+    panelManager.register(WiFiFingerprintPanelDef);
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
     initScreenshotHotkey();
