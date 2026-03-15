@@ -483,6 +483,9 @@ function _draw() {
     const { ctx, canvas, dpr } = _state;
     if (!ctx || !canvas || canvas.width === 0 || canvas.height === 0) return;
 
+    // Clear velocity anomaly click areas for this frame
+    _state.velocityAnomalyAreas = [];
+
     // CSS pixel dimensions (drawing space after DPI transform)
     const cssW = canvas.width / dpr;
     const cssH = canvas.height / dpr;
@@ -2550,8 +2553,153 @@ function _drawUnit(ctx, id, unit) {
         _drawMoraleIndicator(ctx, unit, sp, scale);
     }
 
+    // Velocity anomaly indicator
+    _drawVelocityAnomaly(ctx, id, unit, sp, scale);
+
     // Labels are drawn by _drawLabels() using label-collision.js
 }
+
+// ============================================================
+// Velocity Anomaly Detection
+// ============================================================
+
+// Track velocity history per unit for anomaly detection
+const _velocityHistory = new Map();  // id -> { speeds: number[], lastPos: {x,y}, lastTime: number, anomaly: bool, anomalyTime: number }
+const VELOCITY_HISTORY_MAX = 30;
+const VELOCITY_ANOMALY_THRESHOLD = 3.0;  // std deviations above mean
+const VELOCITY_ANOMALY_DECAY = 8000;     // ms before anomaly fades
+
+function _trackVelocity(id, unit) {
+    const pos = unit.position;
+    if (!pos || pos.x === undefined) return null;
+    const now = performance.now();
+
+    if (!_velocityHistory.has(id)) {
+        _velocityHistory.set(id, { speeds: [], lastPos: { x: pos.x, y: pos.y }, lastTime: now, anomaly: false, anomalyTime: 0 });
+        return null;
+    }
+
+    const hist = _velocityHistory.get(id);
+    const dt = (now - hist.lastTime) / 1000;
+    if (dt < 0.1) return hist; // too soon
+
+    // Use unit.speed if available, else compute from position delta
+    let speed = unit.speed;
+    if (speed === undefined || speed === null) {
+        const dx = pos.x - hist.lastPos.x;
+        const dy = pos.y - hist.lastPos.y;
+        speed = Math.sqrt(dx * dx + dy * dy) / dt;
+    }
+
+    hist.lastPos = { x: pos.x, y: pos.y };
+    hist.lastTime = now;
+
+    hist.speeds.push(speed);
+    if (hist.speeds.length > VELOCITY_HISTORY_MAX) hist.speeds.shift();
+
+    // Compute anomaly: speed > mean + THRESHOLD * stddev
+    if (hist.speeds.length >= 5) {
+        const mean = hist.speeds.reduce((a, b) => a + b, 0) / hist.speeds.length;
+        const variance = hist.speeds.reduce((a, b) => a + (b - mean) ** 2, 0) / hist.speeds.length;
+        const stddev = Math.sqrt(variance);
+        const threshold = mean + VELOCITY_ANOMALY_THRESHOLD * Math.max(stddev, 0.5);
+
+        if (speed > threshold && speed > 1.0) {
+            hist.anomaly = true;
+            hist.anomalyTime = now;
+        } else if (hist.anomaly && (now - hist.anomalyTime) > VELOCITY_ANOMALY_DECAY) {
+            hist.anomaly = false;
+        }
+    }
+
+    return hist;
+}
+
+function _drawVelocityAnomaly(ctx, id, unit, sp, scale) {
+    const hist = _trackVelocity(id, unit);
+    if (!hist || !hist.anomaly) return;
+
+    const age = performance.now() - hist.anomalyTime;
+    const fadeAlpha = Math.max(0, 1.0 - age / VELOCITY_ANOMALY_DECAY);
+    if (fadeAlpha <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = fadeAlpha;
+
+    // Warning triangle icon offset to top-right
+    const ox = sp.x + scale * 12;
+    const oy = sp.y - scale * 14;
+    const sz = Math.max(6, scale * 5);
+
+    // Yellow warning triangle background
+    ctx.fillStyle = '#fcee0a';
+    ctx.beginPath();
+    ctx.moveTo(ox, oy - sz);
+    ctx.lineTo(ox - sz * 0.85, oy + sz * 0.6);
+    ctx.lineTo(ox + sz * 0.85, oy + sz * 0.6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Exclamation mark
+    ctx.fillStyle = '#0a0a0f';
+    ctx.font = `bold ${Math.max(7, sz)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', ox, oy);
+
+    ctx.restore();
+
+    // Store click area for velocity history popup
+    if (!_state.velocityAnomalyAreas) _state.velocityAnomalyAreas = [];
+    _state.velocityAnomalyAreas.push({ x: ox, y: oy, r: sz * 1.5, id, hist });
+}
+
+// Velocity anomaly click handler — show velocity history modal
+function _showVelocityHistoryModal(id, hist) {
+    // Remove existing modal
+    const existing = document.getElementById('velocity-anomaly-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'velocity-anomaly-modal';
+    modal.className = 'vel-anomaly-modal';
+
+    const speeds = hist.speeds || [];
+    const maxSpeed = Math.max(...speeds, 1);
+    const mean = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    const variance = speeds.length ? speeds.reduce((a, b) => a + (b - mean) ** 2, 0) / speeds.length : 0;
+    const stddev = Math.sqrt(variance);
+    const threshold = mean + VELOCITY_ANOMALY_THRESHOLD * Math.max(stddev, 0.5);
+
+    const bars = speeds.map(s => {
+        const h = Math.max(2, (s / maxSpeed) * 100);
+        const cls = s > threshold ? 'vel-bar-anomaly' : 'vel-bar-normal';
+        return `<div class="vel-bar ${cls}" style="height:${h}%" title="${s.toFixed(2)} m/s"></div>`;
+    }).join('');
+
+    modal.innerHTML = `
+        <div class="vel-anomaly-content">
+            <div class="vel-anomaly-header">
+                <h3>VELOCITY ANOMALY: ${id.substring(0, 16)}</h3>
+                <button class="panel-action-btn" onclick="document.getElementById('velocity-anomaly-modal').remove()">CLOSE</button>
+            </div>
+            <div class="vel-chart">${bars}</div>
+            <div class="vel-info">
+                <div>Mean: <span style="color:var(--cyan)">${mean.toFixed(2)} m/s</span> | Stddev: <span style="color:var(--cyan)">${stddev.toFixed(2)}</span> | Threshold: <span style="color:var(--yellow)">${threshold.toFixed(2)} m/s</span></div>
+                <div>Current: <span style="color:${speeds[speeds.length - 1] > threshold ? 'var(--yellow)' : 'var(--cyan)'}">${(speeds[speeds.length - 1] || 0).toFixed(2)} m/s</span> | Samples: ${speeds.length}</div>
+            </div>
+        </div>
+    `;
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.remove();
+    });
+
+    document.body.appendChild(modal);
+}
+
+// Expose for click detection in map click handler
+window._showVelocityHistoryModal = _showVelocityHistoryModal;
 
 // ============================================================
 // Target shapes
@@ -3381,6 +3529,18 @@ function _onMouseDown(e) {
             _state.dispatchUnitId = null;
             _state.canvas.style.cursor = 'crosshair';
             return;
+        }
+
+        // Hit test velocity anomaly indicators first
+        if (_state.velocityAnomalyAreas) {
+            for (const area of _state.velocityAnomalyAreas) {
+                const dx = sx - area.x;
+                const dy = sy - area.y;
+                if (dx * dx + dy * dy < area.r * area.r) {
+                    _showVelocityHistoryModal(area.id, area.hist);
+                    return;
+                }
+            }
         }
 
         // Hit test units
