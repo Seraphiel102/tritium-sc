@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from app.auth import require_auth
 
 if TYPE_CHECKING:
     from .plugin import EdgeAutonomyPlugin
@@ -54,20 +56,20 @@ def create_router(plugin: EdgeAutonomyPlugin) -> APIRouter:
         return {"decision": decision}
 
     @router.post("/decisions", status_code=201)
-    async def submit_decision(req: DecisionSubmitRequest):
+    async def submit_decision(req: DecisionSubmitRequest, user: dict = Depends(require_auth)):
         """Submit an autonomous decision (typically from edge MQTT)."""
         decision = plugin.receive_decision(req.model_dump())
         return {"decision": decision}
 
     @router.post("/decisions/{decision_id}/confirm")
-    async def confirm_decision(decision_id: str, req: OverrideRequest):
+    async def confirm_decision(decision_id: str, req: OverrideRequest, user: dict = Depends(require_auth)):
         result = plugin.confirm_decision(decision_id, req.reason, req.by)
         if result is None:
             raise HTTPException(status_code=404, detail="Decision not found")
         return {"decision": result}
 
     @router.post("/decisions/{decision_id}/override")
-    async def override_decision(decision_id: str, req: OverrideRequest):
+    async def override_decision(decision_id: str, req: OverrideRequest, user: dict = Depends(require_auth)):
         result = plugin.override_decision(
             decision_id, req.reason, req.by, req.corrective_action,
         )

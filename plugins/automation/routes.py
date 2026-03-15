@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from app.auth import require_auth
 
 if TYPE_CHECKING:
     from .plugin import AutomationPlugin
@@ -85,7 +87,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         return {"rule": rule.to_dict()}
 
     @router.post("/rules", status_code=201)
-    async def create_rule(req: RuleCreateRequest):
+    async def create_rule(req: RuleCreateRequest, user: dict = Depends(require_auth)):
         """Create a new automation rule."""
         conditions = [
             TriggerCondition(field=c.field, operator=c.operator, value=c.value)
@@ -109,7 +111,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         return {"rule": rule.to_dict()}
 
     @router.put("/rules/{rule_id}")
-    async def update_rule(rule_id: str, req: RuleUpdateRequest):
+    async def update_rule(rule_id: str, req: RuleUpdateRequest, user: dict = Depends(require_auth)):
         """Update an existing rule."""
         rule = plugin.engine.get_rule(rule_id)
         if rule is None:
@@ -140,7 +142,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         return {"rule": rule.to_dict()}
 
     @router.delete("/rules/{rule_id}")
-    async def delete_rule(rule_id: str):
+    async def delete_rule(rule_id: str, user: dict = Depends(require_auth)):
         """Delete a rule by ID."""
         removed = plugin.engine.remove_rule(rule_id)
         if not removed:
@@ -149,7 +151,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         return {"deleted": True, "rule_id": rule_id}
 
     @router.post("/rules/{rule_id}/enable")
-    async def enable_rule(rule_id: str):
+    async def enable_rule(rule_id: str, user: dict = Depends(require_auth)):
         """Enable a rule."""
         found = plugin.engine.enable_rule(rule_id)
         if not found:
@@ -158,7 +160,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         return {"rule_id": rule_id, "enabled": True}
 
     @router.post("/rules/{rule_id}/disable")
-    async def disable_rule(rule_id: str):
+    async def disable_rule(rule_id: str, user: dict = Depends(require_auth)):
         """Disable a rule."""
         found = plugin.engine.disable_rule(rule_id)
         if not found:
@@ -231,7 +233,7 @@ def create_router(plugin: AutomationPlugin) -> APIRouter:
         )
 
     @router.post("/import")
-    async def import_rules(req: dict):
+    async def import_rules(req: dict, user: dict = Depends(require_auth)):
         """Import automation rules from a previously exported JSON package.
 
         Expects the body to contain either:

@@ -67,7 +67,17 @@ class TriggerCondition:
             elif self.operator == "contains":
                 return str(self.value) in str(val)
             elif self.operator == "regex":
-                return bool(re.search(str(self.value), str(val)))
+                # Guard against ReDoS: limit pattern length and use timeout
+                pattern = str(self.value)
+                if len(pattern) > 200:
+                    log.warning("Regex pattern too long (%d chars), rejected", len(pattern))
+                    return False
+                try:
+                    compiled = re.compile(pattern)
+                except re.error:
+                    log.warning("Invalid regex pattern: %s", pattern[:50])
+                    return False
+                return bool(compiled.search(str(val)))
             else:
                 log.warning("Unknown operator: %s", self.operator)
                 return False

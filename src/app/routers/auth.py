@@ -108,6 +108,7 @@ class CreateAPIKeyRequest(BaseModel):
     name: str = "default"
     role: str = "admin"
     expires_in_days: int = 0  # 0 = no expiry
+    scope: str = "full"  # "full", "read-only", or "admin"
 
 
 class RotateAPIKeyRequest(BaseModel):
@@ -129,6 +130,7 @@ async def create_api_key(
         name=request.name,
         role=request.role,
         expires_in_days=request.expires_in_days,
+        scope=request.scope,
     )
     return result
 

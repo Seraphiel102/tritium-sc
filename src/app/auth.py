@@ -48,11 +48,17 @@ _refresh_tokens: dict[str, dict] = {}  # token -> {sub, exp}
 # ---------------------------------------------------------------------------
 
 class APIKeyStore:
-    """Thread-safe in-memory store for API keys with rotation support.
+    """Thread-safe in-memory store for API keys with rotation and scoping.
 
     Keys can be created, rotated, and revoked.  On rotation, the old key
     remains valid for a configurable grace period (default 1 hour).
     All mutations are logged to an in-memory audit trail.
+
+    Scoping: Each API key can be assigned a scope that restricts which
+    endpoints it can access:
+        - "full"      — all endpoints (default, backward compatible)
+        - "read-only" — only GET/HEAD/OPTIONS requests
+        - "admin"     — all endpoints including admin-only routes
     """
 
     def __init__(self) -> None:
@@ -79,9 +85,24 @@ class APIKeyStore:
             self._audit = self._audit[-self._max_audit:]
         logger.info("API key audit: %s key_id=%s %s", action, key_id, detail)
 
+    # Valid scopes for API keys
+    VALID_SCOPES = ("full", "read-only", "admin")
+
     def create_key(self, name: str = "default", role: str = "admin",
-                   expires_in_days: int = 0) -> dict:
-        """Create a new API key. Returns dict with plaintext key (shown once)."""
+                   expires_in_days: int = 0,
+                   scope: str = "full") -> dict:
+        """Create a new API key. Returns dict with plaintext key (shown once).
+
+        Args:
+            name: Human-readable name for the key.
+            role: Role assigned to requests using this key.
+            expires_in_days: Key expiry (0 = no expiry).
+            scope: Access scope — "full" (all endpoints), "read-only"
+                   (GET/HEAD/OPTIONS only), or "admin" (all + admin routes).
+        """
+        if scope not in self.VALID_SCOPES:
+            scope = "full"
+
         key_id = f"ak_{secrets.token_hex(8)}"
         plaintext = f"trk_{secrets.token_urlsafe(32)}"
         now = datetime.now(timezone.utc)
@@ -91,6 +112,7 @@ class APIKeyStore:
             "key_id": key_id,
             "name": name,
             "role": role,
+            "scope": scope,
             "created_at": now.isoformat(),
             "expires_at": expires_at,
             "revoked": False,
@@ -100,10 +122,10 @@ class APIKeyStore:
         with self._lock:
             self._keys[key_id] = entry
             self._key_index[plaintext] = key_id
-            self._audit_log("create", key_id, f"name={name}")
+            self._audit_log("create", key_id, f"name={name} scope={scope}")
 
         return {"key_id": key_id, "api_key": plaintext, "name": name,
-                "expires_at": expires_at}
+                "expires_at": expires_at, "scope": scope}
 
     def rotate_key(self, key_id: str, grace_period_seconds: int = 3600) -> Optional[dict]:
         """Rotate an API key: generate new key, old key valid for grace period.
@@ -186,6 +208,7 @@ class APIKeyStore:
                 return {"sub": f"apikey:{entry.get('name', key_id)}",
                         "role": entry.get("role", "admin"),
                         "key_id": key_id,
+                        "scope": entry.get("scope", "full"),
                         "auth_method": "api_key"}
 
             # Check grace-period keys
@@ -201,6 +224,7 @@ class APIKeyStore:
                 return {"sub": f"apikey:{entry.get('name', grace['key_id'])}",
                         "role": entry.get("role", "admin"),
                         "key_id": grace["key_id"],
+                        "scope": entry.get("scope", "full"),
                         "auth_method": "api_key_grace"}
 
         return None
@@ -324,6 +348,27 @@ def _validate_api_key(api_key: str) -> Optional[dict]:
     return None
 
 
+# HTTP methods allowed for read-only scoped API keys
+READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _check_api_key_scope(user: dict, request: Request) -> None:
+    """Enforce API key scope restrictions.
+
+    Raises HTTPException if the request method is not allowed by the
+    key's scope. Only applies to API key auth (scope field present).
+    """
+    scope = user.get("scope")
+    if scope is None or scope == "full" or scope == "admin":
+        return  # No restriction
+
+    if scope == "read-only" and request.method not in READ_ONLY_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"API key scope '{scope}' does not allow {request.method} requests",
+        )
+
+
 async def require_auth(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
@@ -335,6 +380,7 @@ async def require_auth(
     2. API key (X-API-Key: <key>)
 
     When auth_enabled=False, returns a default admin user.
+    API key scope is enforced: read-only keys cannot make write requests.
     """
     if not settings.auth_enabled:
         return {"sub": "admin", "role": "admin"}
@@ -344,6 +390,7 @@ async def require_auth(
     if api_key:
         user = _validate_api_key(api_key)
         if user:
+            _check_api_key_scope(user, request)
             return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from app.auth import require_auth
 
 if TYPE_CHECKING:
     from .plugin import SwarmCoordinationPlugin
@@ -43,7 +45,7 @@ def create_router(plugin: SwarmCoordinationPlugin) -> APIRouter:
         return {"swarms": plugin.list_swarms(), "count": len(plugin.list_swarms())}
 
     @router.post("/swarms", status_code=201)
-    async def create_swarm(req: SwarmCreateRequest):
+    async def create_swarm(req: SwarmCreateRequest, user: dict = Depends(require_auth)):
         swarm = plugin.create_swarm(req.name, req.formation, req.spacing)
         return {"swarm": swarm.to_dict()}
 
@@ -55,13 +57,13 @@ def create_router(plugin: SwarmCoordinationPlugin) -> APIRouter:
         return {"swarm": swarm.to_dict()}
 
     @router.delete("/swarms/{swarm_id}")
-    async def delete_swarm(swarm_id: str):
+    async def delete_swarm(swarm_id: str, user: dict = Depends(require_auth)):
         if not plugin.delete_swarm(swarm_id):
             raise HTTPException(status_code=404, detail="Swarm not found")
         return {"deleted": True, "swarm_id": swarm_id}
 
     @router.post("/swarms/{swarm_id}/members", status_code=201)
-    async def add_member(swarm_id: str, req: MemberAddRequest):
+    async def add_member(swarm_id: str, req: MemberAddRequest, user: dict = Depends(require_auth)):
         swarm = plugin.get_swarm(swarm_id)
         if swarm is None:
             raise HTTPException(status_code=404, detail="Swarm not found")
@@ -71,7 +73,7 @@ def create_router(plugin: SwarmCoordinationPlugin) -> APIRouter:
         return {"member": member}
 
     @router.delete("/swarms/{swarm_id}/members/{member_id}")
-    async def remove_member(swarm_id: str, member_id: str):
+    async def remove_member(swarm_id: str, member_id: str, user: dict = Depends(require_auth)):
         swarm = plugin.get_swarm(swarm_id)
         if swarm is None:
             raise HTTPException(status_code=404, detail="Swarm not found")
@@ -80,7 +82,7 @@ def create_router(plugin: SwarmCoordinationPlugin) -> APIRouter:
         return {"removed": True, "member_id": member_id}
 
     @router.post("/swarms/{swarm_id}/command")
-    async def issue_command(swarm_id: str, req: SwarmCommandRequest):
+    async def issue_command(swarm_id: str, req: SwarmCommandRequest, user: dict = Depends(require_auth)):
         result = plugin.issue_command(
             swarm_id, req.command,
             waypoints=req.waypoints,

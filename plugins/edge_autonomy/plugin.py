@@ -112,12 +112,23 @@ class EdgeAutonomyPlugin(PluginInterface):
     # -- Public API --------------------------------------------------------
 
     def receive_decision(self, decision: dict) -> dict:
-        """Process an autonomous decision from an edge device."""
+        """Process an autonomous decision from an edge device.
+
+        Validates and clamps confidence to [0.0, 1.0] to prevent injection
+        of artificially high confidence values that would bypass review.
+        """
         decision_id = decision.get("decision_id", f"auto_{int(time.time()*1000)}_{self._total_received}")
         decision["decision_id"] = decision_id
         decision.setdefault("sc_override", "pending")
         decision.setdefault("created_at", time.time())
         decision.setdefault("confidence", 0.5)
+
+        # Clamp confidence to valid range — prevents injection of
+        # confidence >= 0.9 to auto-confirm malicious decisions
+        try:
+            decision["confidence"] = max(0.0, min(1.0, float(decision["confidence"])))
+        except (ValueError, TypeError):
+            decision["confidence"] = 0.5
 
         self._decisions[decision_id] = decision
         self._total_received += 1

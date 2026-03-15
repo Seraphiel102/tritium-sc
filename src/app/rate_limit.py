@@ -3,9 +3,18 @@
 # Licensed under AGPL-3.0 — see LICENSE for details.
 """Rate limiting middleware for production deployment.
 
-Uses a sliding window counter per IP address. Only active when
-rate_limit_enabled=True in config. Exempt paths include WebSocket
-and health check endpoints.
+Uses a sliding window counter per IP address AND per authenticated user.
+Only active when rate_limit_enabled=True in config. Exempt paths include
+WebSocket and health check endpoints.
+
+When auth is enabled, authenticated users are rate-limited by their user
+identity (JWT sub or API key name) instead of IP. Different roles get
+different rate limits:
+
+    admin:    unlimited (no rate limit)
+    operator: 100 requests/minute
+    observer: 30 requests/minute
+    default:  same as config rate_limit_requests/window
 """
 
 import time
@@ -34,9 +43,16 @@ EXEMPT_PREFIXES = (
     "/ws/",
 )
 
+# Per-role rate limits (requests per minute). None = unlimited.
+ROLE_RATE_LIMITS: dict[str, Optional[int]] = {
+    "admin": None,       # Unlimited
+    "operator": 100,     # 100/min
+    "observer": 30,      # 30/min
+}
+
 
 class RateLimitEntry:
-    """Sliding window rate limit tracker for a single IP."""
+    """Sliding window rate limit tracker for a single key (IP or user)."""
 
     __slots__ = ("requests", "window_start")
 
@@ -60,8 +76,53 @@ class RateLimitEntry:
         return self.requests <= max_requests, remaining
 
 
+def _extract_user_from_request(request: Request) -> Optional[dict]:
+    """Try to extract authenticated user info from the request without
+    full auth dependency resolution. Checks JWT and API key headers.
+
+    Returns dict with 'sub' and 'role' keys, or None if unauthenticated.
+    This is a lightweight check — it does NOT enforce auth, just peeks
+    at credentials for rate-limit keying purposes.
+    """
+    if not settings.auth_enabled:
+        return None
+
+    # Check API key header
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        try:
+            from app.auth import _validate_api_key
+            user = _validate_api_key(api_key)
+            if user:
+                return user
+        except Exception:
+            pass
+
+    # Check Bearer token
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            from app.auth import decode_token
+            payload = decode_token(token)
+            return {"sub": payload.get("sub", ""), "role": payload.get("role", "user")}
+        except Exception:
+            pass
+
+    return None
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Rate limiting middleware using per-IP sliding window counters."""
+    """Rate limiting middleware using per-IP and per-user sliding window counters.
+
+    When auth is enabled and a valid token/API key is present:
+      - Rate limit key = "user:{sub}" instead of IP
+      - Rate limit = role-based (admin=unlimited, operator=100/min, observer=30/min)
+
+    When auth is disabled or request is unauthenticated:
+      - Rate limit key = IP address (original behavior)
+      - Rate limit = configured default
+    """
 
     def __init__(self, app, max_requests: int = 100, window_seconds: int = 60):
         super().__init__(app)
@@ -80,20 +141,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in EXEMPT_PATHS or path.startswith(EXEMPT_PREFIXES):
             return await call_next(request)
 
-        # Get client IP
-        client_ip = self._get_client_ip(request)
-        entry = self._entries[client_ip]
+        # Determine rate limit key and max requests
+        rate_key, max_reqs = self._resolve_rate_key(request)
 
-        allowed, remaining = entry.check(self.max_requests, self.window_seconds)
+        # Admin role = unlimited
+        if max_reqs is None:
+            response = await call_next(request)
+            response.headers["X-RateLimit-Limit"] = "unlimited"
+            response.headers["X-RateLimit-Remaining"] = "unlimited"
+            return response
+
+        entry = self._entries[rate_key]
+        allowed, remaining = entry.check(max_reqs, self.window_seconds)
 
         if not allowed:
-            logger.warning(f"Rate limit exceeded for {client_ip} on {path}")
+            logger.warning(f"Rate limit exceeded for {rate_key} on {path}")
             return Response(
                 content='{"detail": "Rate limit exceeded. Try again later."}',
                 status_code=429,
                 media_type="application/json",
                 headers={
-                    "X-RateLimit-Limit": str(self.max_requests),
+                    "X-RateLimit-Limit": str(max_reqs),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(int(entry.window_start + self.window_seconds)),
                     "Retry-After": str(self.window_seconds),
@@ -103,7 +171,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # Add rate limit headers
-        response.headers["X-RateLimit-Limit"] = str(self.max_requests)
+        response.headers["X-RateLimit-Limit"] = str(max_reqs)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
 
         # Periodic cleanup of stale entries
@@ -113,6 +181,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleanup_counter = 0
 
         return response
+
+    def _resolve_rate_key(self, request: Request) -> tuple[str, Optional[int]]:
+        """Determine rate limit key and max requests for this request.
+
+        Returns:
+            (rate_key, max_requests) where max_requests=None means unlimited.
+        """
+        # Try to extract authenticated user
+        user = _extract_user_from_request(request)
+
+        if user and user.get("sub"):
+            role = user.get("role", "user")
+            sub = user["sub"]
+            rate_key = f"user:{sub}"
+
+            # Role-based rate limit
+            role_limit = ROLE_RATE_LIMITS.get(role)
+            if role in ROLE_RATE_LIMITS:
+                return rate_key, role_limit  # None for admin = unlimited
+            else:
+                # Unknown role — use default
+                return rate_key, self.max_requests
+
+        # Fall back to IP-based
+        client_ip = self._get_client_ip(request)
+        return f"ip:{client_ip}", self.max_requests
 
     def _get_client_ip(self, request: Request) -> str:
         """Get client IP from request, respecting X-Forwarded-For."""
@@ -125,8 +219,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """Remove stale rate limit entries."""
         now = time.monotonic()
         stale = [
-            ip for ip, entry in self._entries.items()
+            key for key, entry in self._entries.items()
             if (now - entry.window_start) > self.window_seconds * 2
         ]
-        for ip in stale:
-            del self._entries[ip]
+        for key in stale:
+            del self._entries[key]

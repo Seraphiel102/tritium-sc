@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 92: Security Hardening + API Scoping
+
+| Change | Verification |
+|--------|-------------|
+| Per-user rate limiting in rate_limit.py — role-based limits (admin: unlimited, operator: 100/min, observer: 30/min) when auth enabled | Unit Tested (13 tests) |
+| API key scoping in auth.py — keys created with scope "full", "read-only", or "admin"; read-only blocked from write methods | Unit Tested (26 tests) |
+| Auth added to swarm_coordination, edge_autonomy, and automation plugin routes (all write endpoints) | Code Review |
+| Regex ReDoS mitigation in automation rules — pattern length cap + compile validation | Code Review |
+| Edge autonomy confidence clamping — prevents auto-confirm via injected high-confidence values | Code Review |
+
 ## 2026-03-14 — Wave 91: Swarm Intelligence + Edge Autonomy
 
 | Change | Verification |
