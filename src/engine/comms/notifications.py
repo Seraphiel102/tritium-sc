@@ -56,6 +56,10 @@ class NotificationManager:
             "severity": "warning",
             "title": "Geofence Entry",
         },
+        "geofence:exit": {
+            "severity": "info",
+            "title": "Geofence Exit",
+        },
         "threat_escalation": {
             "severity": "critical",
             "title": "Threat Escalation",
@@ -207,8 +211,21 @@ class NotificationManager:
 
             cfg = self.AUTO_EVENTS[event_type]
             title = data.get("title", cfg["title"])
-            message = data.get("message", str(data))
-            severity = data.get("severity", cfg["severity"])
+            # Build descriptive message for geofence events
+            if event_type in ("geofence:enter", "geofence:exit") and "message" not in data:
+                zone_name = data.get("zone_name", "unknown zone")
+                zone_type = data.get("zone_type", "monitored")
+                target_id = data.get("target_id", "unknown")
+                action = "entered" if event_type == "geofence:enter" else "exited"
+                message = f"Target {target_id} {action} {zone_type} zone '{zone_name}'"
+                # Upgrade severity for restricted zones
+                if zone_type == "restricted" and event_type == "geofence:enter":
+                    severity = "critical"
+                else:
+                    severity = data.get("severity", cfg["severity"])
+            else:
+                message = data.get("message", str(data))
+                severity = data.get("severity", cfg["severity"])
             source = data.get("source", event_type)
             entity_id = data.get("entity_id") or data.get("target_id")
 

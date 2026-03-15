@@ -7,9 +7,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api", tags=["targets"])
+
+
+class TagRequest(BaseModel):
+    """Alliance tag update for a target."""
+    alliance: str  # friendly, hostile, unknown, vip
 
 
 def _get_tracker(request: Request):
@@ -104,6 +110,66 @@ async def get_friendlies(request: Request):
         return {"targets": [t.to_dict() for t in targets]}
 
     return {"targets": []}
+
+
+VALID_ALLIANCES = {"friendly", "hostile", "unknown", "vip", "neutral"}
+
+
+@router.post("/targets/{target_id}/tag")
+async def tag_target(request: Request, target_id: str, body: TagRequest):
+    """Tag a target with an alliance (friendly, hostile, unknown, vip).
+
+    Updates the live TargetTracker immediately. UX Loop 6: Investigate a Target.
+    """
+    if body.alliance not in VALID_ALLIANCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid alliance '{body.alliance}'. Must be one of: {sorted(VALID_ALLIANCES)}",
+        )
+
+    tracker = _get_tracker(request)
+    if tracker is None:
+        raise HTTPException(status_code=503, detail="Target tracker not available")
+
+    target = tracker.get_target(target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Target not found: {target_id}")
+
+    old_alliance = target.alliance
+    target.alliance = body.alliance
+
+    # Persist in dossier if available
+    dossier_mgr = getattr(request.app.state, "dossier_manager", None)
+    if dossier_mgr is not None:
+        try:
+            dossier_mgr.add_note(
+                target_id,
+                f"Alliance tagged: {old_alliance} -> {body.alliance}",
+            )
+            dossier_mgr.update_field(target_id, "alliance", body.alliance)
+        except Exception:
+            pass
+
+    # Broadcast via WebSocket
+    try:
+        from app.routers.ws import manager as ws_manager
+        await ws_manager.broadcast({
+            "type": "target_tagged",
+            "data": {
+                "target_id": target_id,
+                "alliance": body.alliance,
+                "old_alliance": old_alliance,
+            },
+        })
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "target_id": target_id,
+        "alliance": body.alliance,
+        "old_alliance": old_alliance,
+    }
 
 
 @router.get("/targets/{target_id}/trail")

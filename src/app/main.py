@@ -1077,6 +1077,20 @@ async def lifespan(app: FastAPI):
         logger.warning(f"NotificationManager failed to start: {e}")
         notification_manager = None
 
+    # Wire geofence engine to EventBus so enter/exit events reach notifications
+    try:
+        from app.routers.geofence import get_engine as _get_geofence_engine, set_engine as _set_geofence_engine
+        from engine.tactical.geofence import GeofenceEngine as _GeofenceEngine
+        _geo_bus = amy_instance.event_bus if amy_instance else (
+            sim_engine.event_bus if sim_engine is not None else None
+        )
+        _geofence_eng = _GeofenceEngine(event_bus=_geo_bus)
+        _set_geofence_engine(_geofence_eng)
+        app.state.geofence_engine = _geofence_eng
+        logger.info("GeofenceEngine wired to EventBus")
+    except Exception as e:
+        logger.warning(f"GeofenceEngine wiring failed: {e}")
+
     # Plugin system — discover, configure, and start all plugins
     plugin_manager = _start_plugins(app, amy_instance, sim_engine)
     if plugin_manager is not None:

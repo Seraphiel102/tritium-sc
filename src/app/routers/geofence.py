@@ -143,6 +143,23 @@ async def create_zone(request: CreateGeoZoneRequest, _user: dict = Depends(requi
     return _zone_response(zone)
 
 
+@router.get("/zones/{zone_id}/occupants")
+async def get_zone_occupants(zone_id: str):
+    """Return target IDs currently inside a zone."""
+    engine = get_engine()
+    zone = engine.get_zone(zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    occupants = engine.get_zone_occupants(zone_id)
+    return {
+        "zone_id": zone_id,
+        "zone_name": zone.name,
+        "zone_type": zone.zone_type,
+        "occupant_count": len(occupants),
+        "occupants": occupants,
+    }
+
+
 @router.delete("/zones/{zone_id}")
 async def delete_zone(zone_id: str, _user: dict = Depends(require_auth)):
     """Delete a geofence zone."""

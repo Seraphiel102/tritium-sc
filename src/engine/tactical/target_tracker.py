@@ -111,6 +111,8 @@ class TrackedTarget:
     correlation_confidence: float = 0.0  # weighted correlation score from correlator
     velocity_suspicious: bool = False  # flagged if target teleported
     _last_velocity_flag: float = 0.0  # monotonic time of last velocity flag
+    classification: str = "unknown"  # RL/ML classification (person, vehicle, phone, etc.)
+    classification_confidence: float = 0.0  # confidence of the classification model
 
     @property
     def effective_confidence(self) -> float:
@@ -152,6 +154,8 @@ class TrackedTarget:
             "correlated_ids": list(self.correlated_ids),
             "correlation_confidence": self.correlation_confidence,
             "velocity_suspicious": self.velocity_suspicious,
+            "classification": self.classification,
+            "classification_confidence": self.classification_confidence,
         }
         if history is not None:
             d["trail"] = history.get_trail_dicts(self.target_id, max_points=20)
@@ -311,6 +315,8 @@ class TargetTracker:
                     position_confidence=0.1,
                     _initial_confidence=0.1,
                     confirming_sources={"yolo"},
+                    classification=class_name,
+                    classification_confidence=detection.get("confidence", 0.0),
                 )
         self.history.record(tid, (cx, cy))
 
@@ -370,6 +376,10 @@ class TargetTracker:
                 # Update asset_type if we got a specific classification
                 if asset_type != "ble_device":
                     t.asset_type = asset_type
+                # Update classification from sighting data (RL/ML model output)
+                if sighting.get("classification"):
+                    t.classification = sighting["classification"]
+                    t.classification_confidence = float(sighting.get("classification_confidence", 0.0))
             else:
                 self._targets[tid] = TrackedTarget(
                     target_id=tid,
@@ -383,6 +393,8 @@ class TargetTracker:
                     position_confidence=confidence,
                     _initial_confidence=confidence,
                     confirming_sources={"ble"},
+                    classification=sighting.get("classification", asset_type),
+                    classification_confidence=float(sighting.get("classification_confidence", 0.0)),
                 )
                 # Check if this is a returning target
                 self.reappearance_monitor.check_reappearance(

@@ -255,6 +255,14 @@ class GeofenceEngine:
         with self._lock:
             return self._target_zones.get(target_id, set()).copy()
 
+    def get_zone_occupants(self, zone_id: str) -> list[str]:
+        """Get target IDs currently inside a given zone."""
+        with self._lock:
+            return [
+                tid for tid, zones in self._target_zones.items()
+                if zone_id in zones
+            ]
+
     # ------------------------------------------------------------------
     # Event log
     # ------------------------------------------------------------------
