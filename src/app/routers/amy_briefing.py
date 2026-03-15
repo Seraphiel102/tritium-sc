@@ -8,13 +8,22 @@ target activity, fleet health, and threat assessment.  Uses local Ollama
 LLM if available, otherwise falls back to a structured template.
 
 Endpoints:
-    POST /api/amy/briefing   — generate a daily briefing
-    GET  /api/amy/briefing   — get most recent cached briefing
+    POST /api/amy/briefing        — generate a daily briefing
+    GET  /api/amy/briefing        — get most recent cached briefing
+    GET  /api/amy/briefing/config — get morning auto-trigger config
+    POST /api/amy/briefing/config — set morning auto-trigger config
+
+Morning briefing auto-trigger:
+    At a configurable hour (default 8 AM local), Amy automatically generates
+    and caches a daily briefing. Shown in the ops dashboard when operators
+    log in. Only one briefing per calendar day.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 import urllib.request
 import urllib.error
@@ -24,6 +33,8 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/amy", tags=["amy-briefing"])
 
 # Cache for the most recent briefing
@@ -31,8 +42,14 @@ _cached_briefing: dict | None = None
 _cached_at: float = 0.0
 _CACHE_TTL_S = 300.0  # 5 minutes
 
+# Morning briefing auto-trigger configuration
+_morning_briefing_hour: int = 8  # Default 8 AM local time
+_morning_briefing_enabled: bool = True
+_morning_briefing_task: asyncio.Task | None = None
+_last_morning_briefing_date: str = ""  # YYYY-MM-DD of last auto-generated
 
-def _gather_context(request: Request) -> dict:
+
+def _gather_context(request) -> dict:
     """Gather all context data for the briefing."""
     context: dict = {}
 
@@ -307,3 +324,154 @@ async def get_briefing(request: Request):
     _cached_at = time.time()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Morning briefing auto-trigger
+# ---------------------------------------------------------------------------
+
+
+@router.get("/briefing/config")
+async def get_briefing_config():
+    """Get the morning briefing auto-trigger configuration."""
+    return {
+        "enabled": _morning_briefing_enabled,
+        "hour": _morning_briefing_hour,
+        "last_auto_date": _last_morning_briefing_date,
+        "has_cached": _cached_briefing is not None,
+        "cached_at": _cached_at if _cached_briefing else None,
+    }
+
+
+@router.post("/briefing/config")
+async def set_briefing_config(
+    request: Request,
+    enabled: Optional[bool] = None,
+    hour: Optional[int] = None,
+):
+    """Configure the morning briefing auto-trigger.
+
+    Body (JSON):
+        enabled: Enable or disable auto-trigger
+        hour: Hour of day (0-23) for the auto-briefing
+    """
+    global _morning_briefing_enabled, _morning_briefing_hour
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    if enabled is not None:
+        _morning_briefing_enabled = enabled
+    elif "enabled" in body:
+        _morning_briefing_enabled = bool(body["enabled"])
+
+    if hour is not None:
+        _morning_briefing_hour = max(0, min(23, hour))
+    elif "hour" in body:
+        _morning_briefing_hour = max(0, min(23, int(body["hour"])))
+
+    return {
+        "enabled": _morning_briefing_enabled,
+        "hour": _morning_briefing_hour,
+    }
+
+
+async def _morning_briefing_loop(app) -> None:
+    """Background loop that auto-generates a briefing at the configured hour.
+
+    Checks once per minute whether it's time to generate a morning briefing.
+    Only generates one briefing per calendar day.
+    """
+    global _cached_briefing, _cached_at, _last_morning_briefing_date
+
+    log.info("Morning briefing auto-trigger started (hour=%d)", _morning_briefing_hour)
+
+    while True:
+        try:
+            await asyncio.sleep(60)  # check every minute
+
+            if not _morning_briefing_enabled:
+                continue
+
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+
+            # Already generated today?
+            if _last_morning_briefing_date == today:
+                continue
+
+            # Is it the right hour?
+            if now.hour != _morning_briefing_hour:
+                continue
+
+            log.info("Auto-generating morning briefing for %s", today)
+
+            # Build a minimal request-like object to gather context
+            class _FakeRequest:
+                def __init__(self, app_ref):
+                    self.app = app_ref
+
+            fake_req = _FakeRequest(app)
+            context = _gather_context(fake_req)
+
+            llm_text = _try_ollama_briefing(context)
+            source = "ollama" if llm_text else "template"
+            briefing_text = llm_text if llm_text else _template_briefing(context)
+
+            result = {
+                "briefing_id": f"AMY-BRIEF-{now.strftime('%Y%m%d-%H%M%S')}",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source": source,
+                "auto_generated": True,
+                "text": briefing_text,
+                "context_summary": {
+                    "threat_level": (context.get("sitrep") or {}).get("threat_level", "UNKNOWN"),
+                    "total_targets": (context.get("targets") or {}).get("total", 0),
+                    "new_targets_24h": (context.get("picture_of_day") or {}).get("new_targets", 0),
+                },
+            }
+
+            _cached_briefing = result
+            _cached_at = time.time()
+            _last_morning_briefing_date = today
+
+            log.info(
+                "Morning briefing generated: %s (source=%s)",
+                result["briefing_id"], source,
+            )
+
+        except asyncio.CancelledError:
+            log.info("Morning briefing loop cancelled")
+            break
+        except Exception as exc:
+            log.warning("Morning briefing loop error: %s", exc)
+            await asyncio.sleep(300)  # back off on error
+
+
+def start_morning_briefing(app) -> None:
+    """Start the morning briefing background task.
+
+    Called from app startup. Pass the FastAPI app instance.
+    """
+    global _morning_briefing_task
+
+    if _morning_briefing_task is not None:
+        return
+
+    _morning_briefing_task = asyncio.create_task(
+        _morning_briefing_loop(app)
+    )
+    log.info("Morning briefing task created")
+
+
+def stop_morning_briefing() -> None:
+    """Stop the morning briefing background task."""
+    global _morning_briefing_task
+
+    if _morning_briefing_task is not None:
+        _morning_briefing_task.cancel()
+        _morning_briefing_task = None
+        log.info("Morning briefing task stopped")
