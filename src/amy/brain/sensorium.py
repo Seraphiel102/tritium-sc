@@ -742,6 +742,12 @@ class Sensorium:
         if anomaly_ctx:
             header_lines.append(f"[{anomaly_ctx}]")
 
+        # Curiosity: unknown devices worth investigating
+        curiosity_ctx = self.curiosity_context()
+        if curiosity_ctx:
+            for cline in curiosity_ctx.split("\n"):
+                header_lines.append(f"[{cline.strip()}]")
+
         # Battlespace summary from target tracker
         if self._battlespace_fn is not None:
             try:
@@ -752,6 +758,67 @@ class Sensorium:
                 pass
 
         return "\n".join(header_lines + lines)
+
+    # ------------------------------------------------------------------
+    # Amy curiosity system — proactive investigation of unknown targets
+    # ------------------------------------------------------------------
+
+    def curiosity_targets(self, rssi_threshold: int = -70,
+                          max_results: int = 3) -> list[dict]:
+        """Return unknown BLE devices with strong signal worth investigating.
+
+        Amy should express curiosity about these in her inner monologue
+        and suggest investigation. Only returns devices that:
+        - Have no name (unknown)
+        - Have strong RSSI (above threshold, meaning they're close)
+        - Were recently detected (within last 60s)
+        """
+        snap = self.ble_snapshot
+        if snap.total == 0 or snap.age > 60:
+            return []
+
+        candidates = []
+        for dev in snap.devices:
+            name = dev.get("name", "")
+            rssi = dev.get("rssi", -100)
+            addr = dev.get("addr", "")
+            device_type = dev.get("type", "unknown")
+
+            # Only unknown/unnamed devices with strong signal
+            if not name and rssi >= rssi_threshold and addr:
+                candidates.append({
+                    "addr": addr,
+                    "rssi": rssi,
+                    "device_type": device_type,
+                    "signal_strength": "strong" if rssi > -50 else "moderate",
+                })
+
+        # Sort by signal strength (strongest first)
+        candidates.sort(key=lambda d: d["rssi"], reverse=True)
+        return candidates[:max_results]
+
+    def curiosity_context(self) -> str:
+        """Build a curiosity prompt for Amy's thinking loop.
+
+        Returns a string Amy can use in her inner monologue to express
+        curiosity about nearby unknown devices.
+        """
+        targets = self.curiosity_targets()
+        if not targets:
+            return ""
+
+        lines = ["CURIOSITY: Unknown devices detected nearby:"]
+        for t in targets:
+            addr_short = t["addr"][-8:]  # last 8 chars of MAC
+            lines.append(
+                f"  - Device {addr_short} ({t['signal_strength']} signal, "
+                f"RSSI {t['rssi']}dBm, type: {t['device_type']})"
+            )
+        lines.append(
+            "Consider: What kind of device is this? Is it a phone someone "
+            "is carrying? A new IoT device? Should we investigate?"
+        )
+        return "\n".join(lines)
 
     @property
     def event_count(self) -> int:

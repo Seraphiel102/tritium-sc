@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 95: Security + Confidence Decay + Amy Curiosity
+
+| Change | Verification |
+|--------|-------------|
+| TargetTracker confidence decay — exponential decay per source type (BLE 30s, YOLO 15s, mesh 120s, sim never) via _decayed_confidence() and effective_confidence property | Unit Tested (874 tactical tests passing) |
+| WebSocket chat handler — added HTML sanitization (tag strip + escape) to prevent message injection | Code reviewed |
+| WebSocket drawing handler — added bounds checking on points (max 5000), HTML escape on text/names, numeric clamping | Code reviewed |
+| Amy curiosity system — Sensorium.curiosity_targets() returns unknown BLE devices with strong RSSI, curiosity_context() builds prompt for thinking loop | Unit Tested |
+| Curiosity context wired into rich_narrative() header for Amy's inner monologue | Code reviewed |
+
 ## 2026-03-14 — Wave 94: Analytics Dashboard
 
 | Change | Verification |

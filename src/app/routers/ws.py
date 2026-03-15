@@ -344,19 +344,26 @@ async def _handle_drawing_update(websocket: WebSocket, message: dict) -> None:
     Broadcasts the drawing data to all other connected clients so they
     can render the drawing in real time on their maps.
     """
+    import html as _html
+
+    # Validate points length to prevent memory abuse
+    points = message.get("points", [])
+    if len(points) > 5000:
+        points = points[:5000]
+
     drawing_msg = {
         "type": "map_drawing_live",
-        "drawing_id": message.get("drawing_id", ""),
-        "operator_id": message.get("operator_id", ""),
-        "operator_name": message.get("operator_name", ""),
-        "color": message.get("color", "#00f0ff"),
-        "drawing_type": message.get("drawing_type", "freehand"),
-        "points": message.get("points", []),
-        "action": message.get("action", "stroke"),
+        "drawing_id": str(message.get("drawing_id", ""))[:20],
+        "operator_id": _html.escape(str(message.get("operator_id", ""))[:100]),
+        "operator_name": _html.escape(str(message.get("operator_name", ""))[:100]),
+        "color": str(message.get("color", "#00f0ff"))[:20],
+        "drawing_type": str(message.get("drawing_type", "freehand"))[:20],
+        "points": points,
+        "action": str(message.get("action", "stroke"))[:20],
         "radius": message.get("radius"),
-        "text": message.get("text"),
-        "line_width": message.get("line_width", 2.0),
-        "opacity": message.get("opacity", 0.8),
+        "text": _html.escape(str(message.get("text") or ""))[:200] or None,
+        "line_width": max(0.5, min(20.0, float(message.get("line_width", 2.0)))),
+        "opacity": max(0.0, min(1.0, float(message.get("opacity", 0.8)))),
         "timestamp": datetime.now(tz=None).isoformat(),
     }
     # Send to all clients except the sender
@@ -385,20 +392,28 @@ async def _handle_ws_chat(websocket: WebSocket, message: dict) -> None:
     Broadcasts the message to all connected clients including the sender
     (for confirmation), and logs to the chat history.
     """
+    import html as _html
+    import re as _re
+
     content = (message.get("content") or "").strip()
     if not content:
         return
+
+    # Sanitize: strip HTML tags and escape to prevent injection
+    _html_tag_re = _re.compile(r"<[^>]+>")
+    content = _html_tag_re.sub("", content)
+    content = _html.escape(content)[:2000]
 
     import time as _t
     chat_msg = {
         "type": "operator_chat",
         "data": {
             "message_id": str(uuid.uuid4())[:12],
-            "operator_id": message.get("operator_id", ""),
-            "operator_name": message.get("operator_name", ""),
-            "content": content[:2000],
+            "operator_id": _html.escape((message.get("operator_id") or "")[:100]),
+            "operator_name": _html.escape((message.get("operator_name") or "")[:100]),
+            "content": content,
             "message_type": message.get("message_type", "text"),
-            "channel": message.get("channel", "general"),
+            "channel": (message.get("channel") or "general")[:50],
             "timestamp": _t.time(),
         },
         "timestamp": datetime.now(tz=None).isoformat(),

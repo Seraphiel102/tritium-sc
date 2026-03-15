@@ -41,11 +41,40 @@ ThreatRecord separately.  The tracker only tracks *identity and position*.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass, field
 
 from .target_history import TargetHistory
+
+
+# ---------------------------------------------------------------------------
+# Confidence decay — exponential decay per source type
+# ---------------------------------------------------------------------------
+# half-life in seconds: after this time, confidence drops to 50%
+_HALF_LIVES: dict[str, float] = {
+    "ble": 30.0,
+    "wifi": 45.0,
+    "yolo": 15.0,
+    "rf_motion": 10.0,
+    "mesh": 120.0,
+    "simulation": 0.0,   # never decays
+    "manual": 300.0,
+}
+_MIN_CONFIDENCE = 0.05
+_LN2 = math.log(2)
+
+
+def _decayed_confidence(source: str, initial: float, elapsed: float) -> float:
+    """Compute exponentially decayed confidence."""
+    if elapsed <= 0.0:
+        return max(0.0, min(1.0, initial))
+    hl = _HALF_LIVES.get(source, 300.0)
+    if hl <= 0.0:
+        return max(0.0, min(1.0, initial))
+    decayed = initial * math.exp(-_LN2 / hl * elapsed)
+    return min(1.0, decayed) if decayed >= _MIN_CONFIDENCE else 0.0
 
 
 @dataclass
@@ -66,6 +95,14 @@ class TrackedTarget:
     position_source: str = "unknown"  # "gps", "simulation", "mqtt", "fixed", "yolo", "unknown"
     position_confidence: float = 0.0  # 0.0 = no confidence, 1.0 = high
     threat_score: float = 0.0  # 0.0 = no threat, 1.0 = maximum threat probability
+    _initial_confidence: float = 0.0  # stored at detection time for decay
+
+    @property
+    def effective_confidence(self) -> float:
+        """Position confidence with exponential time decay applied."""
+        elapsed = time.monotonic() - self.last_seen
+        initial = self._initial_confidence if self._initial_confidence > 0 else self.position_confidence
+        return _decayed_confidence(self.source, initial, elapsed)
 
     def to_dict(self, history: TargetHistory | None = None) -> dict:
         from .geo import local_to_latlng
@@ -86,7 +123,7 @@ class TrackedTarget:
             "source": self.source,
             "status": self.status,
             "position_source": self.position_source,
-            "position_confidence": self.position_confidence,
+            "position_confidence": self.effective_confidence,
             "threat_score": self.threat_score,
         }
         if history is not None:
@@ -142,6 +179,7 @@ class TargetTracker:
                     status=sim_data.get("status", "active"),
                     position_source="simulation",
                     position_confidence=1.0,
+                    _initial_confidence=1.0,
                 )
         self.history.record(tid, position)
 
@@ -205,6 +243,7 @@ class TargetTracker:
                     source="yolo",
                     position_source="yolo",
                     position_confidence=0.1,
+                    _initial_confidence=0.1,
                 )
         self.history.record(tid, (cx, cy))
 
@@ -255,6 +294,7 @@ class TargetTracker:
                 t = self._targets[tid]
                 t.last_seen = time.monotonic()
                 t.position_confidence = confidence
+                t._initial_confidence = confidence
                 if pos_source != "unknown":
                     t.position = position
                     t.position_source = pos_source
@@ -272,6 +312,7 @@ class TargetTracker:
                     source="ble",
                     position_source=pos_source,
                     position_confidence=confidence,
+                    _initial_confidence=confidence,
                 )
         # Only record position if we have a meaningful location
         if pos_source != "unknown":
@@ -304,6 +345,7 @@ class TargetTracker:
                 t = self._targets[tid]
                 t.position = position
                 t.position_confidence = confidence
+                t._initial_confidence = confidence
                 t.last_seen = time.monotonic()
                 t.status = f"motion:{direction}"
             else:
@@ -317,6 +359,7 @@ class TargetTracker:
                     source="rf_motion",
                     position_source="rf_pair_midpoint",
                     position_confidence=confidence,
+                    _initial_confidence=confidence,
                     status=f"motion:{direction}",
                 )
         self.history.record(tid, position)
