@@ -116,6 +116,7 @@ from app.routers.security_audit import router as security_audit_router
 from app.routers.dwell import router as dwell_router
 from app.routers.mesh_environment import router as mesh_environment_router
 from app.routers.target_groups import router as target_groups_router
+from app.routers.reid import router as reid_router
 
 
 # ---------------------------------------------------------------------------
@@ -1300,6 +1301,7 @@ app.include_router(security_audit_router)
 app.include_router(dwell_router)
 app.include_router(mesh_environment_router)
 app.include_router(target_groups_router)
+app.include_router(reid_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"

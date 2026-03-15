@@ -185,17 +185,53 @@ def _extract_wav_features(wav_path: str) -> Optional[tuple[str, list[float], flo
     Returns a tuple (label, mfcc_13, centroid, zcr, rms, bandwidth, duration_ms)
     or None if extraction fails. Label is empty string (caller must fill).
 
+    Security: validates file extension, resolves symlinks, checks file size,
+    and relies on Python's wave module for format validation.
+
     No numpy/scipy/librosa required -- pure stdlib.
     """
+    import os
     import struct
     import wave as wave_mod
 
+    # Security: validate file extension
+    if not wav_path.lower().endswith(".wav"):
+        logger.warning("Rejected non-WAV file: {}", wav_path)
+        return None
+
+    # Security: resolve symlinks and validate the path exists as a regular file
     try:
-        with wave_mod.open(wav_path, "rb") as wf:
+        real_path = os.path.realpath(wav_path)
+        if not os.path.isfile(real_path):
+            logger.warning("WAV path is not a regular file: {}", wav_path)
+            return None
+    except (OSError, ValueError):
+        return None
+
+    # Security: reject excessively large files (>100 MB) to prevent DoS
+    MAX_WAV_SIZE = 100 * 1024 * 1024
+    try:
+        file_size = os.path.getsize(real_path)
+        if file_size > MAX_WAV_SIZE:
+            logger.warning("WAV file too large ({} bytes): {}", file_size, wav_path)
+            return None
+        if file_size < 44:  # Minimum WAV header size
+            logger.warning("WAV file too small ({} bytes): {}", file_size, wav_path)
+            return None
+    except OSError:
+        return None
+
+    try:
+        with wave_mod.open(real_path, "rb") as wf:
             n_channels = wf.getnchannels()
             sample_width = wf.getsampwidth()
             framerate = wf.getframerate()
             n_frames = wf.getnframes()
+            # Security: reject unreasonable frame counts that could cause memory exhaustion
+            max_frames = MAX_WAV_SIZE // (n_channels * max(sample_width, 1))
+            if n_frames > max_frames:
+                logger.warning("WAV file has too many frames ({}): {}", n_frames, wav_path)
+                return None
             raw_data = wf.readframes(n_frames)
     except Exception:
         return None
@@ -292,7 +328,12 @@ def train_from_wav_directory(
     from pathlib import Path
 
     training_data: list[tuple[str, list[float], float, float, float, float, int]] = []
-    wav_path = Path(wav_dir)
+    wav_path = Path(wav_dir).resolve()
+
+    # Security: ensure the directory exists and is actually a directory
+    if not wav_path.is_dir():
+        logger.warning("WAV training directory does not exist: {}", wav_dir)
+        return training_data
 
     if metadata_csv:
         # ESC-50 style: CSV with filename, category
@@ -316,7 +357,17 @@ def train_from_wav_directory(
                     continue
 
                 filename = row.get("filename", "")
+                # Security: reject path traversal in CSV filenames
+                if ".." in filename or filename.startswith("/"):
+                    logger.warning("Rejected suspicious filename in CSV: {}", filename)
+                    continue
                 fpath = wav_path / filename
+                # Security: ensure resolved path stays under wav_path
+                try:
+                    fpath.resolve().relative_to(wav_path)
+                except ValueError:
+                    logger.warning("Path traversal attempt blocked: {}", filename)
+                    continue
                 if not fpath.exists():
                     continue
 

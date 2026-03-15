@@ -21,8 +21,10 @@ import time
 from collections import defaultdict
 from threading import Lock
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from app.auth import require_auth
 
 router = APIRouter(prefix="/api/lpr", tags=["lpr"])
 
@@ -101,10 +103,11 @@ def _check_watchlist(plate_text: str) -> dict | None:
 
 
 @router.post("/detect", response_model=PlateDetectionResponse)
-async def detect_plate(request: PlateDetectionRequest):
+async def detect_plate(request: PlateDetectionRequest, _user: dict = Depends(require_auth)):
     """Submit a plate detection from the LPR pipeline.
 
     Checks against watchlist and stores the detection.
+    Requires authentication.
     """
     normalized = _normalize_plate(request.plate_text)
     target_id = f"lpr_{normalized}"
@@ -225,8 +228,8 @@ async def get_stats():
 
 
 @router.post("/watchlist")
-async def add_to_watchlist(request: WatchlistAddRequest):
-    """Add a plate to the watchlist."""
+async def add_to_watchlist(request: WatchlistAddRequest, _user: dict = Depends(require_auth)):
+    """Add a plate to the watchlist. Requires authentication."""
     normalized = _normalize_plate(request.plate_text)
     entry = {
         "plate_text": request.plate_text,
@@ -247,8 +250,8 @@ async def add_to_watchlist(request: WatchlistAddRequest):
 
 
 @router.get("/watchlist")
-async def get_watchlist():
-    """Get all watchlist entries."""
+async def get_watchlist(_user: dict = Depends(require_auth)):
+    """Get all watchlist entries. Requires authentication."""
     with _watchlist_lock:
         entries = list(_watchlist.values())
     # Filter expired
@@ -261,8 +264,8 @@ async def get_watchlist():
 
 
 @router.delete("/watchlist/{plate}")
-async def remove_from_watchlist(plate: str):
-    """Remove a plate from the watchlist."""
+async def remove_from_watchlist(plate: str, _user: dict = Depends(require_auth)):
+    """Remove a plate from the watchlist. Requires authentication."""
     normalized = _normalize_plate(plate)
     with _watchlist_lock:
         if normalized in _watchlist:

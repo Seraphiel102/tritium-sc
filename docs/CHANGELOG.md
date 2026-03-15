@@ -14,6 +14,19 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 138: Security Audit + LPR Panel + ReID Matches Panel
+
+| Change | Verification |
+|--------|-------------|
+| SECURITY: LPR watchlist endpoints now require authentication (POST /watchlist, DELETE /watchlist/{plate}, GET /watchlist, POST /detect) via require_auth dependency | Code review + TestClient verified |
+| SECURITY: Acoustic classifier WAV training hardened — file extension validation, symlink resolution, 100MB size limit, path traversal protection in CSV filenames, minimum header size check | Code review |
+| New: LPR panel frontend — plate detections list, watchlist management (add/remove), plate search, alert indicators for watchlist hits, cyberpunk styled | Syntax checked |
+| New: ReID Matches panel frontend — cross-camera re-identification matches with similarity scores, camera sources, timestamps, dossier links, camera filter | Syntax checked |
+| New: /api/reid/matches and /api/reid/stats endpoints — ReID cross-camera match API | TestClient verified (200 OK) |
+| All 47 targeted tests passing (LPR router, acoustic classifier, WAV training, ReID store, ReID integration) | Unit Tested |
+
+---
+
 ## 2026-03-15 — Wave 133: Maintenance + Security — Geofence Node Position Fix
 
 | Change | Verification |

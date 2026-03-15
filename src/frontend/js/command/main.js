@@ -91,6 +91,8 @@ import { CommandHistoryPanelDef } from './panels/command-history.js';
 import { SecurityAuditPanelDef } from './panels/security-audit.js';
 import { DwellMonitorPanelDef } from './panels/dwell-monitor.js';
 import { FederationPanelDef } from './panels/federation.js';
+import { LprPanelDef } from './panels/lpr.js';
+import { ReIDMatchesPanelDef } from './panels/reid-matches.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -649,6 +651,8 @@ function initPanelSystem(container) {
     panelManager.register(SecurityAuditPanelDef);
     panelManager.register(DwellMonitorPanelDef);
     panelManager.register(FederationPanelDef);
+    panelManager.register(LprPanelDef);
+    panelManager.register(ReIDMatchesPanelDef);
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();
