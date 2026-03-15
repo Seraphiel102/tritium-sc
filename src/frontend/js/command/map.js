@@ -2470,16 +2470,30 @@ function _drawUnit(ctx, id, unit) {
     else if (type === 'rf_motion') iconType = 'rf_motion';
     else if (type === 'camera_detection' || type === 'detection') iconType = 'camera_detection';
 
-    // BLE confidence-based transparency: low confidence devices render faded
-    const isBle = iconType === 'ble_device';
-    if (isBle) {
-        const confidence = unit.confidence !== undefined ? unit.confidence : 1.0;
-        if (confidence < 0.3) {
-            ctx.globalAlpha = 0.3;
-        } else if (confidence < 0.6) {
-            ctx.globalAlpha = 0.6;
+    // Universal confidence-based transparency: targets with decaying confidence
+    // render faded/ghostly. High confidence = solid, low = transparent.
+    // Pulsing animation when confidence is actively decaying.
+    const confidence = unit.confidence !== undefined ? unit.confidence : 1.0;
+    const prevConfidence = unit._prevConfidence !== undefined ? unit._prevConfidence : confidence;
+    const isDecaying = confidence < prevConfidence || (confidence < 0.8 && confidence > 0);
+    let confidenceAlpha = 1.0;
+
+    if (confidence < 1.0) {
+        // Map confidence [0, 1] -> alpha [0.15, 1.0] for smooth fade
+        confidenceAlpha = 0.15 + confidence * 0.85;
+
+        // Pulsing effect when actively decaying
+        if (isDecaying && confidence < 0.8) {
+            const pulseFreq = 1.5 + (1.0 - confidence) * 2.0; // faster pulse at lower confidence
+            const pulse = Math.sin(performance.now() / 1000 * pulseFreq * Math.PI * 2) * 0.15;
+            confidenceAlpha = Math.max(0.1, confidenceAlpha + pulse);
         }
+
+        ctx.globalAlpha = confidenceAlpha;
     }
+
+    // Track previous confidence for decay detection
+    unit._prevConfidence = confidence;
 
     // Compute health ratio (0.0 = dead, 1.0 = full)
     let health = 1.0;
@@ -2492,8 +2506,23 @@ function _drawUnit(ctx, id, unit) {
     // Draw using procedural unit icons
     drawUnitIcon(ctx, iconType, alliance, smoothedHeading, sp.x, sp.y, scale, isSelected, health, isHovered);
 
-    // Reset alpha after BLE confidence fade
-    if (isBle) {
+    // Ghostly glow ring for low-confidence targets
+    if (confidence < 0.5 && confidence > 0) {
+        ctx.save();
+        ctx.globalAlpha = (0.5 - confidence) * 0.6;
+        ctx.strokeStyle = alliance === 'hostile' ? '#ff2a6d' : '#00f0ff';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        const glowRadius = scale * 18;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, glowRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    // Reset alpha after confidence fade
+    if (confidence < 1.0) {
         ctx.globalAlpha = 1.0;
     }
 
