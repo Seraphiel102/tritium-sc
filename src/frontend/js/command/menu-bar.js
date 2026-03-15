@@ -220,6 +220,25 @@ function _helpMenuItems() {
             const overlay = document.getElementById('help-overlay');
             if (overlay) overlay.hidden = !overlay.hidden;
         }},
+        { type: 'separator' },
+        { label: 'Conductor Dashboard', action: () => {
+            window.open(`${window.location.protocol}//${window.location.hostname}:9000`, '_blank');
+        }},
+        { label: 'Submit Feedback...', action: () => {
+            const text = prompt('Enter feedback or concern for the development system:');
+            if (text) {
+                fetch(`${window.location.protocol}//${window.location.hostname}:9000/api/goals`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                }).then(() => {
+                    EventBus.emit('toast:show', { message: 'Feedback submitted to Conductor', type: 'info' });
+                }).catch(() => {
+                    EventBus.emit('toast:show', { message: 'Conductor not available (port 9000)', type: 'alert' });
+                });
+            }
+        }},
+        { type: 'separator' },
         { label: 'About TRITIUM-SC', action: () => {
             EventBus.emit('toast:show', { message: 'TRITIUM-SC v0.1.0 -- Tactical Battlefield Management', type: 'info' });
         }},
