@@ -472,6 +472,11 @@ function _createMap(mapDiv) {
         // the next map click sends the coordinates back (Loop 8 drag-to-place)
         EventBus.on('camera:pick-location', _onCameraPickLocation);
 
+        // Target trail and correlation overlay events
+        EventBus.on('target:showTrail', _onShowTargetTrail);
+        EventBus.on('target:hideTrail', _onHideTargetTrail);
+        EventBus.on('target:showCorrelationLines', _onShowCorrelationLines);
+
         // Fetch cameras immediately on map load so markers appear without
         // needing to open the camera-feeds panel first.
         _fetchCamerasForMap();
@@ -3175,6 +3180,349 @@ function _updateEngagementLines() {
 }
 
 // ============================================================
+// Target Movement Trail Overlay (GeoJSON polyline from dossier)
+// ============================================================
+
+const TARGET_TRAIL_SOURCE = 'target-trail-source';
+const TARGET_TRAIL_LINE   = 'target-trail-line';
+const TARGET_TRAIL_DOTS   = 'target-trail-dots';
+
+// State for currently displayed trail
+const _trailState = {
+    targetId: null,
+    points: [],
+    alliance: 'unknown',
+};
+
+const ALLIANCE_TRAIL_COLORS = {
+    friendly: '#05ffa1',
+    hostile: '#ff2a6d',
+    unknown: '#00f0ff',
+};
+
+/**
+ * Show a target's movement trail on the map.
+ * Fetches trail from /api/targets/{id}/trail and draws a GeoJSON polyline.
+ * Emitted by dossier panel "SHOW TRAIL ON MAP" button.
+ * @param {Object} data - { targetId, alliance?, positions? }
+ */
+async function _onShowTargetTrail(data) {
+    if (!_state.map || !_state.initialized || !data || !data.targetId) return;
+
+    _trailState.targetId = data.targetId;
+    _trailState.alliance = data.alliance || 'unknown';
+
+    // Use provided positions (from dossier) or fetch from API
+    let trail = data.positions || [];
+    if (trail.length === 0) {
+        try {
+            const resp = await fetch(`/api/targets/${encodeURIComponent(data.targetId)}/trail?max_points=500`);
+            if (resp.ok) {
+                const result = await resp.json();
+                trail = result.trail || [];
+            }
+        } catch (_) { /* trail API unavailable */ }
+    }
+
+    if (trail.length === 0) {
+        console.log('[MAP-ML] No trail data for', data.targetId);
+        return;
+    }
+
+    _trailState.points = trail;
+    const lineColor = ALLIANCE_TRAIL_COLORS[_trailState.alliance] || '#00f0ff';
+
+    // Sort by timestamp
+    const sorted = [...trail].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    // Build GeoJSON LineString with per-segment opacity (newer = more opaque)
+    const lineCoords = [];
+    const dotFeatures = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+        const pt = sorted[i];
+        const gx = pt.x ?? pt.lng ?? 0;
+        const gy = pt.y ?? pt.lat ?? 0;
+        let lngLat;
+
+        // If lat/lng provided directly, use them; otherwise convert from game coords
+        if (pt.lat != null && pt.lng != null) {
+            lngLat = [pt.lng, pt.lat];
+        } else {
+            lngLat = _gameToLngLat(gx, gy);
+        }
+
+        lineCoords.push(lngLat);
+
+        // Dot opacity fades with age (index 0 = oldest, last = newest)
+        const alpha = 0.2 + 0.8 * (i / Math.max(1, sorted.length - 1));
+        const isLast = i === sorted.length - 1;
+
+        dotFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: lngLat },
+            properties: {
+                opacity: alpha,
+                radius: isLast ? 6 : 3,
+                color: lineColor,
+                isLatest: isLast ? 1 : 0,
+            },
+        });
+    }
+
+    // Line feature with gradient-like segments
+    const lineFeature = {
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: lineCoords },
+        properties: { color: lineColor },
+    };
+
+    const lineGeojson = { type: 'FeatureCollection', features: [lineFeature] };
+    const dotGeojson = { type: 'FeatureCollection', features: dotFeatures };
+
+    // Update or create the trail line layer
+    if (_state.map.getSource(TARGET_TRAIL_SOURCE)) {
+        _state.map.getSource(TARGET_TRAIL_SOURCE).setData(lineGeojson);
+    } else {
+        _state.map.addSource(TARGET_TRAIL_SOURCE, { type: 'geojson', data: lineGeojson });
+        _state.map.addLayer({
+            id: TARGET_TRAIL_LINE,
+            type: 'line',
+            source: TARGET_TRAIL_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 2.5,
+                'line-opacity': 0.7,
+            },
+            layout: {
+                'line-cap': 'round',
+                'line-join': 'round',
+            },
+        });
+    }
+
+    // Update or create the trail dots layer
+    const dotSourceId = TARGET_TRAIL_SOURCE + '-dots';
+    if (_state.map.getSource(dotSourceId)) {
+        _state.map.getSource(dotSourceId).setData(dotGeojson);
+    } else {
+        _state.map.addSource(dotSourceId, { type: 'geojson', data: dotGeojson });
+        _state.map.addLayer({
+            id: TARGET_TRAIL_DOTS,
+            type: 'circle',
+            source: dotSourceId,
+            paint: {
+                'circle-color': ['get', 'color'],
+                'circle-radius': ['get', 'radius'],
+                'circle-opacity': ['get', 'opacity'],
+                'circle-stroke-width': ['case', ['==', ['get', 'isLatest'], 1], 2, 0],
+                'circle-stroke-color': '#ffffff',
+            },
+        });
+    }
+
+    // Fly to the trail bounds
+    if (lineCoords.length > 1) {
+        const bounds = lineCoords.reduce(
+            (b, c) => [
+                [Math.min(b[0][0], c[0]), Math.min(b[0][1], c[1])],
+                [Math.max(b[1][0], c[0]), Math.max(b[1][1], c[1])],
+            ],
+            [[Infinity, Infinity], [-Infinity, -Infinity]]
+        );
+        _state.map.fitBounds(bounds, { padding: 60, maxZoom: 18, duration: 1000 });
+    }
+
+    EventBus.emit('toast:show', {
+        message: `Trail shown for ${data.targetId.substring(0, 12)} (${sorted.length} points)`,
+        type: 'info',
+    });
+}
+
+/**
+ * Hide the target movement trail from the map.
+ */
+function _onHideTargetTrail() {
+    if (!_state.map) return;
+    _trailState.targetId = null;
+    _trailState.points = [];
+
+    const empty = { type: 'FeatureCollection', features: [] };
+    if (_state.map.getSource(TARGET_TRAIL_SOURCE)) {
+        _state.map.getSource(TARGET_TRAIL_SOURCE).setData(empty);
+    }
+    const dotSourceId = TARGET_TRAIL_SOURCE + '-dots';
+    if (_state.map.getSource(dotSourceId)) {
+        _state.map.getSource(dotSourceId).setData(empty);
+    }
+}
+
+// ============================================================
+// Correlation Lines Overlay (GeoJSON lines between fused targets)
+// ============================================================
+
+const CORR_LINES_SOURCE = 'correlation-lines-source';
+const CORR_LINES_LAYER  = 'correlation-lines-layer';
+const CORR_LABELS_SOURCE = 'correlation-labels-source';
+const CORR_LABELS_LAYER  = 'correlation-labels-layer';
+
+const _corrLineState = {
+    lastFetch: 0,
+    fetchInterval: 5000,
+    lastHash: '',
+};
+
+/**
+ * Fetch correlations and draw lines between correlated targets on MapLibre.
+ * Called from the slow-tick overlay update cycle.
+ */
+async function _updateCorrelationLines() {
+    if (!_state.map || !_state.initialized) return;
+
+    const now = Date.now();
+    if (now - _corrLineState.lastFetch < _corrLineState.fetchInterval) return;
+    _corrLineState.lastFetch = now;
+
+    let records = [];
+    try {
+        const resp = await fetch('/api/correlations');
+        if (resp.ok) {
+            const data = await resp.json();
+            records = data.correlations || [];
+        }
+    } catch (_) { /* correlations API unavailable */ }
+
+    const features = [];
+    const labelFeatures = [];
+    const units = TritiumStore.units;
+
+    for (const corr of records) {
+        const idA = corr.primary_id || corr.target_a;
+        const idB = corr.secondary_id || corr.target_b;
+        const unitA = units.get(idA);
+        const unitB = units.get(idB);
+        if (!unitA || !unitB) continue;
+        const posA = unitA.position;
+        const posB = unitB.position;
+        if (!posA || !posB) continue;
+        if (posA.x === undefined || posB.x === undefined) continue;
+
+        const llA = _gameToLngLat(posA.x || 0, posA.y || 0);
+        const llB = _gameToLngLat(posB.x || 0, posB.y || 0);
+        const conf = corr.confidence || corr.score || 0;
+        const opacity = Math.max(0.2, conf);
+
+        // Color: high confidence = cyan, low = yellow
+        const color = conf > 0.7 ? '#00f0ff' : conf > 0.4 ? '#fcee0a' : '#ff8c00';
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [llA, llB] },
+            properties: { color, opacity: parseFloat(opacity.toFixed(2)) },
+        });
+
+        // Label at midpoint
+        const midLng = (llA[0] + llB[0]) / 2;
+        const midLat = (llA[1] + llB[1]) / 2;
+        labelFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [midLng, midLat] },
+            properties: { label: `${Math.round(conf * 100)}%`, color },
+        });
+    }
+
+    const lineGeojson = { type: 'FeatureCollection', features };
+    const labelGeojson = { type: 'FeatureCollection', features: labelFeatures };
+
+    // Check for changes
+    const hash = features.map(f =>
+        f.geometry.coordinates[0][0].toFixed(5) + ',' + f.properties.opacity
+    ).join(';');
+
+    if (hash === _corrLineState.lastHash) return;
+    _corrLineState.lastHash = hash;
+
+    // Update or create correlation line layer
+    if (_state.map.getSource(CORR_LINES_SOURCE)) {
+        _state.map.getSource(CORR_LINES_SOURCE).setData(lineGeojson);
+    } else {
+        _state.map.addSource(CORR_LINES_SOURCE, { type: 'geojson', data: lineGeojson });
+        _state.map.addLayer({
+            id: CORR_LINES_LAYER,
+            type: 'line',
+            source: CORR_LINES_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 1.5,
+                'line-opacity': ['get', 'opacity'],
+                'line-dasharray': [4, 4],
+            },
+        });
+    }
+
+    // Update or create correlation label layer
+    if (_state.map.getSource(CORR_LABELS_SOURCE)) {
+        _state.map.getSource(CORR_LABELS_SOURCE).setData(labelGeojson);
+    } else {
+        _state.map.addSource(CORR_LABELS_SOURCE, { type: 'geojson', data: labelGeojson });
+        _state.map.addLayer({
+            id: CORR_LABELS_LAYER,
+            type: 'symbol',
+            source: CORR_LABELS_SOURCE,
+            layout: {
+                'text-field': ['get', 'label'],
+                'text-size': 10,
+                'text-font': ['Open Sans Regular'],
+                'text-allow-overlap': true,
+            },
+            paint: {
+                'text-color': ['get', 'color'],
+                'text-halo-color': 'rgba(10, 10, 15, 0.9)',
+                'text-halo-width': 2,
+            },
+        });
+    }
+}
+
+/**
+ * Show correlation lines for a specific target on the map.
+ * Highlights lines involving this target more prominently.
+ * @param {Object} data - { targetId, correlatedIds: [{id, confidence}] }
+ */
+function _onShowCorrelationLines(data) {
+    if (!_state.map || !_state.initialized || !data || !data.targetId) return;
+
+    const units = TritiumStore.units;
+    const mainUnit = units.get(data.targetId);
+    if (!mainUnit || !mainUnit.position) return;
+
+    const mainLL = _gameToLngLat(mainUnit.position.x || 0, mainUnit.position.y || 0);
+    const features = [];
+    const correlatedIds = data.correlatedIds || [];
+
+    for (const corr of correlatedIds) {
+        const other = units.get(corr.id);
+        if (!other || !other.position) continue;
+        const otherLL = _gameToLngLat(other.position.x || 0, other.position.y || 0);
+        const conf = corr.confidence || 0;
+        const color = conf > 0.7 ? '#00f0ff' : conf > 0.4 ? '#fcee0a' : '#ff8c00';
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [mainLL, otherLL] },
+            properties: { color, opacity: Math.max(0.3, conf) },
+        });
+    }
+
+    if (features.length > 0) {
+        const geojson = { type: 'FeatureCollection', features };
+        if (_state.map.getSource(CORR_LINES_SOURCE)) {
+            _state.map.getSource(CORR_LINES_SOURCE).setData(geojson);
+        }
+    }
+}
+
+// ============================================================
 // Hostile Intel HUD (DOM overlay in bottom-left corner)
 // ============================================================
 
@@ -3634,6 +3982,7 @@ function _updateUnits() {
         _updateCoverPoints();
         _updateHostileIntel();
         _updateGeofenceZones();
+        _updateCorrelationLines();
 
         // Prune stale recentlyFired entries (>5s old)
         const pruneThreshold = performance.now() - 5000;
@@ -9012,6 +9361,8 @@ function _buildFovConePolygon(lng, lat, heading, fovAngle, rangeMeters) {
  * Fetch cameras from the REST API and emit cameras:changed so the map
  * renders camera markers.  Called on map load and when demo starts.
  */
+let _cameraGeoSynced = false;
+
 async function _fetchCamerasForMap() {
     try {
         const resp = await fetch('/api/camera-feeds/');
@@ -9019,16 +9370,56 @@ async function _fetchCamerasForMap() {
         const data = await resp.json();
         const cameras = Array.isArray(data) ? data : (data.cameras || data.feeds || []);
         if (cameras.length > 0) {
+            console.log(`[MAP-ML] Fetched ${cameras.length} camera(s) for map markers`);
             _onCamerasChanged({ cameras });
+
+            // When cameras first appear (e.g. demo mode started after page load),
+            // re-fetch geo reference in case demo mode updated it, then fly there.
+            if (!_cameraGeoSynced && _state.map) {
+                _cameraGeoSynced = true;
+                try {
+                    const geoResp = await fetch('/api/geo/reference');
+                    if (geoResp.ok) {
+                        const geoData = await geoResp.json();
+                        if (geoData.initialized && geoData.lat && geoData.lng) {
+                            const curCenter = _state.map.getCenter();
+                            const dist = Math.abs(curCenter.lat - geoData.lat) + Math.abs(curCenter.lng - geoData.lng);
+                            // Only fly if geo reference is significantly different from current center
+                            if (dist > 0.01) {
+                                console.log(`[MAP-ML] Geo reference changed, flying to ${geoData.lat.toFixed(4)}, ${geoData.lng.toFixed(4)}`);
+                                _state.geoCenter = { lat: geoData.lat, lng: geoData.lng };
+                                _state.map.flyTo({ center: [geoData.lng, geoData.lat], zoom: 17, duration: 1500 });
+                            }
+                        }
+                    }
+                } catch (_) { /* non-fatal */ }
+            }
         }
-    } catch (_) {
-        // Non-fatal — cameras just won't show on map
+    } catch (err) {
+        console.warn('[MAP-ML] Camera marker fetch/render failed:', err.message || err);
     }
 }
 
 function _onCamerasChanged(data) {
     if (!_state.map || !data || !data.cameras) return;
+    // Ensure the map style is ready to accept sources/layers.
+    // isStyleLoaded() can stay false forever if tiles fail to load,
+    // so we check getStyle() which returns the style object once parsed.
+    // If no style exists yet, defer with a retry.
+    try {
+        const style = _state.map.getStyle();
+        if (!style || !style.sources) {
+            console.log('[MAP-ML] Style not ready yet, deferring camera markers (retry in 2s)');
+            setTimeout(() => _onCamerasChanged(data), 2000);
+            return;
+        }
+    } catch (e) {
+        console.log('[MAP-ML] Style not ready yet, deferring camera markers (retry in 2s)');
+        setTimeout(() => _onCamerasChanged(data), 2000);
+        return;
+    }
     const cameras = data.cameras.filter(c => c.lat != null && c.lng != null);
+    if (cameras.length === 0) return;
     const geojson = {
         type: 'FeatureCollection',
         features: cameras.map(c => ({
@@ -9065,112 +9456,118 @@ function _onCamerasChanged(data) {
     });
     const fovGeojson = { type: 'FeatureCollection', features: fovFeatures };
 
-    if (_state.map.getSource(CAMERA_SOURCE_ID)) {
-        _state.map.getSource(CAMERA_SOURCE_ID).setData(geojson);
-    } else {
-        _state.map.addSource(CAMERA_SOURCE_ID, { type: 'geojson', data: geojson });
+    try {
+        if (_state.map.getSource(CAMERA_SOURCE_ID)) {
+            _state.map.getSource(CAMERA_SOURCE_ID).setData(geojson);
+        } else {
+            _state.map.addSource(CAMERA_SOURCE_ID, { type: 'geojson', data: geojson });
 
-        // Camera circle marker
-        _state.map.addLayer({
-            id: CAMERA_LAYER_CIRCLE,
-            type: 'circle',
-            source: CAMERA_SOURCE_ID,
-            paint: {
-                'circle-radius': 8,
-                'circle-color': [
-                    'match', ['get', 'status'],
-                    'streaming', '#05ffa1',
-                    'connecting', '#fcee0a',
-                    '#ff2a6d',
-                ],
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#00f0ff',
-                'circle-opacity': 0.85,
-            },
-        });
+            // Camera circle marker
+            _state.map.addLayer({
+                id: CAMERA_LAYER_CIRCLE,
+                type: 'circle',
+                source: CAMERA_SOURCE_ID,
+                paint: {
+                    'circle-radius': 8,
+                    'circle-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#05ffa1',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#00f0ff',
+                    'circle-opacity': 0.85,
+                },
+            });
 
-        // Camera label
-        _state.map.addLayer({
-            id: CAMERA_LAYER_LABEL,
-            type: 'symbol',
-            source: CAMERA_SOURCE_ID,
-            layout: {
-                'text-field': ['concat', 'CAM ', ['get', 'name']],
-                'text-size': 11,
-                'text-offset': [0, 1.4],
-                'text-anchor': 'top',
-                'text-font': ['Open Sans Semibold'],
-            },
-            paint: {
-                'text-color': '#00f0ff',
-                'text-halo-color': '#0a0a0f',
-                'text-halo-width': 1.5,
-            },
-        });
+            // Camera label
+            _state.map.addLayer({
+                id: CAMERA_LAYER_LABEL,
+                type: 'symbol',
+                source: CAMERA_SOURCE_ID,
+                layout: {
+                    'text-field': ['concat', 'CAM ', ['get', 'name']],
+                    'text-size': 11,
+                    'text-offset': [0, 1.4],
+                    'text-anchor': 'top',
+                    'text-font': ['Open Sans Semibold'],
+                },
+                paint: {
+                    'text-color': '#00f0ff',
+                    'text-halo-color': '#0a0a0f',
+                    'text-halo-width': 1.5,
+                },
+            });
 
-        // Click to fly and open camera panel
-        _state.map.on('click', CAMERA_LAYER_CIRCLE, (e) => {
-            if (e.features && e.features.length > 0) {
-                const props = e.features[0].properties;
-                const coords = e.features[0].geometry.coordinates;
-                _state.map.flyTo({ center: coords, zoom: 19, duration: 600 });
-                // Open the camera-feeds panel and focus on this camera
-                EventBus.emit('panel:request-open', { id: 'camera-feeds' });
-                setTimeout(() => {
-                    EventBus.emit('camera:selected', { id: props.id, name: props.name });
-                }, 200);
-            }
-        });
+            // Click to fly and open camera panel
+            _state.map.on('click', CAMERA_LAYER_CIRCLE, (e) => {
+                if (e.features && e.features.length > 0) {
+                    const props = e.features[0].properties;
+                    const coords = e.features[0].geometry.coordinates;
+                    _state.map.flyTo({ center: coords, zoom: 19, duration: 600 });
+                    // Open the camera-feeds panel and focus on this camera
+                    EventBus.emit('panel:request-open', { id: 'camera-feeds' });
+                    setTimeout(() => {
+                        EventBus.emit('camera:selected', { id: props.id, name: props.name });
+                    }, 200);
+                }
+            });
 
-        // Pointer cursor on hover
-        _state.map.on('mouseenter', CAMERA_LAYER_CIRCLE, () => {
-            _state.map.getCanvas().style.cursor = 'pointer';
-        });
-        _state.map.on('mouseleave', CAMERA_LAYER_CIRCLE, () => {
-            _state.map.getCanvas().style.cursor = '';
-        });
+            // Pointer cursor on hover
+            _state.map.on('mouseenter', CAMERA_LAYER_CIRCLE, () => {
+                _state.map.getCanvas().style.cursor = 'pointer';
+            });
+            _state.map.on('mouseleave', CAMERA_LAYER_CIRCLE, () => {
+                _state.map.getCanvas().style.cursor = '';
+            });
+        }
+
+        // FOV cone layer
+        if (_state.map.getSource(CAMERA_FOV_SOURCE_ID)) {
+            _state.map.getSource(CAMERA_FOV_SOURCE_ID).setData(fovGeojson);
+        } else {
+            _state.map.addSource(CAMERA_FOV_SOURCE_ID, { type: 'geojson', data: fovGeojson });
+
+            // Semi-transparent fill for FOV cone
+            _state.map.addLayer({
+                id: CAMERA_LAYER_FOV,
+                type: 'fill',
+                source: CAMERA_FOV_SOURCE_ID,
+                paint: {
+                    'fill-color': [
+                        'match', ['get', 'status'],
+                        'streaming', 'rgba(5, 255, 161, 0.12)',
+                        'connecting', 'rgba(252, 238, 10, 0.10)',
+                        'rgba(255, 42, 109, 0.08)',
+                    ],
+                    'fill-opacity': 0.7,
+                },
+            }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
+
+            // Outline for FOV cone
+            _state.map.addLayer({
+                id: CAMERA_LAYER_FOV_LINE,
+                type: 'line',
+                source: CAMERA_FOV_SOURCE_ID,
+                paint: {
+                    'line-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#05ffa1',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'line-width': 1,
+                    'line-opacity': 0.5,
+                    'line-dasharray': [4, 3],
+                },
+            }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
+        }
+    } catch (err) {
+        console.warn('[MAP-ML] Camera marker layer error:', err.message || err);
+        return;
     }
-
-    // FOV cone layer
-    if (_state.map.getSource(CAMERA_FOV_SOURCE_ID)) {
-        _state.map.getSource(CAMERA_FOV_SOURCE_ID).setData(fovGeojson);
-    } else {
-        _state.map.addSource(CAMERA_FOV_SOURCE_ID, { type: 'geojson', data: fovGeojson });
-
-        // Semi-transparent fill for FOV cone
-        _state.map.addLayer({
-            id: CAMERA_LAYER_FOV,
-            type: 'fill',
-            source: CAMERA_FOV_SOURCE_ID,
-            paint: {
-                'fill-color': [
-                    'match', ['get', 'status'],
-                    'streaming', 'rgba(5, 255, 161, 0.12)',
-                    'connecting', 'rgba(252, 238, 10, 0.10)',
-                    'rgba(255, 42, 109, 0.08)',
-                ],
-                'fill-opacity': 0.7,
-            },
-        }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
-
-        // Outline for FOV cone
-        _state.map.addLayer({
-            id: CAMERA_LAYER_FOV_LINE,
-            type: 'line',
-            source: CAMERA_FOV_SOURCE_ID,
-            paint: {
-                'line-color': [
-                    'match', ['get', 'status'],
-                    'streaming', '#05ffa1',
-                    'connecting', '#fcee0a',
-                    '#ff2a6d',
-                ],
-                'line-width': 1,
-                'line-opacity': 0.5,
-                'line-dasharray': [4, 3],
-            },
-        }, CAMERA_LAYER_CIRCLE); // insert below the circle layer
-    }
+    console.log(`[MAP-ML] Camera markers rendered: ${cameras.length} marker(s), ${fovFeatures.length} FOV cone(s)`);
 }
 
 // ── Camera Click-to-Place ───────────────────────────────────────────────

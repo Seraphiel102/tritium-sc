@@ -266,7 +266,10 @@ export const DossiersPanelDef = {
 
                     ${positions.length > 0 ? `
                     <div class="dossier-section">
-                        <div class="dossier-section-title">POSITION TRAIL</div>
+                        <div class="dossier-section-title" style="display:flex;align-items:center;gap:8px">
+                            POSITION TRAIL
+                            <button class="panel-action-btn panel-action-btn-sm dossier-show-trail-btn" data-action="show-trail-on-map" title="Show movement trail on tactical map">SHOW ON MAP</button>
+                        </div>
                         <canvas class="dossier-minimap" data-bind="dossier-minimap" width="280" height="140"></canvas>
                     </div>
                     ` : ''}
@@ -291,7 +294,10 @@ export const DossiersPanelDef = {
                     </div>
 
                     <div class="dossier-section">
-                        <div class="dossier-section-title">CORRELATIONS</div>
+                        <div class="dossier-section-title" style="display:flex;align-items:center;gap:8px">
+                            CORRELATIONS
+                            <button class="panel-action-btn panel-action-btn-sm dossier-show-corr-btn" data-action="show-corr-on-map" title="Show correlation lines on tactical map">SHOW ON MAP</button>
+                        </div>
                         <div class="dossier-correlations" data-bind="dossier-correlations">
                             <div class="dossier-dim">Loading correlations...</div>
                         </div>
@@ -416,6 +422,81 @@ export const DossiersPanelDef = {
             const mergeBtn = container.querySelector('[data-action="merge"]');
             if (mergeBtn) {
                 mergeBtn.addEventListener('click', () => _openMergeDialog(dossierId));
+            }
+
+            // Show Trail on Map button
+            const showTrailBtn = container.querySelector('[data-action="show-trail-on-map"]');
+            if (showTrailBtn && positions.length > 0) {
+                let trailVisible = false;
+                showTrailBtn.addEventListener('click', () => {
+                    if (trailVisible) {
+                        EventBus.emit('target:hideTrail', {});
+                        showTrailBtn.textContent = 'SHOW ON MAP';
+                        showTrailBtn.classList.remove('panel-action-btn-primary');
+                        trailVisible = false;
+                    } else {
+                        // Find the best target ID for this dossier
+                        const targetId = dossier.primary_target_id
+                            || (dossier.target_ids && dossier.target_ids[0])
+                            || dossierId;
+                        EventBus.emit('target:showTrail', {
+                            targetId: targetId,
+                            alliance: dossier.alliance || 'unknown',
+                            positions: positions,
+                        });
+                        showTrailBtn.textContent = 'HIDE TRAIL';
+                        showTrailBtn.classList.add('panel-action-btn-primary');
+                        trailVisible = true;
+                    }
+                });
+            }
+
+            // Show Correlations on Map button
+            const showCorrBtn = container.querySelector('[data-action="show-corr-on-map"]');
+            if (showCorrBtn) {
+                showCorrBtn.addEventListener('click', () => {
+                    const targetId = dossier.primary_target_id
+                        || (dossier.target_ids && dossier.target_ids[0])
+                        || dossierId;
+                    // Gather correlated IDs from linked targets + correlations
+                    const correlatedIds = [];
+                    const myIds = new Set();
+                    if (dossier.target_ids) dossier.target_ids.forEach(id => myIds.add(id));
+                    if (dossier.primary_target_id) myIds.add(dossier.primary_target_id);
+
+                    // Find linked targets from TritiumStore
+                    if (typeof TritiumStore !== 'undefined' && TritiumStore.units) {
+                        TritiumStore.units.forEach((unit, uid) => {
+                            if (myIds.has(uid)) return;
+                            const corrIds = unit.correlated_ids || [];
+                            for (const cid of corrIds) {
+                                if (myIds.has(cid)) {
+                                    correlatedIds.push({
+                                        id: uid,
+                                        confidence: unit.correlation_confidence || 0.5,
+                                    });
+                                    break;
+                                }
+                            }
+                        });
+                    }
+
+                    if (correlatedIds.length > 0) {
+                        EventBus.emit('target:showCorrelationLines', {
+                            targetId: targetId,
+                            correlatedIds: correlatedIds,
+                        });
+                        EventBus.emit('toast:show', {
+                            message: `Showing ${correlatedIds.length} correlation lines`,
+                            type: 'info',
+                        });
+                    } else {
+                        EventBus.emit('toast:show', {
+                            message: 'No correlated targets with positions found',
+                            type: 'alert',
+                        });
+                    }
+                });
             }
 
             // Position trail mini-map
@@ -553,7 +634,11 @@ export const DossiersPanelDef = {
                     _drawEmptyChart(ctx, w, h, 'No signal data available');
                     return;
                 }
-                _drawSignalSparkline(ctx, w, h, timeline);
+                const chartMeta = _drawSignalSparkline(ctx, w, h, timeline);
+                // Set up hover tooltip if chart drew successfully
+                if (chartMeta) {
+                    _setupSignalChartTooltip(canvas, chartMeta);
+                }
             } catch (_) {
                 _drawEmptyChart(ctx, w, h, 'Failed to load signal data');
             }
@@ -652,15 +737,27 @@ export const DossiersPanelDef = {
             ctx.textAlign = 'left';
             ctx.fillText(chartTitle, pad.left, 10);
 
-            // Time axis labels
+            // Time axis labels — relative times ("5m ago", "1m ago", "now")
             ctx.fillStyle = 'rgba(224, 224, 224, 0.3)';
             ctx.font = '7px monospace';
             ctx.textAlign = 'center';
-            const startDate = new Date(minTs * 1000);
-            const endDate = new Date(maxTs * 1000);
-            const fmt = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-            ctx.fillText(fmt(startDate), pad.left, h - 3);
-            ctx.fillText(fmt(endDate), w - pad.right, h - 3);
+            const nowTs = Date.now() / 1000;
+            const _relTime = (ts) => {
+                const diff = nowTs - ts;
+                if (diff < 5) return 'now';
+                if (diff < 60) return `${Math.round(diff)}s ago`;
+                if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+                if (diff < 86400) return `${(diff / 3600).toFixed(1)}h ago`;
+                return `${Math.round(diff / 86400)}d ago`;
+            };
+            // Draw 3-5 time labels along the x-axis
+            const numTimeLabels = Math.min(5, Math.max(3, Math.floor(plotW / 60)));
+            for (let i = 0; i < numTimeLabels; i++) {
+                const frac = i / (numTimeLabels - 1);
+                const ts = minTs + frac * tsRange;
+                const x = toX(ts);
+                ctx.fillText(_relTime(ts), x, h - 3);
+            }
 
             // Draw gradient fill under the sparkline
             const gradRgb = useRssi ? '0, 240, 255' : '5, 255, 161';
@@ -722,6 +819,90 @@ export const DossiersPanelDef = {
             }
 
             ctx.textAlign = 'start';
+
+            // Return chart metadata for tooltip
+            return { points, pad, minTs, maxTs, minVal, maxVal, tsRange, valRange, useRssi, unitLabel, chartColor, w, h };
+        }
+
+        /**
+         * Set up a hover tooltip on the signal chart canvas.
+         * Shows exact value and relative time at the cursor position.
+         */
+        function _setupSignalChartTooltip(canvas, meta) {
+            const { points, pad, minTs, tsRange, minVal, valRange, useRssi, unitLabel, w, h } = meta;
+            const plotW = w - pad.left - pad.right;
+            const plotH = h - pad.top - pad.bottom;
+
+            // Create tooltip element
+            let tooltip = canvas.parentElement.querySelector('.dossier-signal-tooltip');
+            if (!tooltip) {
+                tooltip = document.createElement('div');
+                tooltip.className = 'dossier-signal-tooltip';
+                tooltip.style.cssText = [
+                    'position: absolute',
+                    'pointer-events: none',
+                    'background: rgba(10, 10, 15, 0.92)',
+                    'border: 1px solid rgba(0, 240, 255, 0.3)',
+                    'padding: 3px 6px',
+                    'font-family: "JetBrains Mono", monospace',
+                    'font-size: 0.45rem',
+                    'color: #e0e0e0',
+                    'white-space: nowrap',
+                    'display: none',
+                    'z-index: 10',
+                    'border-radius: 2px',
+                ].join(';');
+                canvas.parentElement.style.position = 'relative';
+                canvas.parentElement.appendChild(tooltip);
+            }
+
+            const scaleX = canvas.offsetWidth / w;
+            const scaleY = canvas.offsetHeight / h;
+
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const mx = (e.clientX - rect.left) / scaleX;
+                const my = (e.clientY - rect.top) / scaleY;
+
+                // Check if within plot area
+                if (mx < pad.left || mx > w - pad.right || my < pad.top || my > pad.top + plotH) {
+                    tooltip.style.display = 'none';
+                    return;
+                }
+
+                // Map mouse X to timestamp
+                const hoverTs = minTs + ((mx - pad.left) / plotW) * tsRange;
+
+                // Find nearest point
+                let nearest = points[0];
+                let nearestDist = Infinity;
+                for (const p of points) {
+                    const d = Math.abs(p.ts - hoverTs);
+                    if (d < nearestDist) {
+                        nearestDist = d;
+                        nearest = p;
+                    }
+                }
+
+                // Relative time
+                const nowTs = Date.now() / 1000;
+                const diff = nowTs - nearest.ts;
+                let relLabel;
+                if (diff < 5) relLabel = 'now';
+                else if (diff < 60) relLabel = `${Math.round(diff)}s ago`;
+                else if (diff < 3600) relLabel = `${Math.round(diff / 60)}m ago`;
+                else if (diff < 86400) relLabel = `${(diff / 3600).toFixed(1)}h ago`;
+                else relLabel = `${Math.round(diff / 86400)}d ago`;
+
+                tooltip.textContent = `${nearest.value} ${unitLabel} | ${relLabel}`;
+                tooltip.style.display = 'block';
+                tooltip.style.left = `${e.clientX - rect.left + 8}px`;
+                tooltip.style.top = `${e.clientY - rect.top - 20}px`;
+            });
+
+            canvas.addEventListener('mouseleave', () => {
+                tooltip.style.display = 'none';
+            });
         }
 
         // ---------------------------------------------------------------
@@ -1119,14 +1300,51 @@ export const DossiersPanelDef = {
                 ${!corrHtml && !linkedHtml && !nearbyHtml && !idHtml ? '<div class="dossier-dim">No correlations found</div>' : ''}
             `;
 
-            // Wire linked target clicks — emit event to center map on target
+            // Wire linked target clicks — center map AND try to load dossier
             el.querySelectorAll('.dossier-linked-target').forEach(card => {
                 card.style.cursor = 'pointer';
-                card.addEventListener('click', () => {
+                card.addEventListener('click', async () => {
                     const tid = card.dataset.targetId;
-                    if (tid) {
-                        EventBus.emit('map:centerOnUnit', { id: tid });
-                    }
+                    if (!tid) return;
+                    // Center the map on this target
+                    EventBus.emit('map:centerOnUnit', { id: tid });
+                    // Try to find and load this target's dossier
+                    try {
+                        const resp = await fetch(`/api/dossiers/search?q=${encodeURIComponent(tid)}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            const results = data.results || [];
+                            if (results.length > 0) {
+                                loadDetail(results[0].dossier_id);
+                                EventBus.emit('toast:show', {
+                                    message: `Navigated to dossier for ${tid.substring(0, 12)}`,
+                                    type: 'info',
+                                });
+                            }
+                        }
+                    } catch (_) { /* dossier search unavailable */ }
+                });
+            });
+
+            // Wire confirmed correlation cards to also be clickable for navigation
+            el.querySelectorAll('.dossier-corr-card:not(.dossier-linked-target):not(.dossier-corr-candidate)').forEach(card => {
+                const idEl = card.querySelector('.dossier-corr-id');
+                if (!idEl) return;
+                const otherId = idEl.textContent.trim();
+                if (!otherId) return;
+                card.style.cursor = 'pointer';
+                card.addEventListener('click', async () => {
+                    EventBus.emit('map:centerOnUnit', { id: otherId });
+                    try {
+                        const resp = await fetch(`/api/dossiers/search?q=${encodeURIComponent(otherId)}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            const results = data.results || [];
+                            if (results.length > 0) {
+                                loadDetail(results[0].dossier_id);
+                            }
+                        }
+                    } catch (_) { /* dossier search unavailable */ }
                 });
             });
         }
@@ -2009,6 +2227,27 @@ style.textContent = `
 .dossier-list::-webkit-scrollbar-thumb {
     background: rgba(0, 240, 255, 0.2);
     border-radius: 2px;
+}
+
+/* Show Trail / Show Correlations buttons in section headers */
+.dossier-show-trail-btn,
+.dossier-show-corr-btn {
+    font-size: 0.4rem !important;
+    padding: 1px 6px !important;
+    line-height: 1.4;
+    letter-spacing: 0.03em;
+}
+
+/* Clickable correlation cards */
+.dossier-corr-card[style*="cursor: pointer"]:hover,
+.dossier-linked-target:hover {
+    background: rgba(0, 240, 255, 0.08);
+    border-color: rgba(0, 240, 255, 0.4);
+}
+
+/* Signal chart canvas hover */
+.dossier-signal-chart {
+    cursor: crosshair;
 }
 `;
 document.head.appendChild(style);
