@@ -175,6 +175,9 @@ const _state = {
     geofenceDrawing: false,
     geofenceVertices: [],  // [{x, y}, ...] in world coords
 
+    // Saved geofence polygon zones (from /api/geofence/zones)
+    geofencePolygonZones: [],
+
     // Night mode — auto-dim map between sunset and sunrise
     nightMode: false,
     nightModeAuto: true,       // auto-detect based on local time
@@ -356,6 +359,10 @@ export function initMap() {
 
     // Fetch initial zones
     _fetchZones();
+    _fetchGeofencePolygonZones();
+
+    // Refresh geofence polygon zones periodically (every 30s)
+    setInterval(_fetchGeofencePolygonZones, 30000);
 
     // Night mode — auto-detect based on local time
     _fetchSunTimes();
@@ -560,6 +567,9 @@ function _draw() {
 
     // Layer 4: Zones
     _drawZones(ctx);
+
+    // Layer 4.1: Geofence polygon zones (saved polygons from geofence API)
+    _drawGeofencePolygonZones(ctx);
 
     // Layer 4.3: Environmental hazards (fire, flood, roadblock)
     _drawHazards(ctx);
@@ -1004,6 +1014,76 @@ function _drawZones(ctx) {
 }
 
 // ============================================================
+// Layer 4.1: Geofence Polygon Zones (saved via /api/geofence/zones)
+// ============================================================
+
+const _GEOFENCE_ZONE_COLORS = {
+    restricted: { fill: 'rgba(255, 42, 109, 0.15)', stroke: '#ff2a6d', label: 'rgba(255, 42, 109, 0.8)' },
+    monitored:  { fill: 'rgba(0, 240, 255, 0.10)',  stroke: '#00f0ff', label: 'rgba(0, 240, 255, 0.8)' },
+    safe:       { fill: 'rgba(5, 255, 161, 0.10)',   stroke: '#05ffa1', label: 'rgba(5, 255, 161, 0.8)' },
+};
+
+function _drawGeofencePolygonZones(ctx) {
+    const zones = _state.geofencePolygonZones;
+    if (!zones || zones.length === 0) return;
+
+    for (const zone of zones) {
+        const pts = zone.polygon;
+        if (!pts || pts.length < 3) continue;
+
+        const colors = _GEOFENCE_ZONE_COLORS[zone.zone_type] || _GEOFENCE_ZONE_COLORS.monitored;
+
+        // Convert all polygon points to screen coords
+        const screenPts = pts.map(p => worldToScreen(p[0], p[1]));
+
+        // Fill
+        ctx.beginPath();
+        for (let i = 0; i < screenPts.length; i++) {
+            if (i === 0) ctx.moveTo(screenPts[i].x, screenPts[i].y);
+            else ctx.lineTo(screenPts[i].x, screenPts[i].y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = colors.fill;
+        ctx.fill();
+
+        // Stroke — solid border
+        ctx.beginPath();
+        for (let i = 0; i < screenPts.length; i++) {
+            if (i === 0) ctx.moveTo(screenPts[i].x, screenPts[i].y);
+            else ctx.lineTo(screenPts[i].x, screenPts[i].y);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = colors.stroke;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Vertex dots
+        for (const sp of screenPts) {
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = colors.stroke;
+            ctx.fill();
+        }
+
+        // Label at centroid
+        if (zone.name && _state.cam.zoom > 0.1) {
+            const cx = screenPts.reduce((s, p) => s + p.x, 0) / screenPts.length;
+            const cy = screenPts.reduce((s, p) => s + p.y, 0) / screenPts.length;
+            const fontSize = Math.max(9, 11 * Math.min(_state.cam.zoom, 2));
+            ctx.fillStyle = colors.label;
+            ctx.font = `bold ${fontSize}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(zone.name.toUpperCase(), cx, cy);
+
+            // Zone type subtitle
+            ctx.fillStyle = colors.label.replace('0.8', '0.4');
+            ctx.font = `${Math.max(7, 9 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.fillText(zone.zone_type.toUpperCase(), cx, cy + fontSize + 2);
+        }
+    }
+}
+
+// ============================================================
 // Layer 7.8: RF Motion Indicators
 // ============================================================
 
@@ -1116,7 +1196,7 @@ function _drawGeofenceOverlay(ctx) {
     ctx.font = `12px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     const cssW = _state.canvas.width / _state.dpr;
-    ctx.fillText(`DRAWING ZONE: ${verts.length} vertices — Enter to finish, Escape to cancel`, cssW / 2, 30);
+    ctx.fillText(`DRAWING ZONE: ${verts.length} vertices — Double-click or Enter to finish, Escape to cancel`, cssW / 2, 30);
 }
 
 // ============================================================
@@ -3873,6 +3953,17 @@ function _onDblClick(e) {
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
 
+    // Double-click finishes geofence drawing
+    if (_state.geofenceDrawing) {
+        // Add the final vertex at double-click position
+        const wp = screenToWorld(sx, sy);
+        _geofenceAddVertex(wp);
+        _geofenceFinish();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+    }
+
     const hitId = _hitTestUnit(sx, sy);
     if (hitId) {
         TritiumStore.set('map.selectedUnitId', hitId);
@@ -4555,7 +4646,7 @@ function _onGeofenceDrawStart() {
     _state.geofenceDrawing = true;
     _state.geofenceVertices = [];
     _state.canvas.style.cursor = 'crosshair';
-    console.log('[MAP] Geofence draw mode started — click to add vertices, Enter to finish, Escape to cancel');
+    console.log('[MAP] Geofence draw mode started — click to add vertices, double-click or Enter to finish, Escape to cancel');
 }
 
 function _geofenceAddVertex(worldPos) {
@@ -4568,10 +4659,113 @@ function _geofenceFinish() {
     _state.geofenceVertices = [];
     _state.canvas.style.cursor = 'crosshair';
     if (verts.length >= 3) {
-        EventBus.emit('geofence:zoneDrawn', { polygon: verts });
+        _showGeofencePrompt(verts);
     } else {
         EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a zone', type: 'alert' });
     }
+}
+
+/**
+ * Show a cyberpunk-styled prompt dialog for geofence zone name and type.
+ * On submit, emits geofence:zoneDrawn with polygon + name + zone_type.
+ */
+function _showGeofencePrompt(polygon) {
+    // Remove any existing prompt
+    const existing = document.getElementById('geofence-prompt-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'geofence-prompt-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:#0e0e14;border:1px solid #00f0ff;border-radius:4px;padding:20px;min-width:320px;max-width:400px;font-family:var(--font-mono,"JetBrains Mono",monospace);';
+    dialog.innerHTML = `
+        <div style="color:#00f0ff;font-size:14px;font-weight:bold;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px">
+            New Geofence Zone
+        </div>
+        <div style="margin-bottom:12px">
+            <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">ZONE NAME</label>
+            <input id="geofence-prompt-name" type="text" placeholder="e.g. Perimeter Alpha"
+                style="width:100%;box-sizing:border-box;background:#1a1a2e;border:1px solid #333;color:#fff;padding:8px 10px;font-size:13px;font-family:inherit;border-radius:2px;outline:none;"
+                autofocus />
+        </div>
+        <div style="margin-bottom:16px">
+            <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">ZONE TYPE</label>
+            <div style="display:flex;gap:6px">
+                <button class="geofence-type-btn" data-type="monitored"
+                    style="flex:1;padding:8px 4px;border:1px solid #00f0ff;background:#00f0ff22;color:#00f0ff;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    MONITORED</button>
+                <button class="geofence-type-btn" data-type="restricted"
+                    style="flex:1;padding:8px 4px;border:1px solid #444;background:transparent;color:#ff2a6d;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    RESTRICTED</button>
+                <button class="geofence-type-btn" data-type="safe"
+                    style="flex:1;padding:8px 4px;border:1px solid #444;background:transparent;color:#05ffa1;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    SAFE</button>
+            </div>
+        </div>
+        <div style="color:#555;font-size:10px;margin-bottom:14px">${polygon.length} vertices defined</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="geofence-prompt-cancel"
+                style="padding:8px 16px;border:1px solid #444;background:transparent;color:#888;font-size:12px;font-family:inherit;cursor:pointer;border-radius:2px">
+                CANCEL</button>
+            <button id="geofence-prompt-save"
+                style="padding:8px 16px;border:1px solid #00f0ff;background:#00f0ff22;color:#00f0ff;font-size:12px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                CREATE ZONE</button>
+        </div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    let selectedType = 'monitored';
+    const nameInput = dialog.querySelector('#geofence-prompt-name');
+    const typeBtns = dialog.querySelectorAll('.geofence-type-btn');
+    const saveBtn = dialog.querySelector('#geofence-prompt-save');
+    const cancelBtn = dialog.querySelector('#geofence-prompt-cancel');
+
+    // Type selection
+    typeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            selectedType = btn.dataset.type;
+            typeBtns.forEach(b => {
+                const active = b.dataset.type === selectedType;
+                const typeColors = { monitored: '#00f0ff', restricted: '#ff2a6d', safe: '#05ffa1' };
+                const c = typeColors[b.dataset.type] || '#00f0ff';
+                b.style.borderColor = active ? c : '#444';
+                b.style.background = active ? c + '22' : 'transparent';
+            });
+        });
+    });
+
+    function cleanup() { overlay.remove(); }
+
+    function submit() {
+        const name = (nameInput.value || '').trim() || 'Unnamed Zone';
+        EventBus.emit('geofence:zoneDrawn', { polygon, zone_type: selectedType, name });
+        cleanup();
+        // Refresh saved zones on map after a short delay for API to process
+        setTimeout(_fetchGeofencePolygonZones, 500);
+    }
+
+    saveBtn.addEventListener('click', submit);
+    cancelBtn.addEventListener('click', () => {
+        EventBus.emit('toast:show', { message: 'Zone creation cancelled', type: 'info' });
+        cleanup();
+    });
+
+    // Enter to submit, Escape to cancel
+    nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+    });
+
+    // Click outside to cancel
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) cleanup();
+    });
+
+    // Focus the input
+    setTimeout(() => nameInput.focus(), 50);
 }
 
 function _geofenceCancel() {
@@ -5269,6 +5463,22 @@ function _fetchZones() {
         })
         .catch(() => {
             // Zones not available -- non-fatal
+        });
+}
+
+function _fetchGeofencePolygonZones() {
+    fetch('/api/geofence/zones')
+        .then(r => {
+            if (!r.ok) return [];
+            return r.json();
+        })
+        .then(data => {
+            if (Array.isArray(data)) {
+                _state.geofencePolygonZones = data;
+            }
+        })
+        .catch(() => {
+            // Geofence zones not available -- non-fatal
         });
 }
 

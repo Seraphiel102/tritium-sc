@@ -179,10 +179,10 @@ export const GeofencePanelDef = {
         function drawZone() {
             // Emit event to start polygon drawing on the map
             EventBus.emit('geofence:drawZone', {});
-            EventBus.emit('toast:show', { message: 'Click map vertices, then press Enter to finish', type: 'info' });
+            EventBus.emit('toast:show', { message: 'Click to place vertices, double-click or Enter to finish, Escape to cancel', type: 'info' });
         }
 
-        // Listen for completed polygon from map
+        // Listen for completed polygon from map (includes name + zone_type from prompt)
         const onZoneDrawn = async (data) => {
             if (!data || !data.polygon || data.polygon.length < 3) return;
             try {
@@ -190,7 +190,7 @@ export const GeofencePanelDef = {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        name: `Zone ${zones.length + 1}`,
+                        name: data.name || `Zone ${zones.length + 1}`,
                         polygon: data.polygon,
                         zone_type: data.zone_type || 'monitored',
                         alert_on_enter: true,
@@ -199,7 +199,7 @@ export const GeofencePanelDef = {
                 });
                 if (resp.ok) {
                     fetchZones();
-                    EventBus.emit('toast:show', { message: 'Geofence zone created', type: 'info' });
+                    EventBus.emit('toast:show', { message: `Geofence zone "${data.name || 'Zone'}" created`, type: 'info' });
                 }
             } catch (_) {
                 EventBus.emit('toast:show', { message: 'Failed to create zone', type: 'alert' });
