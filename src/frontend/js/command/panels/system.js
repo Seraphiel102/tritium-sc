@@ -25,6 +25,9 @@ export const SystemPanelDef = {
                 <button class="sys-tab" data-tab="telemetry" role="tab">TELEMETRY</button>
                 <button class="sys-tab" data-tab="perf" role="tab">PERF</button>
                 <button class="sys-tab" data-tab="ai" role="tab">AI</button>
+                <button class="sys-tab" data-tab="readiness" role="tab">READY</button>
+                <button class="sys-tab" data-tab="ratelimits" role="tab">RATES</button>
+                <button class="sys-tab" data-tab="opsummary" role="tab">OPS</button>
             </div>
             <div class="sys-tab-content">
                 <div class="sys-tab-pane" data-pane="cameras" style="display:block">
@@ -82,6 +85,30 @@ export const SystemPanelDef = {
                     </div>
                     <div class="sys-ai-content" data-bind="ai-content">
                         <div class="panel-empty">Loading AI status...</div>
+                    </div>
+                </div>
+                <div class="sys-tab-pane" data-pane="readiness" style="display:none">
+                    <div class="sys-readiness-toolbar">
+                        <button class="panel-action-btn panel-action-btn-primary" data-action="refresh-readiness">REFRESH</button>
+                    </div>
+                    <div class="sys-readiness-content" data-bind="readiness-content">
+                        <div class="panel-empty">Loading readiness...</div>
+                    </div>
+                </div>
+                <div class="sys-tab-pane" data-pane="ratelimits" style="display:none">
+                    <div class="sys-ratelimits-toolbar">
+                        <button class="panel-action-btn panel-action-btn-primary" data-action="refresh-ratelimits">REFRESH</button>
+                    </div>
+                    <div class="sys-ratelimits-content" data-bind="ratelimits-content">
+                        <div class="panel-empty">Loading rate limits...</div>
+                    </div>
+                </div>
+                <div class="sys-tab-pane" data-pane="opsummary" style="display:none">
+                    <div class="sys-opsummary-toolbar">
+                        <button class="panel-action-btn panel-action-btn-primary" data-action="refresh-opsummary">REFRESH</button>
+                    </div>
+                    <div class="sys-opsummary-content" data-bind="opsummary-content">
+                        <div class="panel-empty">Loading ops summary...</div>
                     </div>
                 </div>
             </div>
@@ -424,12 +451,211 @@ export const SystemPanelDef = {
             }
         }
 
+        // --- Readiness tab ---
+        const readinessContent = bodyEl.querySelector('[data-bind="readiness-content"]');
+
+        async function fetchReadiness() {
+            if (!readinessContent) return;
+            readinessContent.innerHTML = '<div class="panel-empty">Loading...</div>';
+            try {
+                const resp = await fetch('/api/system/readiness');
+                if (!resp.ok) {
+                    readinessContent.innerHTML = '<div class="panel-empty">Readiness unavailable</div>';
+                    return;
+                }
+                const data = await resp.json();
+                let html = '';
+
+                // Overall status banner
+                const overallColor = data.overall === 'ready' ? 'var(--green)' : data.overall === 'partially_ready' ? 'var(--amber)' : 'var(--magenta)';
+                const overallLabel = (data.overall || 'unknown').toUpperCase().replace('_', ' ');
+                html += `<div class="panel-stat-row" style="margin-bottom:8px">
+                    <span class="panel-stat-label">STATUS</span>
+                    <span class="panel-stat-value" style="color:${overallColor};font-weight:bold">${_esc(overallLabel)} (${_esc(data.score || '')})</span>
+                </div>`;
+
+                // Per-item checklist
+                const items = data.items || [];
+                for (const item of items) {
+                    const color = item.status === 'green' ? 'var(--green)' : item.status === 'yellow' ? 'var(--amber)' : 'var(--magenta)';
+                    const dot = item.status === 'green' ? 'panel-dot-green' : item.status === 'yellow' ? 'panel-dot-amber' : 'panel-dot-red';
+                    html += `<div class="panel-stat-row">
+                        <span class="panel-dot ${dot}" style="margin-right:6px"></span>
+                        <span class="panel-stat-label" style="flex:1">${_esc((item.name || '').toUpperCase().replace(/_/g, ' '))}</span>
+                    </div>`;
+                    if (item.detail) {
+                        html += `<div style="padding-left:18px;font-size:0.45rem;color:var(--text-ghost);margin-bottom:4px">${_esc(item.detail)}</div>`;
+                    }
+                    if (item.hint) {
+                        html += `<div style="padding-left:18px;font-size:0.4rem;color:var(--cyan);margin-bottom:6px">TIP: ${_esc(item.hint)}</div>`;
+                    }
+                }
+
+                readinessContent.innerHTML = html || '<div class="panel-empty">No readiness data</div>';
+            } catch (_) {
+                readinessContent.innerHTML = '<div class="panel-empty">Readiness unavailable</div>';
+            }
+        }
+
+        // --- Rate Limits tab ---
+        const ratelimitsContent = bodyEl.querySelector('[data-bind="ratelimits-content"]');
+
+        async function fetchRateLimits() {
+            if (!ratelimitsContent) return;
+            ratelimitsContent.innerHTML = '<div class="panel-empty">Loading...</div>';
+            try {
+                const [dashResp, statusResp] = await Promise.all([
+                    fetch('/api/rate-limits/dashboard'),
+                    fetch('/api/rate-limits/status'),
+                ]);
+
+                let html = '';
+
+                // Status section
+                if (statusResp.ok) {
+                    const status = await statusResp.json();
+                    const enabledColor = status.enabled ? 'var(--green)' : 'var(--text-ghost)';
+                    html += `<div class="panel-section-label">CONFIGURATION</div>
+                        <div class="panel-stat-row">
+                            <span class="panel-stat-label">RATE LIMITING</span>
+                            <span class="panel-stat-value" style="color:${enabledColor}">${status.enabled ? 'ENABLED' : 'DISABLED'}</span>
+                        </div>`;
+                    if (status.enabled) {
+                        html += `<div class="panel-stat-row">
+                            <span class="panel-stat-label">MAX REQ/WINDOW</span>
+                            <span class="panel-stat-value mono">${status.max_requests_per_window || 0}</span>
+                        </div>
+                        <div class="panel-stat-row">
+                            <span class="panel-stat-label">WINDOW (s)</span>
+                            <span class="panel-stat-value mono">${status.window_seconds || 0}</span>
+                        </div>
+                        <div class="panel-stat-row">
+                            <span class="panel-stat-label">ACTIVE KEYS</span>
+                            <span class="panel-stat-value mono">${status.active_keys || 0}</span>
+                        </div>`;
+                    }
+                }
+
+                // Dashboard section — busiest endpoints
+                if (dashResp.ok) {
+                    const dash = await dashResp.json();
+                    const endpoints = dash.endpoints || [];
+                    html += `<div class="panel-section-label">TOP ENDPOINTS (${dash.window_minutes || 15}min)</div>`;
+                    if (endpoints.length === 0) {
+                        html += '<div class="panel-empty" style="padding:4px 0">No request data</div>';
+                    } else {
+                        html += `<div class="panel-stat-row" style="margin-bottom:2px">
+                            <span class="panel-stat-label">TOTAL REQUESTS</span>
+                            <span class="panel-stat-value mono">${dash.total_requests || 0}</span>
+                        </div>`;
+                        for (const ep of endpoints.slice(0, 15)) {
+                            const pctColor = (ep.rate_limit_pct || 0) > 80 ? 'var(--magenta)' : (ep.rate_limit_pct || 0) > 50 ? 'var(--amber)' : 'var(--green)';
+                            const errCount = (ep.errors_4xx || 0) + (ep.errors_5xx || 0);
+                            const errBadge = errCount > 0 ? ` <span style="color:var(--magenta)">${errCount}err</span>` : '';
+                            html += `<div class="panel-stat-row">
+                                <span class="panel-stat-label mono" style="font-size:0.4rem;flex:2">${_esc(ep.method || '')} ${_esc(ep.path || '')}</span>
+                                <span class="panel-stat-value mono" style="font-size:0.4rem;color:${pctColor}">${ep.request_count || 0} (${ep.avg_response_ms || 0}ms)${errBadge}</span>
+                            </div>`;
+                        }
+                    }
+                } else {
+                    html += '<div class="panel-empty">Rate limit dashboard unavailable (auth required)</div>';
+                }
+
+                ratelimitsContent.innerHTML = html || '<div class="panel-empty">Rate limit data unavailable</div>';
+            } catch (_) {
+                ratelimitsContent.innerHTML = '<div class="panel-empty">Rate limit data unavailable</div>';
+            }
+        }
+
+        // --- Ops Summary tab (Picture of the Day) ---
+        const opsummaryContent = bodyEl.querySelector('[data-bind="opsummary-content"]');
+
+        async function fetchOpsSummary() {
+            if (!opsummaryContent) return;
+            opsummaryContent.innerHTML = '<div class="panel-empty">Loading...</div>';
+            try {
+                const resp = await fetch('/api/picture-of-day');
+                if (!resp.ok) {
+                    opsummaryContent.innerHTML = '<div class="panel-empty">Ops summary unavailable</div>';
+                    return;
+                }
+                const data = await resp.json();
+                let html = '';
+
+                // Threat level banner
+                const threatColors = { GREEN: 'var(--green)', YELLOW: 'var(--amber)', ORANGE: '#ff8800', RED: 'var(--magenta)' };
+                const tlColor = threatColors[data.threat_level] || 'var(--text-ghost)';
+                html += `<div class="panel-stat-row" style="margin-bottom:8px">
+                    <span class="panel-stat-label">THREAT LEVEL</span>
+                    <span class="panel-stat-value" style="color:${tlColor};font-weight:bold">${_esc(data.threat_level || 'UNKNOWN')}</span>
+                </div>`;
+
+                // Date and period
+                html += `<div class="panel-stat-row">
+                    <span class="panel-stat-label">REPORT DATE</span>
+                    <span class="panel-stat-value mono">${_esc(data.report_date || '--')}</span>
+                </div>`;
+
+                // Key stats
+                html += `<div class="panel-section-label">24-HOUR SUMMARY</div>`;
+                const statRows = [
+                    ['NEW TARGETS', data.new_targets || 0],
+                    ['CORRELATIONS', data.correlations || 0],
+                    ['THREATS', data.threats || 0],
+                    ['ZONE EVENTS', data.zone_events || 0],
+                    ['INVESTIGATIONS', data.investigations_opened || 0],
+                    ['TOTAL SIGHTINGS', data.total_sightings || 0],
+                    ['UPTIME', (data.uptime_percent || 0) + '%'],
+                ];
+                for (const [label, value] of statRows) {
+                    const valColor = label === 'THREATS' && value > 0 ? 'var(--magenta)' : 'var(--cyan)';
+                    html += `<div class="panel-stat-row">
+                        <span class="panel-stat-label">${label}</span>
+                        <span class="panel-stat-value mono" style="color:${valColor}">${value}</span>
+                    </div>`;
+                }
+
+                // Sightings by source
+                const bySource = data.sightings_by_source || {};
+                const sourceKeys = Object.keys(bySource);
+                if (sourceKeys.length > 0) {
+                    html += `<div class="panel-section-label">SIGHTINGS BY SOURCE</div>`;
+                    for (const src of sourceKeys) {
+                        html += `<div class="panel-stat-row">
+                            <span class="panel-stat-label">${_esc(src.toUpperCase())}</span>
+                            <span class="panel-stat-value mono">${bySource[src]}</span>
+                        </div>`;
+                    }
+                }
+
+                // Top devices
+                const topDevices = data.top_devices || [];
+                if (topDevices.length > 0) {
+                    html += `<div class="panel-section-label">TOP DEVICES</div>`;
+                    for (const dev of topDevices.slice(0, 5)) {
+                        html += `<div class="panel-stat-row">
+                            <span class="panel-stat-label mono" style="font-size:0.4rem">${_esc(dev.device_id || '?')}</span>
+                            <span class="panel-stat-value mono" style="font-size:0.4rem">${dev.sighting_count || 0} sightings</span>
+                        </div>`;
+                    }
+                }
+
+                opsummaryContent.innerHTML = html || '<div class="panel-empty">No ops data</div>';
+            } catch (_) {
+                opsummaryContent.innerHTML = '<div class="panel-empty">Ops summary unavailable</div>';
+            }
+        }
+
         // Button handlers
         bodyEl.querySelector('[data-action="refresh-cameras"]')?.addEventListener('click', fetchCameras);
         bodyEl.querySelector('[data-action="scan-nvr"]')?.addEventListener('click', scanNvr);
         bodyEl.querySelector('[data-action="auto-register"]')?.addEventListener('click', autoRegister);
         bodyEl.querySelector('[data-action="refresh-telemetry"]')?.addEventListener('click', fetchTelemetry);
         bodyEl.querySelector('[data-action="refresh-ai"]')?.addEventListener('click', fetchAiStatus);
+        bodyEl.querySelector('[data-action="refresh-readiness"]')?.addEventListener('click', fetchReadiness);
+        bodyEl.querySelector('[data-action="refresh-ratelimits"]')?.addEventListener('click', fetchRateLimits);
+        bodyEl.querySelector('[data-action="refresh-opsummary"]')?.addEventListener('click', fetchOpsSummary);
 
         // --- Performance tab ---
         const fpsSparkline = bodyEl.querySelector('[data-bind="fps-sparkline"]');
@@ -515,6 +741,9 @@ export const SystemPanelDef = {
         fetchNvrStatus();
         fetchTelemetry();
         fetchAiStatus();
+        fetchReadiness();
+        fetchRateLimits();
+        fetchOpsSummary();
 
         // Auto-refresh cameras every 30s
         const refreshInterval = setInterval(fetchCameras, 30000);

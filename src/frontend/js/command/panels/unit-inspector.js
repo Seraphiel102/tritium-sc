@@ -190,8 +190,49 @@ export const UnitInspectorPanelDef = {
             _lastRenderedId = selectedId;
             _lastRenderedType = resolvedType;
 
-            contentEl.innerHTML = control.render(unit) + '<div class="dc-stats-live">' + _renderStats(unit) + '</div>';
+            contentEl.innerHTML = control.render(unit) + '<div class="dc-stats-live">' + _renderStats(unit) + '</div>' +
+                '<div class="ui-ar-export" style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">' +
+                    '<button class="panel-action-btn" data-action="ar-export" style="width:100%;font-size:0.45rem">EXPORT FOR AR OVERLAY</button>' +
+                    '<div class="ui-ar-export-result" data-bind="ar-result" style="display:none;margin-top:6px;font-size:0.4rem;color:var(--text-ghost);max-height:120px;overflow:auto"></div>' +
+                '</div>';
             control.bind(contentEl, unit, DeviceAPI);
+
+            // Wire AR export button
+            const arBtn = contentEl.querySelector('[data-action="ar-export"]');
+            const arResult = contentEl.querySelector('[data-bind="ar-result"]');
+            if (arBtn) {
+                arBtn.addEventListener('click', async () => {
+                    try {
+                        const resp = await fetch('/api/targets/ar-export?max_targets=50');
+                        if (!resp.ok) {
+                            if (arResult) {
+                                arResult.style.display = 'block';
+                                arResult.textContent = 'AR export unavailable';
+                            }
+                            return;
+                        }
+                        const data = await resp.json();
+                        const json = JSON.stringify(data, null, 2);
+                        // Copy to clipboard
+                        try {
+                            await navigator.clipboard.writeText(json);
+                            EventBus.emit('toast:show', { message: `AR export copied: ${data.target_count || 0} targets`, type: 'info' });
+                        } catch (_clipErr) {
+                            // Fallback: show in panel
+                            EventBus.emit('toast:show', { message: `AR export: ${data.target_count || 0} targets`, type: 'info' });
+                        }
+                        if (arResult) {
+                            arResult.style.display = 'block';
+                            arResult.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;margin:0;color:var(--cyan)">${_esc(json)}</pre>`;
+                        }
+                    } catch (_err) {
+                        if (arResult) {
+                            arResult.style.display = 'block';
+                            arResult.textContent = 'AR export failed';
+                        }
+                    }
+                });
+            }
         }
 
         function _navigate(delta) {
