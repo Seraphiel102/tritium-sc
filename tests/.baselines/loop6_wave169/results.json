@@ -1,0 +1,87 @@
+{
+  "step1_map_visible": true,
+  "step1_markers": 30,
+  "step2_inspector_visible": true,
+  "step3_investigate_btn_found": true,
+  "step4_dossier_open": true,
+  "step5_sparkline_visible": true,
+  "step6_behavioral_visible": true,
+  "step7_tag_control_found": true,
+  "step8_correlation_visible": true,
+  "score": "8/8",
+  "passed": 8,
+  "total": 8,
+  "js_errors": [],
+  "checks": {
+    "1. Map visible with targets": "PASS",
+    "2. BLE target clicked + inspector": "PASS",
+    "3. Investigate/Dossier button found": "PASS",
+    "4. Dossier panel opens with data": "PASS",
+    "5. Signal history chart": "PASS",
+    "6. Behavioral profile section": "PASS",
+    "7. Tag/alliance control": "PASS",
+    "8. Correlation info section": "PASS"
+  },
+  "details": {
+    "step1": {
+      "map": true,
+      "canvas": true,
+      "markers": 30
+    },
+    "step2": {
+      "inspector": {
+        "found": true,
+        "visible": true,
+        "text": "\n            \n                <<\n                1 / 31\n                >>\n            \n            \n                \n                \n                    ALLTURRETHEAVY_TURRETMISSILE_TURRETROVERDRONE"
+      }
+    },
+    "step3": {
+      "buttons": [
+        {
+          "text": "INVESTIGATE",
+          "visible": true,
+          "action": "investigate"
+        }
+      ]
+    },
+    "step4": {
+      "dossier": {
+        "found": true,
+        "visible": true,
+        "text": "\n            \n                \n                    \n                \n                \n                    \n                        All Types\n                        Person\n                        Vehicle\n                        Device\n                        Animal\n                        Unknown\n  ",
+        "listItems": 100
+      }
+    },
+    "step5": {
+      "signal": {
+        "found": true,
+        "visible": true,
+        "width": 400,
+        "height": 100
+      }
+    },
+    "step6": {
+      "behavioral": {
+        "found": true,
+        "visible": true,
+        "text": "STATIONARY\n                    \n                    \n                        Avg: 0.0 m/s\n                        Max: 0.0 m/s\n                        Signals: 4195\n                        Active: 38m",
+        "hasContent": true
+      }
+    },
+    "step7": {
+      "tag": {
+        "type": "select",
+        "id": "tfl-alliance",
+        "options": "\n                All\n                Friendly\n                Hostile\n                Neutral\n      "
+      }
+    },
+    "step8": {
+      "correlation": {
+        "found": true,
+        "visible": true,
+        "text": "Fused Identifiers\n                        mac\n                        TT:RI:LA:T0:00:03\n                    \n                        name\n                        Trilat-Tag-C",
+        "hasContent": true
+      }
+    }
+  }
+}
