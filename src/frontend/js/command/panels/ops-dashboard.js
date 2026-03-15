@@ -53,6 +53,12 @@ let _bodyEl = null;
 const SPARKLINE_MAX = 360; // 360 samples * 10s = 1 hour
 const _sparklineData = [];
 
+// RL accuracy trend: samples from /api/intelligence/model/status
+const RL_TREND_MAX = 60; // 60 samples * 30s = 30 minutes
+const _rlAccuracyData = [];
+let _rlLastFetch = 0;
+const RL_FETCH_INTERVAL = 30000; // 30 seconds
+
 function _sampleSparkline() {
     const units = TritiumStore.units;
     const count = units ? units.size : 0;
@@ -121,6 +127,123 @@ function _renderSparkline(bodyEl) {
     ctx.fill();
 }
 
+async function _fetchRLStatus() {
+    try {
+        const r = await fetch('/api/intelligence/model/status');
+        if (!r.ok) return null;
+        return await r.json();
+    } catch { return null; }
+}
+
+async function _sampleRLAccuracy() {
+    const now = Date.now();
+    if (now - _rlLastFetch < RL_FETCH_INTERVAL) return;
+    _rlLastFetch = now;
+
+    const status = await _fetchRLStatus();
+    if (!status) return;
+
+    _rlAccuracyData.push({
+        accuracy: status.accuracy || 0,
+        count: status.training_count || 0,
+        features: (status.feature_names || []).length,
+        trained: status.trained || false,
+        ts: now,
+    });
+    if (_rlAccuracyData.length > RL_TREND_MAX) {
+        _rlAccuracyData.shift();
+    }
+}
+
+function _renderRLAccuracy(bodyEl) {
+    const canvas = bodyEl.querySelector('[data-bind="rl-accuracy-canvas"]');
+    const label = bodyEl.querySelector('[data-bind="rl-accuracy-label"]');
+    const countEl = bodyEl.querySelector('[data-bind="rl-training-count"]');
+    const featEl = bodyEl.querySelector('[data-bind="rl-feature-count"]');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (_rlAccuracyData.length < 1) {
+        if (label) label.textContent = 'Loading...';
+        return;
+    }
+
+    const latest = _rlAccuracyData[_rlAccuracyData.length - 1];
+    const pct = (latest.accuracy * 100).toFixed(1);
+
+    if (label) {
+        const trend = _rlAccuracyData.length >= 2
+            ? (latest.accuracy > _rlAccuracyData[_rlAccuracyData.length - 2].accuracy ? ' [rising]' : latest.accuracy < _rlAccuracyData[_rlAccuracyData.length - 2].accuracy ? ' [falling]' : ' [stable]')
+            : '';
+        label.textContent = `${pct}%${trend}`;
+    }
+    if (countEl) countEl.textContent = `${latest.count} training examples`;
+    if (featEl) featEl.textContent = `${latest.features} features`;
+
+    if (_rlAccuracyData.length < 2) return;
+
+    const data = _rlAccuracyData.map(d => d.accuracy);
+    const max = Math.max(...data, 0.6);
+    const min = Math.min(...data, 0.4);
+    const range = Math.max(max - min, 0.05);
+
+    // Draw 50% baseline
+    const baseY = h - ((0.5 - min) / range) * (h - 4) - 2;
+    ctx.beginPath();
+    ctx.setLineDash([2, 4]);
+    ctx.strokeStyle = 'rgba(255, 42, 109, 0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.moveTo(0, baseY);
+    ctx.lineTo(w, baseY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw filled area
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * w;
+        const y = h - ((data[i] - min) / range) * (h - 4) - 2;
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+
+    // Color based on accuracy: green if >60%, yellow if >50%, red if <50%
+    const fillColor = latest.accuracy > 0.6 ? 'rgba(5, 255, 161, 0.08)'
+                     : latest.accuracy > 0.5 ? 'rgba(252, 238, 10, 0.08)'
+                     : 'rgba(255, 42, 109, 0.08)';
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+
+    // Draw line
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * w;
+        const y = h - ((data[i] - min) / range) * (h - 4) - 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    const lineColor = latest.accuracy > 0.6 ? '#05ffa1'
+                    : latest.accuracy > 0.5 ? '#fcee0a'
+                    : '#ff2a6d';
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Current value dot
+    const lastX = w;
+    const lastY = h - ((data[data.length - 1] - min) / range) * (h - 4) - 2;
+    ctx.beginPath();
+    ctx.arc(lastX - 1, lastY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = lineColor;
+    ctx.fill();
+}
+
 function _buildHTML() {
     return `
 <div class="ops-dash" style="display:flex;flex-direction:column;gap:8px;padding:8px;height:100%;overflow-y:auto;font-family:var(--font-mono,'JetBrains Mono',monospace);font-size:0.75rem;">
@@ -155,6 +278,19 @@ function _buildHTML() {
             <span data-bind="sparkline-label" style="font-size:0.6rem;color:var(--text-dim,#888);">--</span>
         </div>
         <canvas data-bind="sparkline-canvas" width="360" height="40" style="width:100%;height:40px;margin-top:4px;"></canvas>
+    </div>
+
+    <!-- RL Model Accuracy Trend -->
+    <div class="ops-section" style="border:1px solid rgba(0,240,255,0.2);border-radius:4px;padding:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="ops-section-title" style="color:var(--cyan,#00f0ff);font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;">RL Model Accuracy</div>
+            <span data-bind="rl-accuracy-label" style="font-size:0.6rem;color:var(--text-dim,#888);">--</span>
+        </div>
+        <canvas data-bind="rl-accuracy-canvas" width="360" height="40" style="width:100%;height:40px;margin-top:4px;"></canvas>
+        <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span data-bind="rl-training-count" style="font-size:0.55rem;color:var(--text-dim,#888);">--</span>
+            <span data-bind="rl-feature-count" style="font-size:0.55rem;color:var(--text-dim,#888);">--</span>
+        </div>
     </div>
 
     <!-- Amy Status + Demo Mode -->
@@ -449,6 +585,12 @@ export const OpsDashboardPanelDef = {
             _renderSparkline(bodyEl);
         }, 10000);
 
+        // RL accuracy trend: sample immediately and every 30 seconds
+        _sampleRLAccuracy().then(() => _renderRLAccuracy(bodyEl));
+        panel._rlTimer = setInterval(() => {
+            _sampleRLAccuracy().then(() => _renderRLAccuracy(bodyEl));
+        }, RL_FETCH_INTERVAL);
+
         // Periodic async refresh for fleet/demo/missions
         _refreshTimer = setInterval(() => {
             _update(bodyEl);
@@ -465,6 +607,10 @@ export const OpsDashboardPanelDef = {
         if (panel && panel._sparklineTimer) {
             clearInterval(panel._sparklineTimer);
             panel._sparklineTimer = null;
+        }
+        if (panel && panel._rlTimer) {
+            clearInterval(panel._rlTimer);
+            panel._rlTimer = null;
         }
     },
 };

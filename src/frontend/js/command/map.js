@@ -195,6 +195,9 @@ const _state = {
     rfMotionZones: [],     // occupied zones
     rfMotionDetected: false,
 
+    // Selected dossier/target group highlighting
+    selectedGroup: null,  // { targets: [...], name, color, lat, lng }
+
     // Screen shake tracking
     _shakeActive: false,
 
@@ -332,6 +335,7 @@ export function initMap() {
         EventBus.on('rfMotion:update', _onRfMotionUpdate),
         EventBus.on('map:drawFinish', _onDrawFinish),
         EventBus.on('map:drawCancel', _onDrawCancel),
+        EventBus.on('dossier-groups:selected', _onGroupSelected),
     );
 
     // Subscribe to store for selectedUnitId changes (highlight sync)
@@ -586,6 +590,9 @@ function _draw() {
 
     // Layer 5: Targets (shapes only — labels handled separately)
     _drawTargets(ctx);
+
+    // Layer 5.01: Target group highlight (selected dossier group)
+    _drawGroupHighlight(ctx);
 
     // Layer 5.02: Correlation lines (thin lines between fused targets)
     _drawCorrelationLines(ctx);
@@ -1770,6 +1777,127 @@ function _drawTargets(ctx) {
         }
         _drawUnit(ctx, id, unit);
     }
+}
+
+// ============================================================
+// Layer 5.01: Target group highlight
+// ============================================================
+
+/**
+ * When a dossier group is selected, draw highlight rings around each
+ * member target and a group name label at the centroid. Connects
+ * members with thin lines in the group color.
+ */
+function _drawGroupHighlight(ctx) {
+    const group = _state.selectedGroup;
+    if (!group || !group.targets || group.targets.length === 0) return;
+
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    const color = group.color || '#00f0ff';
+    const memberPositions = [];
+
+    // Collect screen positions of group members
+    for (const tid of group.targets) {
+        const unit = units.get(tid);
+        if (!unit) continue;
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        const sp = worldToScreen(pos.x, pos.y);
+        memberPositions.push({ sp, tid, unit });
+    }
+
+    if (memberPositions.length === 0) {
+        ctx.restore();
+        return;
+    }
+
+    // Draw connecting lines between all members (thin, dashed)
+    if (memberPositions.length >= 2) {
+        ctx.beginPath();
+        ctx.setLineDash([3, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.35;
+
+        for (let i = 0; i < memberPositions.length; i++) {
+            for (let j = i + 1; j < memberPositions.length; j++) {
+                ctx.moveTo(memberPositions[i].sp.x, memberPositions[i].sp.y);
+                ctx.lineTo(memberPositions[j].sp.x, memberPositions[j].sp.y);
+            }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Draw highlight rings around each member
+    for (const m of memberPositions) {
+        const pulsePhase = (Date.now() % 2000) / 2000;
+        const pulseRadius = 14 + Math.sin(pulsePhase * Math.PI * 2) * 4;
+
+        // Outer glow ring
+        ctx.beginPath();
+        ctx.arc(m.sp.x, m.sp.y, pulseRadius + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.15;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Inner highlight ring
+        ctx.beginPath();
+        ctx.arc(m.sp.x, m.sp.y, pulseRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.6;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Compute centroid and draw group label
+    let cxSum = 0, cySum = 0;
+    for (const m of memberPositions) {
+        cxSum += m.sp.x;
+        cySum += m.sp.y;
+    }
+    const centroidX = cxSum / memberPositions.length;
+    const centroidY = cySum / memberPositions.length;
+
+    if (group.name) {
+        const label = `${group.name} (${memberPositions.length})`;
+        ctx.font = 'bold 11px monospace';
+        const metrics = ctx.measureText(label);
+        const pad = 4;
+        const labelY = centroidY - 24;
+
+        // Background pill
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.9;
+
+        const rx = centroidX - metrics.width / 2 - pad;
+        const ry = labelY - 8 - pad;
+        const rw = metrics.width + pad * 2;
+        const rh = 14 + pad;
+        ctx.beginPath();
+        ctx.roundRect(rx, ry, rw, rh, 3);
+        ctx.fill();
+        ctx.stroke();
+
+        // Label text
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = 1.0;
+        ctx.fillText(label, centroidX, labelY);
+        ctx.textAlign = 'left';
+    }
+
+    ctx.restore();
 }
 
 // ============================================================
@@ -4461,6 +4589,22 @@ function _onDrawFinish() {
 function _onDrawCancel() {
     if (_state.geofenceDrawing) _geofenceCancel();
     else if (_state.patrolDrawing) _patrolCancel();
+}
+
+// -- Target group selection handler ------------------------------------
+
+function _onGroupSelected(data) {
+    if (!data || !data.group) {
+        _state.selectedGroup = null;
+    } else {
+        _state.selectedGroup = {
+            targets: data.targets || [],
+            name: data.name || '',
+            color: data.color || '#00f0ff',
+            lat: data.lat || null,
+            lng: data.lng || null,
+        };
+    }
 }
 
 // -- RF motion data handler -------------------------------------------

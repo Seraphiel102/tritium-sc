@@ -14,6 +14,21 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 143: Security + RL Clean Retrain + Ops Dashboard
+
+| Change | Verification |
+|--------|-------------|
+| RL retrain on clean 10-feature data: 54.8% accuracy on 507 examples (up from 50.5% baseline) | API verified, cross-validation |
+| Fixed RL model feature drift: reset_correlation_learner() now deletes stale pickle before recreation | Unit tested |
+| Retrain endpoint auto-detects stale feature config and resets learner singleton | API tested |
+| Security: added auth to behavioral intelligence routes (create/update/delete alerts require_auth, acknowledge/refresh optional_auth) | 14 security tests pass |
+| Ops dashboard: RL accuracy trend sparkline widget with color-coded line (green>60%, yellow>50%, red<50%) and 50% baseline | JS syntax verified |
+| Ops dashboard: training count and feature count displayed below sparkline | JS syntax verified |
+| Map: target group visualization — selected dossier group members get highlight rings, connecting lines, and centroid label | JS syntax verified |
+| Dossier groups panel: click to select/deselect group, emits dossier-groups:selected event for map highlighting | JS syntax verified |
+
+---
+
 ## 2026-03-15 — Wave 141: Target Clustering + Night Mode + RL Retrain
 
 | Change | Verification |

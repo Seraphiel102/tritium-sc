@@ -605,6 +605,27 @@ def get_correlation_learner(
     return _learner
 
 
+def reset_correlation_learner() -> CorrelationLearner:
+    """Reset the singleton CorrelationLearner with fresh feature config.
+
+    Forces recreation of the learner with the current FEATURE_NAMES from
+    code, discarding any stale feature config from a deserialized model.
+    Deletes the saved model to prevent the new learner from loading the
+    stale feature config.
+    """
+    global _learner
+    _learner = None
+    # Delete stale model pickle so the new learner starts fresh
+    model_path = Path(MODEL_PATH)
+    if model_path.exists():
+        try:
+            model_path.unlink()
+            logger.info("Deleted stale model pickle: %s", MODEL_PATH)
+        except OSError as exc:
+            logger.warning("Failed to delete stale model: %s", exc)
+    return get_correlation_learner()
+
+
 def start_retrain_scheduler(
     on_retrain: Optional[Any] = None,
     interval_seconds: float = 6 * 3600,

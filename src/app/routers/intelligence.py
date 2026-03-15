@@ -75,8 +75,19 @@ async def retrain_model(request: Request, user: dict = Depends(require_auth)) ->
     the model accuracy and training data count.
     """
     try:
-        from engine.intelligence.correlation_learner import get_correlation_learner
+        from engine.intelligence.correlation_learner import (
+            get_correlation_learner,
+            reset_correlation_learner,
+            FEATURE_NAMES,
+        )
         learner = get_correlation_learner()
+        # If cached learner has stale feature config, reset it
+        if len(learner._feature_names) != len(FEATURE_NAMES):
+            logger.info(
+                "Resetting learner: stale features (%d -> %d)",
+                len(learner._feature_names), len(FEATURE_NAMES),
+            )
+            learner = reset_correlation_learner()
         result = learner.train()
 
         return RetrainResponse(

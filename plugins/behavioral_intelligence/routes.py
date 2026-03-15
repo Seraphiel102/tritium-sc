@@ -11,8 +11,17 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+try:
+    from app.auth import optional_auth, require_auth
+except ImportError:
+    # Fallback stubs when auth module not available
+    async def optional_auth():
+        return {"sub": "anonymous"}
+    async def require_auth():
+        return {"sub": "anonymous"}
 
 if TYPE_CHECKING:
     from .plugin import BehavioralIntelligencePlugin
@@ -108,7 +117,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         }
 
     @router.post("/anomalies/{anomaly_id}/acknowledge")
-    async def acknowledge_anomaly(anomaly_id: str):
+    async def acknowledge_anomaly(anomaly_id: str, user: dict = Depends(optional_auth)):
         """Mark an anomaly as acknowledged."""
         for a in plugin.detector._anomalies:
             if a.anomaly_id == anomaly_id:
@@ -128,7 +137,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         }
 
     @router.post("/alerts", status_code=201)
-    async def create_alert(req: AlertCreateRequest):
+    async def create_alert(req: AlertCreateRequest, user: dict = Depends(require_auth)):
         """Create a new pattern alert rule."""
         if PatternAlert is None:
             raise HTTPException(status_code=500, detail="Pattern models not available")
@@ -149,7 +158,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         return {"alert": alert.model_dump()}
 
     @router.put("/alerts/{alert_id}")
-    async def update_alert(alert_id: str, req: AlertUpdateRequest):
+    async def update_alert(alert_id: str, req: AlertUpdateRequest, user: dict = Depends(require_auth)):
         """Update an existing alert rule."""
         alerts = {a.alert_id: a for a in plugin.detector.list_alerts()}
         alert = alerts.get(alert_id)
@@ -173,7 +182,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         return {"alert": alert.model_dump()}
 
     @router.delete("/alerts/{alert_id}")
-    async def delete_alert(alert_id: str):
+    async def delete_alert(alert_id: str, user: dict = Depends(require_auth)):
         """Delete an alert rule."""
         removed = plugin.detector.remove_alert(alert_id)
         if not removed:
@@ -240,7 +249,7 @@ def create_router(plugin: BehavioralIntelligencePlugin) -> APIRouter:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
     @router.post("/clusters/refresh")
-    async def refresh_clusters():
+    async def refresh_clusters(user: dict = Depends(optional_auth)):
         """Force re-computation of behavior clusters.
 
         Resets the clustering timer and runs analysis immediately.

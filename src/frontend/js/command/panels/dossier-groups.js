@@ -118,16 +118,42 @@ function _renderGroups(bodyEl) {
         </div>`;
     }).join('');
 
-    // Click handler to center map on dossier group
+    // Click handler to center map on dossier group and highlight members
     listEl.querySelectorAll('[data-dossier-id]').forEach(el => {
         el.addEventListener('click', () => {
             const gid = el.dataset.dossierId;
             const g = _dossierMap.get(gid);
-            if (g && g.lat && g.lng) {
-                EventBus.emit('map:center', { lat: g.lat, lng: g.lng });
+            if (!g) return;
+
+            // Toggle selection: clicking same group deselects
+            const wasSelected = el.classList.contains('ops-group-selected');
+
+            // Clear previous selection styling
+            listEl.querySelectorAll('.ops-group-selected').forEach(s => {
+                s.classList.remove('ops-group-selected');
+                s.style.background = '';
+            });
+
+            if (wasSelected) {
+                // Deselect
+                EventBus.emit('dossier-groups:selected', { group: null });
+            } else {
+                // Select this group
+                el.classList.add('ops-group-selected');
+                el.style.background = 'rgba(0,240,255,0.08)';
+                EventBus.emit('dossier-groups:selected', {
+                    group: g,
+                    groupId: gid,
+                    targets: g.targets,
+                    name: g.name,
+                    lat: g.lat,
+                    lng: g.lng,
+                    color: THREAT_COLORS[g.threat_level] || '#00f0ff',
+                });
+                if (g.lat && g.lng) {
+                    EventBus.emit('map:center', { lat: g.lat, lng: g.lng });
+                }
             }
-            // Also open dossier detail
-            EventBus.emit('panel:request-open', { id: 'dossiers' });
         });
     });
 }
