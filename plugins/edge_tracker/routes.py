@@ -55,6 +55,7 @@ def create_router(
     ble_classifier: Any = None,
     trilateration_engine: Any = None,
     gatt_profiles: Optional[dict] = None,
+    sensor_health_monitor: Any = None,
 ) -> APIRouter:
     """Build and return the edge-tracker APIRouter.
 
@@ -67,6 +68,8 @@ def create_router(
         Optional ``BLEClassifier`` instance for threat classification.
     trilateration_engine:
         Optional ``TrilaterationEngine`` for multi-node position estimation.
+    sensor_health_monitor:
+        Optional ``SensorHealthMonitor`` for per-sensor sighting rate tracking.
     """
     router = APIRouter(prefix="/api/edge/ble", tags=["edge-tracker"])
 
@@ -244,6 +247,30 @@ def create_router(
                 for mac, p in profiles.items()
             ],
             "count": len(profiles),
+        }
+
+    # -- Sensor sighting-rate health ----------------------------------------
+
+    @router.get("/sensor-health")
+    async def get_sensor_sighting_health():
+        """Return per-sensor sighting rate health from the health monitor.
+
+        Tracks sighting rates against a learned baseline and flags when a
+        sensor goes quiet (possible failure, obstruction, or tampering).
+        """
+        if sensor_health_monitor is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Sensor health monitor not available",
+            )
+        health = sensor_health_monitor.get_health()
+        healthy = sum(1 for h in health if h["status"] == "healthy")
+        degraded = sum(1 for h in health if h["status"] in ("degraded", "critical", "offline"))
+        return {
+            "sensors": health,
+            "total": len(health),
+            "healthy": healthy,
+            "degraded": degraded,
         }
 
     # -- BLE threat classification -----------------------------------------

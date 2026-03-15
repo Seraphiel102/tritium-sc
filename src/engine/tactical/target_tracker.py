@@ -65,6 +65,15 @@ _HALF_LIVES: dict[str, float] = {
 _MIN_CONFIDENCE = 0.05
 _LN2 = math.log(2)
 
+# Multi-source confidence boosting — multiplicative bonus per confirming source
+_MULTI_SOURCE_BOOST = 1.3  # 30% boost per additional confirming source
+_MAX_BOOSTED_CONFIDENCE = 0.99
+
+# Velocity consistency — max plausible speed in meters/second
+# 50 m/s ~ 180 km/h, anything above is suspicious
+_MAX_PLAUSIBLE_SPEED_MPS = 50.0
+_TELEPORT_FLAG_COOLDOWN = 30.0  # seconds before re-flagging same target
+
 
 def _decayed_confidence(source: str, initial: float, elapsed: float) -> float:
     """Compute exponentially decayed confidence."""
@@ -96,13 +105,22 @@ class TrackedTarget:
     position_confidence: float = 0.0  # 0.0 = no confidence, 1.0 = high
     threat_score: float = 0.0  # 0.0 = no threat, 1.0 = maximum threat probability
     _initial_confidence: float = 0.0  # stored at detection time for decay
+    confirming_sources: set = field(default_factory=set)  # source types that confirmed this target
+    velocity_suspicious: bool = False  # flagged if target teleported
+    _last_velocity_flag: float = 0.0  # monotonic time of last velocity flag
 
     @property
     def effective_confidence(self) -> float:
-        """Position confidence with exponential time decay applied."""
+        """Position confidence with exponential time decay and multi-source boost."""
         elapsed = time.monotonic() - self.last_seen
         initial = self._initial_confidence if self._initial_confidence > 0 else self.position_confidence
-        return _decayed_confidence(self.source, initial, elapsed)
+        decayed = _decayed_confidence(self.source, initial, elapsed)
+        # Multi-source boost: each additional confirming source multiplies confidence
+        extra_sources = max(0, len(self.confirming_sources) - 1)
+        if extra_sources > 0:
+            boosted = decayed * (_MULTI_SOURCE_BOOST ** extra_sources)
+            return min(_MAX_BOOSTED_CONFIDENCE, boosted)
+        return decayed
 
     def to_dict(self, history: TargetHistory | None = None) -> dict:
         from .geo import local_to_latlng
@@ -125,6 +143,8 @@ class TrackedTarget:
             "position_source": self.position_source,
             "position_confidence": self.effective_confidence,
             "threat_score": self.threat_score,
+            "confirming_sources": list(self.confirming_sources),
+            "velocity_suspicious": self.velocity_suspicious,
         }
         if history is not None:
             d["trail"] = history.get_trail_dicts(self.target_id, max_points=20)
@@ -143,6 +163,39 @@ class TargetTracker:
         self._detection_counter: int = 0
         self.history = TargetHistory()
 
+    def _check_velocity(self, target: TrackedTarget, new_pos: tuple[float, float]) -> None:
+        """Check if position change implies impossible velocity (teleportation).
+
+        Flags the target as velocity_suspicious if the implied speed exceeds
+        _MAX_PLAUSIBLE_SPEED_MPS. This catches GPS glitches, MAC rotation
+        misattribution, and spoofing.
+        """
+        now = time.monotonic()
+        dt = now - target.last_seen
+        if dt <= 0.0 or dt > 120.0:  # skip if first update or very stale
+            return
+
+        dx = new_pos[0] - target.position[0]
+        dy = new_pos[1] - target.position[1]
+        dist = math.sqrt(dx * dx + dy * dy)
+        speed = dist / dt  # meters per second (assuming local coords are meters)
+
+        if speed > _MAX_PLAUSIBLE_SPEED_MPS:
+            if (now - target._last_velocity_flag) > _TELEPORT_FLAG_COOLDOWN:
+                target.velocity_suspicious = True
+                target._last_velocity_flag = now
+        else:
+            # Clear flag if velocity is now plausible
+            target.velocity_suspicious = False
+
+    def _add_confirming_source(self, target: TrackedTarget, source: str) -> None:
+        """Register an additional source that confirms this target's existence.
+
+        Multi-source confirmation boosts confidence multiplicatively via
+        effective_confidence property.
+        """
+        target.confirming_sources.add(source)
+
     def update_from_simulation(self, sim_data: dict) -> None:
         """Update or create a tracked target from simulation telemetry.
 
@@ -155,16 +208,15 @@ class TargetTracker:
         with self._lock:
             if tid in self._targets:
                 t = self._targets[tid]
+                self._check_velocity(t, position)
                 t.position = position
                 t.heading = sim_data.get("heading", 0.0)
                 t.speed = sim_data.get("speed", 0.0)
                 t.battery = sim_data.get("battery", 1.0)
                 t.status = sim_data.get("status", "active")
                 t.last_seen = time.monotonic()
+                self._add_confirming_source(t, "simulation")
             else:
-                # Map SimulationTarget source to tracker source:
-                # "sim" -> "simulation", "graphling" -> "simulation" (still sim-managed),
-                # "real" -> "simulation" (real targets come through YOLO path instead)
                 self._targets[tid] = TrackedTarget(
                     target_id=tid,
                     name=sim_data.get("name", tid[:8]),
@@ -180,6 +232,7 @@ class TargetTracker:
                     position_source="simulation",
                     position_confidence=1.0,
                     _initial_confidence=1.0,
+                    confirming_sources={"simulation"},
                 )
         self.history.record(tid, position)
 
@@ -227,8 +280,10 @@ class TargetTracker:
                     break
 
             if matched:
+                self._check_velocity(matched, (cx, cy))
                 matched.position = (cx, cy)
                 matched.last_seen = time.monotonic()
+                self._add_confirming_source(matched, "yolo")
                 tid = matched.target_id
             else:
                 self._detection_counter += 1
@@ -244,6 +299,7 @@ class TargetTracker:
                     position_source="yolo",
                     position_confidence=0.1,
                     _initial_confidence=0.1,
+                    confirming_sources={"yolo"},
                 )
         self.history.record(tid, (cx, cy))
 
@@ -292,12 +348,14 @@ class TargetTracker:
         with self._lock:
             if tid in self._targets:
                 t = self._targets[tid]
+                if pos_source != "unknown":
+                    self._check_velocity(t, position)
+                    t.position = position
+                    t.position_source = pos_source
                 t.last_seen = time.monotonic()
                 t.position_confidence = confidence
                 t._initial_confidence = confidence
-                if pos_source != "unknown":
-                    t.position = position
-                    t.position_source = pos_source
+                self._add_confirming_source(t, "ble")
                 # Update asset_type if we got a specific classification
                 if asset_type != "ble_device":
                     t.asset_type = asset_type
@@ -313,6 +371,7 @@ class TargetTracker:
                     position_source=pos_source,
                     position_confidence=confidence,
                     _initial_confidence=confidence,
+                    confirming_sources={"ble"},
                 )
         # Only record position if we have a meaningful location
         if pos_source != "unknown":
@@ -343,11 +402,13 @@ class TargetTracker:
         with self._lock:
             if tid in self._targets:
                 t = self._targets[tid]
+                self._check_velocity(t, position)
                 t.position = position
                 t.position_confidence = confidence
                 t._initial_confidence = confidence
                 t.last_seen = time.monotonic()
                 t.status = f"motion:{direction}"
+                self._add_confirming_source(t, "rf_motion")
             else:
                 self._targets[tid] = TrackedTarget(
                     target_id=tid,
@@ -361,6 +422,7 @@ class TargetTracker:
                     position_confidence=confidence,
                     _initial_confidence=confidence,
                     status=f"motion:{direction}",
+                    confirming_sources={"rf_motion"},
                 )
         self.history.record(tid, position)
 

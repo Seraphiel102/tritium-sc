@@ -14,6 +14,18 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 97: Sensor Fusion Improvements
+
+| Change | Verification |
+|--------|-------------|
+| Multi-source confidence boosting — TrackedTarget.effective_confidence applies 1.3x boost per additional confirming source (BLE+camera+RF = 1.69x) | Unit Tested (895 tactical tests passing) |
+| SensorHealthMonitor — per-sensor sighting rate tracking with EMA baseline, deviation detection (healthy/degraded/critical/offline), EventBus alerts | Unit Tested (11 tests) |
+| Target velocity consistency check — _check_velocity() flags teleportation when implied speed >50 m/s, clears when velocity normalizes | Unit Tested (4 tests) |
+| TrackedTarget.confirming_sources set — tracks all source types that confirmed a target's existence | Unit Tested |
+| TrackedTarget.velocity_suspicious flag — exposed in to_dict() for frontend display | Unit Tested |
+| /api/edge/ble/sensor-health endpoint — per-sensor sighting rate health with baseline comparison | Code Review |
+| Wired sensor health monitoring into EdgeTrackerPlugin BLE/WiFi presence handlers | Code Review |
+
 ## 2026-03-14 — Wave 95: Security + Confidence Decay + Amy Curiosity
 
 | Change | Verification |

@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover
     classify_device_from_profile = None  # type: ignore[assignment]
 
 from engine.tactical.ble_classifier import BLEClassifier
+from engine.tactical.sensor_health_monitor import SensorHealthMonitor
 from engine.tactical.target_handoff import HandoffTracker, HandoffEvent
 from engine.tactical.trilateration import TrilaterationEngine
 
@@ -68,6 +69,7 @@ class EdgeTrackerPlugin(PluginInterface):
         self._device_classifier: Any = None
         self._trilateration: Optional[TrilaterationEngine] = None
         self._handoff_tracker: Optional[HandoffTracker] = None
+        self._sensor_health: Optional[SensorHealthMonitor] = None
 
         self._running = False
         self._event_queue: Optional[queue_mod.Queue] = None
@@ -135,6 +137,10 @@ class EdgeTrackerPlugin(PluginInterface):
         # Initialize trilateration engine for multi-node position estimation
         self._trilateration = TrilaterationEngine()
         self._logger.info("Trilateration engine initialized")
+
+        # Initialize sensor health monitor
+        self._sensor_health = SensorHealthMonitor(event_bus=self._event_bus)
+        self._logger.info("Sensor health monitor initialized")
 
         # Initialize handoff tracker for edge-to-edge target continuity
         self._handoff_tracker = HandoffTracker(
@@ -239,6 +245,10 @@ class EdgeTrackerPlugin(PluginInterface):
         if sightings:
             self._store.record_sightings_batch(sightings)
 
+        # Track sensor health — record a sighting for this node
+        if self._sensor_health is not None and devices:
+            self._sensor_health.record_sighting(node_id)
+
         # Record sightings in trilateration engine
         if self._trilateration is not None and self._store is not None:
             self._record_trilateration_sightings(devices, node_id)
@@ -288,6 +298,10 @@ class EdgeTrackerPlugin(PluginInterface):
 
         if sightings:
             self._store.record_wifi_sightings_batch(sightings)
+
+        # Track sensor health for WiFi
+        if self._sensor_health is not None and networks:
+            self._sensor_health.record_sighting(node_id)
 
         self._emit_wifi_update()
 
@@ -567,6 +581,7 @@ class EdgeTrackerPlugin(PluginInterface):
             ble_classifier=self._ble_classifier,
             trilateration_engine=self._trilateration,
             gatt_profiles=self._gatt_profiles,
+            sensor_health_monitor=self._sensor_health,
         )
         self._app.include_router(router)
         self._app.include_router(wifi_router)
