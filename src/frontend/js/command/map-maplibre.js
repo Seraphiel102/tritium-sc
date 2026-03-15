@@ -380,7 +380,16 @@ function _createMap(mapDiv) {
     // regardless of MapLibre repaint state (idle map = no 'render' events).
     _startFpsLoop();
 
-    _state.map.on('load', () => {
+    _state.map.on('error', (e) => {
+        console.error('[MAP-ML] Map error:', e.error?.message || e.message || e);
+    });
+
+    console.log('[MAP-ML] Map created, waiting for load event...');
+
+    // If the map is already loaded (cached tiles), the 'load' event won't fire again.
+    // Check immediately and also register the callback.
+    const _onMapLoaded = () => {
+        if (_state.initialized) return; // prevent double-init
         console.log('[MAP-ML] Map loaded');
         _state.initialized = true;
 
@@ -444,7 +453,23 @@ function _createMap(mapDiv) {
 
         // Start unit update loop
         _startUnitLoop();
-    });
+    };
+
+    _state.map.on('load', _onMapLoaded);
+
+    // Fallback: if map is already loaded (cached), fire immediately
+    if (_state.map.loaded()) {
+        console.log('[MAP-ML] Map already loaded (cached), initializing immediately');
+        _onMapLoaded();
+    }
+
+    // Safety net: if load event never fires within 5s, force-init
+    setTimeout(() => {
+        if (!_state.initialized) {
+            console.warn('[MAP-ML] Load event did not fire in 5s — force-initializing');
+            _onMapLoaded();
+        }
+    }, 5000);
 
     _state.map.on('click', _onMapClick);
     _state.map.on('dblclick', _onMapDblClick);
@@ -3058,6 +3083,19 @@ function _updateUnits() {
 
     const units = TritiumStore.units;
     const seenIds = new Set();
+
+    // Debug: log unit count once per second
+    if (slowTick && units.size > 0 && Object.keys(_state.unitMarkers).length === 0) {
+        console.warn(`[MAP-ML] ${units.size} units in store but 0 markers rendered — checking first unit...`);
+        units.forEach((u, id) => {
+            if (seenIds.size === 0) {
+                const pos = u.position || {};
+                console.warn(`[MAP-ML] First unit: ${id}, pos=(${pos.x}, ${pos.y}), lngLat=${JSON.stringify(_gameToLngLat(pos.x || 0, pos.y || 0))}`);
+            }
+            seenIds.add(id); // temporary to break after first
+        });
+        seenIds.clear(); // reset for actual loop below
+    }
 
     units.forEach((unit, id) => {
         seenIds.add(id);
