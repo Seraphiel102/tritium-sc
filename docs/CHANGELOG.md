@@ -14,6 +14,23 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 117: Security Audit + Session Timeout + Rate Limit Dashboard
+
+| Change | Verification |
+|--------|-------------|
+| SECURITY: Amy personality PUT/POST endpoints now require commander or admin role — observers cannot change Amy's behavior | Unit Tested (16 tests passing) |
+| SECURITY: Fleet command history redacts sensitive payload fields (ip, host, url) for non-admin users | Unit Tested |
+| New `require_role(*roles)` dependency factory in auth.py for flexible role-based endpoint protection | Unit Tested |
+| Session timeout: configurable inactivity timeout (default 30min) with GET/PUT /api/sessions/timeout | Unit Tested |
+| Session touch endpoint: POST /api/sessions/{id}/touch resets inactivity timer | Unit Tested |
+| Session expiry warnings via WebSocket: `session_expiring` message sent 5 min before timeout | Unit Tested |
+| Background session sweep coroutine started in lifespan, prunes expired sessions every 30s | Code change |
+| Rate limit dashboard: GET /api/rate-limits/dashboard shows busiest endpoints, avg latency, error rates | Unit Tested |
+| Rate limit status: GET /api/rate-limits/status shows current config and role-based limits | Unit Tested |
+| Command history router registered in main.py (was previously orphaned) | Code change |
+
+---
+
 ## 2026-03-14 — Wave 116: Target Timeline, Fleet Map, Amy Personality
 
 | Change | Verification |

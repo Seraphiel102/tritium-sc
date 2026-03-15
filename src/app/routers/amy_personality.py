@@ -15,9 +15,11 @@ Also supports preset profiles (patrol, battle, stealth, observer).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from app.auth import require_role
 
 router = APIRouter(prefix="/api/amy", tags=["amy-personality"])
 
@@ -107,8 +109,15 @@ async def get_personality(request: Request):
 
 
 @router.put("/personality")
-async def update_personality(request: Request, body: PersonalityUpdateRequest):
+async def update_personality(
+    request: Request,
+    body: PersonalityUpdateRequest,
+    user: dict = Depends(require_role("admin", "commander")),
+):
     """Update Amy's personality parameters.
+
+    Requires commander or admin role. Observers/analysts cannot modify
+    Amy's behaviour.
 
     All values are clamped to [0.0, 1.0].
     """
@@ -130,10 +139,15 @@ async def update_personality(request: Request, body: PersonalityUpdateRequest):
 
 
 @router.post("/personality/preset")
-async def apply_preset(request: Request, body: PresetRequest):
+async def apply_preset(
+    request: Request,
+    body: PresetRequest,
+    user: dict = Depends(require_role("admin", "commander")),
+):
     """Apply a preset personality profile.
 
-    Valid presets: default, patrol, battle, stealth, observer.
+    Requires commander or admin role. Valid presets: default, patrol,
+    battle, stealth, observer.
     """
     amy = _get_amy(request)
     if amy is None:

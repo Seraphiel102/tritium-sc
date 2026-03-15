@@ -109,6 +109,8 @@ from app.routers.proximity import router as proximity_router
 from app.routers.target_timeline import router as target_timeline_router
 from app.routers.fleet_map import router as fleet_map_router
 from app.routers.amy_personality import router as amy_personality_router
+from app.routers.rate_limit_dashboard import router as rate_limit_dashboard_router
+from app.routers.command_history import router as command_history_router
 
 
 # ---------------------------------------------------------------------------
@@ -1111,11 +1113,18 @@ async def lifespan(app: FastAPI):
     _boot_results = _run_boot_self_test(app)
     app.state.boot_self_test = _boot_results
 
+    # Start session timeout sweep (broadcasts WS warnings before expiry)
+    from app.routers.sessions import session_timeout_sweep
+    _session_sweep_task = asyncio.create_task(session_timeout_sweep(app))
+
     logger.info("=" * 60)
     logger.info("  TRITIUM-SC ONLINE")
     logger.info("=" * 60)
 
     yield
+
+    # Cancel session sweep
+    _session_sweep_task.cancel()
 
     # Stop plugins first (they may depend on subsystems)
     if plugin_manager is not None:
@@ -1279,6 +1288,8 @@ app.include_router(proximity_router)
 app.include_router(target_timeline_router)
 app.include_router(fleet_map_router)
 app.include_router(amy_personality_router)
+app.include_router(rate_limit_dashboard_router)
+app.include_router(command_history_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"

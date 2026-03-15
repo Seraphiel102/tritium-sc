@@ -447,6 +447,28 @@ async def require_admin(user: dict = Depends(require_auth)) -> dict:
     return user
 
 
+def require_role(*allowed_roles: str):
+    """Factory that returns a dependency requiring one of the specified roles.
+
+    Usage::
+
+        @router.put("/sensitive")
+        async def sensitive_endpoint(user: dict = Depends(require_role("admin", "commander"))):
+            ...
+    """
+
+    async def _check_role(user: dict = Depends(require_auth)) -> dict:
+        role = user.get("role", "")
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of: {', '.join(allowed_roles)}",
+            )
+        return user
+
+    return _check_role
+
+
 def init_default_admin() -> None:
     """Initialize the default admin user if auth is enabled and password is set."""
     if not settings.auth_enabled:

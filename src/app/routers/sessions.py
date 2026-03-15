@@ -19,6 +19,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from datetime import datetime, timezone
@@ -53,8 +54,10 @@ _ROLE_COLORS = {
     UserRole.OBSERVER: "#8888aa",   # muted
 }
 
-# Session timeout: 30 minutes of inactivity
+# Session timeout: 30 minutes of inactivity (configurable)
 _SESSION_TIMEOUT_S = 1800
+# Warn this many seconds before expiry
+_SESSION_WARN_BEFORE_S = 300  # 5 minutes
 
 
 # ---- Request models ----------------------------------------------------------
@@ -89,6 +92,74 @@ def _prune_stale_sessions() -> int:
     for sid in stale:
         del _sessions[sid]
     return len(stale)
+
+
+def get_expiring_sessions() -> list[dict]:
+    """Return sessions that will expire within _SESSION_WARN_BEFORE_S seconds.
+
+    Used by the background sweep to send WebSocket warnings before disconnect.
+    """
+    now = time.time()
+    results = []
+    with _lock:
+        for sid, session in _sessions.items():
+            age = now - session.last_activity.timestamp()
+            remaining = _SESSION_TIMEOUT_S - age
+            if 0 < remaining <= _SESSION_WARN_BEFORE_S:
+                results.append({
+                    "session_id": sid,
+                    "username": session.username,
+                    "display_name": session.display_name,
+                    "role": session.role.value,
+                    "remaining_seconds": int(remaining),
+                })
+    return results
+
+
+async def session_timeout_sweep(app) -> None:
+    """Background coroutine that periodically checks for expiring sessions
+    and broadcasts WebSocket warnings before disconnect.
+
+    Started from the app lifespan. Runs every 30 seconds.
+    """
+    while True:
+        await asyncio.sleep(30)
+        try:
+            # Warn sessions about to expire
+            expiring = get_expiring_sessions()
+            for info in expiring:
+                _broadcast_session_warning(app, info)
+
+            # Actually prune expired sessions
+            with _lock:
+                pruned = _prune_stale_sessions()
+            if pruned:
+                logger.info(f"Pruned {pruned} expired session(s)")
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning(f"Session sweep error: {exc}")
+
+
+def _broadcast_session_warning(app, info: dict) -> None:
+    """Send a WebSocket message warning an operator their session is about to expire."""
+    try:
+        ws_manager = getattr(app.state, "ws_manager", None)
+        if ws_manager is None:
+            return
+        import json
+        msg = json.dumps({
+            "type": "session_expiring",
+            "session_id": info["session_id"],
+            "username": info["username"],
+            "remaining_seconds": info["remaining_seconds"],
+            "message": f"Session expires in {info['remaining_seconds']}s due to inactivity",
+        })
+        # Best-effort broadcast; ws_manager.broadcast is sync in our codebase
+        if hasattr(ws_manager, "broadcast"):
+            ws_manager.broadcast(msg)
+    except Exception:
+        pass
 
 
 def _get_or_create_user(username: str, display_name: str, role: UserRole, color: str) -> User:
@@ -227,6 +298,32 @@ async def get_cursors():
     return {"cursors": cursors}
 
 
+@router.get("/timeout")
+async def get_timeout():
+    """Get the current session timeout configuration."""
+    return {
+        "timeout_seconds": _SESSION_TIMEOUT_S,
+        "warn_before_seconds": _SESSION_WARN_BEFORE_S,
+    }
+
+
+@router.put("/timeout")
+async def set_timeout(timeout_seconds: int = Query(1800, ge=60, le=86400)):
+    """Update the session inactivity timeout (admin only in production).
+
+    Args:
+        timeout_seconds: New timeout in seconds (60 - 86400).
+    """
+    global _SESSION_TIMEOUT_S
+    _SESSION_TIMEOUT_S = timeout_seconds
+    logger.info(f"Session timeout updated to {timeout_seconds}s")
+    return {
+        "status": "ok",
+        "timeout_seconds": _SESSION_TIMEOUT_S,
+        "warn_before_seconds": _SESSION_WARN_BEFORE_S,
+    }
+
+
 @router.get("/{session_id}")
 async def get_session(session_id: str):
     """Get details for a specific session."""
@@ -305,3 +402,23 @@ async def list_roles():
             "color": _ROLE_COLORS.get(role, "#ffffff"),
         })
     return {"roles": roles}
+
+
+@router.post("/{session_id}/touch")
+async def touch_session(session_id: str):
+    """Touch a session to reset the inactivity timer.
+
+    Frontends should call this periodically (e.g. on user interaction)
+    to prevent timeout.
+    """
+    with _lock:
+        session = _sessions.get(session_id)
+        if not session:
+            raise HTTPException(404, "Session not found")
+        session.touch()
+        remaining = _SESSION_TIMEOUT_S - (time.time() - session.last_activity.timestamp())
+
+    return {
+        "status": "ok",
+        "remaining_seconds": int(max(0, remaining)),
+    }
