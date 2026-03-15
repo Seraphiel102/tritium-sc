@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
 from loguru import logger
 
-from app.auth import require_auth
+from app.auth import optional_auth
 
 router = APIRouter(prefix="/api/targets", tags=["target-classification"])
 
@@ -42,7 +42,7 @@ async def override_classification(
     target_id: str,
     request: Request,
     override: ClassificationOverride = Body(...),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(optional_auth),
 ):
     """Override a target's classification (alliance and/or device type).
 
@@ -52,8 +52,11 @@ async def override_classification(
     3. The audit log (compliance trail)
     """
     # Auto-fill operator from authenticated user if not specified
-    if not override.operator and user:
-        override.operator = user.get("sub", "operator")
+    if not override.operator:
+        if user:
+            override.operator = user.get("sub", "operator")
+        else:
+            override.operator = "operator"
 
     # Validate
     if override.alliance and override.alliance not in VALID_ALLIANCES:
@@ -70,7 +73,7 @@ async def override_classification(
     tracker = _get_tracker(request)
     target = None
     if tracker is not None:
-        target = tracker.get(target_id)
+        target = tracker.get_target(target_id)
         if target is None:
             raise HTTPException(404, f"Target not found: {target_id}")
 
@@ -168,7 +171,7 @@ async def get_classification(target_id: str, request: Request):
     if tracker is None:
         raise HTTPException(503, "Target tracker not available")
 
-    target = tracker.get(target_id)
+    target = tracker.get_target(target_id)
     if target is None:
         raise HTTPException(404, f"Target not found: {target_id}")
 

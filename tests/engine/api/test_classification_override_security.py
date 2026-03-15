@@ -44,7 +44,7 @@ def mock_tracker(app):
         classification="phone",
         source="ble",
     )
-    tracker.get.return_value = target
+    tracker.get_target.return_value = target
     tracker.get_all.return_value = [target]
 
     amy = MagicMock()
@@ -221,7 +221,7 @@ class TestEdgeCases:
     def test_target_not_found(self, client, mock_tracker):
         """Override on non-existent target should return 404."""
         tracker, _ = mock_tracker
-        tracker.get.return_value = None
+        tracker.get_target.return_value = None
         resp = client.post(
             "/api/targets/nonexistent_target/classify",
             json={

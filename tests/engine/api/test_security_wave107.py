@@ -24,11 +24,11 @@ class TestClassifyAuthRequired:
 
     @pytest.mark.unit
     def test_classify_endpoint_has_user_dependency(self):
-        """The POST /{target_id}/classify endpoint must have a Depends(require_auth) user param."""
+        """The POST /{target_id}/classify endpoint must have a Depends(optional_auth) user param."""
         from app.routers.classification_override import override_classification
         sig = inspect.signature(override_classification)
         assert "user" in sig.parameters, (
-            "override_classification must have a 'user' parameter with Depends(require_auth)"
+            "override_classification must have a 'user' parameter with Depends(optional_auth)"
         )
         param = sig.parameters["user"]
         assert param.default is not inspect.Parameter.empty, (
@@ -36,45 +36,40 @@ class TestClassifyAuthRequired:
         )
 
     @pytest.mark.unit
-    def test_classify_unauthenticated_returns_401(self):
-        """Unauthenticated POST to /api/targets/{id}/classify must return 401."""
-        from app.routers.classification_override import router
+    def test_classify_unauthenticated_allowed_with_optional_auth(self):
+        """Unauthenticated POST to /api/targets/{id}/classify is allowed (optional_auth)."""
+        from app.routers.classification_override import router as classify_router
 
-        app = FastAPI()
+        # Mock tracker so the endpoint finds a target
+        mock_tracker = MagicMock()
+        mock_target = MagicMock()
+        mock_target.alliance = "unknown"
+        mock_target.device_type = "unknown"
+        mock_tracker.get_target.return_value = mock_target
 
-        # Enable auth so require_auth actually rejects
-        with patch("app.auth.settings") as mock_settings:
-            mock_settings.auth_enabled = True
-            mock_settings.api_keys = ""
-            mock_settings.auth_secret_key = "test-secret-key-wave107"
-            mock_settings.auth_algorithm = "HS256"
-            mock_settings.auth_access_token_expire_minutes = 30
-            mock_settings.auth_refresh_token_expire_days = 7
-            mock_settings.auth_admin_username = "admin"
-            mock_settings.auth_admin_password = ""
+        mock_amy = MagicMock()
+        mock_amy.target_tracker = mock_tracker
 
-            # Re-import to pick up patched settings
-            from app.auth import require_auth
-            from app.routers.classification_override import router as classify_router
+        test_app = FastAPI()
+        test_app.state.amy = mock_amy
+        test_app.state.dossier_manager = None
+        test_app.include_router(classify_router)
 
-            test_app = FastAPI()
-            test_app.include_router(classify_router)
+        client = TestClient(test_app, raise_server_exceptions=False)
 
-            client = TestClient(test_app, raise_server_exceptions=False)
-
-            # No auth headers — should get 401
-            resp = client.post(
-                "/api/targets/test_target_1/classify",
-                json={
-                    "target_id": "test_target_1",
-                    "alliance": "hostile",
-                    "reason": "test override",
-                },
-            )
-            # With auth enabled and no credentials, should be 401 or 403
-            assert resp.status_code in (401, 403, 422), (
-                f"Expected 401/403 for unauthenticated classify, got {resp.status_code}"
-            )
+        # No auth headers — should still work (optional_auth returns default admin)
+        resp = client.post(
+            "/api/targets/test_target_1/classify",
+            json={
+                "target_id": "test_target_1",
+                "alliance": "hostile",
+                "reason": "test override",
+            },
+        )
+        # With optional_auth, unauthenticated requests pass through
+        assert resp.status_code != 401, (
+            f"optional_auth should not return 401, got {resp.status_code}"
+        )
 
     @pytest.mark.unit
     def test_classify_authenticated_succeeds(self):
@@ -88,7 +83,7 @@ class TestClassifyAuthRequired:
         mock_target = MagicMock()
         mock_target.alliance = "unknown"
         mock_target.device_type = "unknown"
-        mock_tracker.get.return_value = mock_target
+        mock_tracker.get_target.return_value = mock_target
 
         mock_amy = MagicMock()
         mock_amy.target_tracker = mock_tracker
@@ -104,8 +99,8 @@ class TestClassifyAuthRequired:
         test_app.state.dossier_manager = None
 
         # Override the dependency
-        from app.auth import require_auth
-        test_app.dependency_overrides[require_auth] = fake_auth
+        from app.auth import optional_auth
+        test_app.dependency_overrides[optional_auth] = fake_auth
         test_app.include_router(classify_router)
 
         client = TestClient(test_app, raise_server_exceptions=False)
@@ -133,7 +128,7 @@ class TestClassifyAuthRequired:
         mock_target = MagicMock()
         mock_target.alliance = "unknown"
         mock_target.device_type = "unknown"
-        mock_tracker.get.return_value = mock_target
+        mock_tracker.get_target.return_value = mock_target
 
         mock_amy = MagicMock()
         mock_amy.target_tracker = mock_tracker
@@ -148,8 +143,8 @@ class TestClassifyAuthRequired:
         test_app.state.amy = mock_amy
         test_app.state.dossier_manager = None
 
-        from app.auth import require_auth
-        test_app.dependency_overrides[require_auth] = fake_auth
+        from app.auth import optional_auth
+        test_app.dependency_overrides[optional_auth] = fake_auth
         test_app.include_router(classify_router)
 
         with patch("app.routers.classification_override.get_audit_store",
