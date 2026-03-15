@@ -167,6 +167,7 @@ class Settings(BaseSettings):
     nvr_user: Optional[str] = None
     nvr_pass: Optional[str] = None
     nvr_port: int = 443
+    nvr_discovery_timeout: float = 3.0  # seconds — max wait for NVR probe at startup
 
 
 settings = Settings()

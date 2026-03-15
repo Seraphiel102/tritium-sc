@@ -84,11 +84,16 @@ class ReconnectingFrameBuffer:
 
     When consecutive read failures exceed the threshold, releases the
     capture and reopens with exponential backoff.
+
+    RTSP probing is non-blocking: ``start()`` launches a background
+    thread that performs the initial ``cv2.VideoCapture()`` open, so the
+    caller never blocks waiting for an unreachable camera.
     """
 
     FAILURE_THRESHOLD = 10
     BACKOFF_BASE = 1.0
     BACKOFF_MAX = 30.0
+    OPEN_TIMEOUT = 3.0  # seconds — max time for initial RTSP probe
 
     def __init__(self, url: str):
         self._url = url
@@ -104,8 +109,8 @@ class ReconnectingFrameBuffer:
         self._reconnect_count: int = 0
 
     def start(self) -> None:
-        self._cap = cv2.VideoCapture(self._url)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Don't block on RTSP probe — the background thread will open
+        # the capture as its first action, with reconnect on failure.
         self._thread.start()
 
     def stop(self) -> None:
@@ -136,6 +141,10 @@ class ReconnectingFrameBuffer:
             return time.monotonic() - self._frame_time if self._frame_time > 0 else float("inf")
 
     def _run(self) -> None:
+        # Initial open without backoff delay — only timeout-guarded
+        if self._cap is None and not self._stop.is_set():
+            self._cap = self._open_with_timeout(self._url)
+
         while not self._stop.is_set():
             if self._cap is None or not self._cap.isOpened():
                 self._reconnect()
@@ -179,5 +188,33 @@ class ReconnectingFrameBuffer:
             waited += 0.1
 
         if not self._stop.is_set():
-            self._cap = cv2.VideoCapture(self._url)
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self._cap = self._open_with_timeout(self._url)
+
+    def _open_with_timeout(self, url: str) -> cv2.VideoCapture | None:
+        """Open a VideoCapture with a timeout to avoid blocking.
+
+        Runs cv2.VideoCapture in a helper thread with a deadline of
+        OPEN_TIMEOUT seconds.  Returns the capture if opened in time,
+        else None.
+        """
+        result: list[cv2.VideoCapture | None] = [None]
+
+        def _do_open():
+            cap = cv2.VideoCapture(url)
+            result[0] = cap
+
+        opener = threading.Thread(target=_do_open, daemon=True, name="rtsp-open")
+        opener.start()
+        opener.join(timeout=self.OPEN_TIMEOUT)
+
+        if opener.is_alive():
+            return None
+
+        cap = result[0]
+        if cap is not None and cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            return cap
+
+        if cap is not None:
+            cap.release()
+        return None

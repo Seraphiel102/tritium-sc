@@ -818,3 +818,70 @@ async def report_sighting(request: Request):
     )
     engine.vision_system.add_sighting(report)
     return {"status": "accepted"}
+
+
+def _get_convoy_detector(request: Request):
+    """Get convoy detector from Amy's event bus subsystems."""
+    amy = getattr(request.app.state, "amy", None)
+    if amy is not None:
+        cd = getattr(amy, "convoy_detector", None)
+        if cd is not None:
+            return cd
+    return getattr(request.app.state, "convoy_detector", None)
+
+
+@router.get("/convoys")
+async def get_convoys(request: Request):
+    """Return active convoys with member positions for map visualization.
+
+    Each convoy includes a bounding box, center position, member count,
+    and suspicious score for color coding on the tactical map.
+    """
+    detector = _get_convoy_detector(request)
+    if detector is None:
+        return {"convoys": [], "summary": {"active_convoys": 0}}
+
+    convoys = detector.get_active_convoys()
+    tracker = _get_tracker(request)
+
+    # Enrich each convoy with geo positions for map rendering
+    enriched = []
+    for c in convoys:
+        member_positions = []
+        if tracker is not None:
+            for tid in c.get("member_target_ids", []):
+                t = tracker.get_target(tid)
+                if t is not None:
+                    td = t.to_dict()
+                    member_positions.append({
+                        "target_id": tid,
+                        "lat": td.get("lat", 0.0),
+                        "lng": td.get("lng", 0.0),
+                    })
+
+        # Compute bounding box from member positions
+        bbox = None
+        if member_positions:
+            lats = [p["lat"] for p in member_positions if p["lat"]]
+            lngs = [p["lng"] for p in member_positions if p["lng"]]
+            if lats and lngs:
+                pad = 0.0001  # small padding around bbox
+                bbox = {
+                    "north": max(lats) + pad,
+                    "south": min(lats) - pad,
+                    "east": max(lngs) + pad,
+                    "west": min(lngs) - pad,
+                    "center_lat": sum(lats) / len(lats),
+                    "center_lng": sum(lngs) / len(lngs),
+                }
+
+        enriched.append({
+            **c,
+            "member_positions": member_positions,
+            "bbox": bbox,
+        })
+
+    return {
+        "convoys": enriched,
+        "summary": detector.get_summary(),
+    }

@@ -48,6 +48,10 @@ class NotificationManager:
             "severity": "warning",
             "title": "Suspicious BLE Device",
         },
+        "ble:first_seen": {
+            "severity": "info",
+            "title": "New Device First Seen",
+        },
         "geofence:enter": {
             "severity": "warning",
             "title": "Geofence Entry",

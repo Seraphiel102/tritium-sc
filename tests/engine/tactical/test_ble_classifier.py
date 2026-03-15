@@ -89,13 +89,19 @@ class TestBLEClassification:
         assert result.level == "new"
 
     def test_new_device_publishes_alert(self, bus, classifier):
-        """A 'new' device should publish a ble:new_device alert."""
+        """A 'new' device should publish ble:new_device + ble:first_seen alerts."""
         classifier.classify("AA:BB:CC:DD:EE:FF", "NewDevice", -80)
-        assert len(bus.published) == 1
+        # Two events: ble:new_device (legacy) + ble:first_seen (notification)
+        assert len(bus.published) == 2
         event_type, data = bus.published[0]
         assert event_type == "ble:new_device"
         assert data["mac"] == "AA:BB:CC:DD:EE:FF"
         assert data["level"] == "new"
+        # Second event: first-seen notification
+        fs_type, fs_data = bus.published[1]
+        assert fs_type == "ble:first_seen"
+        assert fs_data["mac"] == "AA:BB:CC:DD:EE:FF"
+        assert "New device first seen" in fs_data["message"]
 
     def test_strong_unknown_signal_classified_as_suspicious(self, bus, classifier):
         """Unknown device with RSSI > threshold should be 'suspicious'."""
@@ -104,13 +110,15 @@ class TestBLEClassification:
         assert result.level == "suspicious"
 
     def test_suspicious_device_publishes_alert(self, bus, classifier):
-        """A suspicious device should publish a ble:new_device alert (first time)."""
+        """A suspicious device should publish ble:new_device + ble:first_seen (first time)."""
         classifier.classify("CC:DD:EE:FF:00:11", "StrongDevice", -30)
-        assert len(bus.published) == 1
+        assert len(bus.published) == 2
         event_type, data = bus.published[0]
         # First time seeing it -> ble:new_device even if suspicious
         assert event_type == "ble:new_device"
         assert data["level"] == "suspicious"
+        # Also first-seen notification
+        assert bus.published[1][0] == "ble:first_seen"
 
     def test_returning_strong_unknown_publishes_suspicious_alert(self, bus, classifier):
         """Previously seen unknown device with strong signal -> suspicious alert."""

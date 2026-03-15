@@ -231,7 +231,11 @@ class BLEClassifier:
             logger.debug("Training store log failed (non-fatal): %s", exc)
 
     def _publish_alert(self, classification: BLEClassification, is_first_time: bool) -> None:
-        """Publish BLE alert to EventBus."""
+        """Publish BLE alert to EventBus.
+
+        For first-time devices, also publishes a ``ble:first_seen`` notification
+        event so operators are alerted about completely new BLE MACs.
+        """
         event_type = "ble:new_device" if is_first_time else "ble:suspicious_device"
         data = {
             "mac": classification.mac,
@@ -243,6 +247,24 @@ class BLEClassifier:
             "seen_count": classification.seen_count,
         }
         self._event_bus.publish(event_type, data)
+
+        # First-seen notification — operator alert for brand new BLE MACs
+        if is_first_time:
+            device_label = classification.name or "Unknown device"
+            self._event_bus.publish("ble:first_seen", {
+                "title": "New Device First Seen",
+                "message": (
+                    f"New device first seen: {device_label}, "
+                    f"RSSI {classification.rssi}dBm"
+                ),
+                "severity": "info",
+                "source": "ble_classifier",
+                "entity_id": f"ble_{classification.mac}",
+                "mac": classification.mac,
+                "name": classification.name,
+                "rssi": classification.rssi,
+            })
+
         logger.info(
             "BLE alert [%s]: mac=%s name=%s rssi=%d level=%s",
             event_type, classification.mac, classification.name,

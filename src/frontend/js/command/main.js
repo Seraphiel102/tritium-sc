@@ -98,6 +98,7 @@ import { FusionDashboardPanelDef } from './panels/fusion-dashboard.js';
 import { OperatorActivityPanelDef } from './panels/operator-activity.js';
 import { SwarmCoordinationPanelDef } from './panels/swarm-coordination.js';
 import { TrainingDashboardPanelDef } from './panels/training-dashboard.js';
+import { ConvoyPanelDef } from './panels/convoy-panel.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -108,6 +109,7 @@ import { createTacticalBanner } from './tactical-banner.js';
 import { createMapQuickToggles } from './map-quick-toggles.js';
 import { TargetTrailManager } from './target-trails.js';
 import { HandoffLineManager } from './handoff-lines.js';
+import { ConvoyOverlayManager } from './convoy-overlay.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -663,10 +665,22 @@ function initPanelSystem(container) {
     panelManager.register(OperatorActivityPanelDef);
     panelManager.register(SwarmCoordinationPanelDef);
     panelManager.register(TrainingDashboardPanelDef);
+    panelManager.register(ConvoyPanelDef);
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();
     predictionEllipses.start();
+
+    // Start convoy bounding box overlay on the map
+    const convoyOverlay = new ConvoyOverlayManager();
+    // Wait for map load event then attach
+    EventBus.on('map:ready', (mapInstance) => {
+        convoyOverlay.start(mapInstance);
+    });
+    // If map is already ready, try to start with window._tritiumMap
+    if (window._tritiumMap) {
+        convoyOverlay.start(window._tritiumMap);
+    }
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
     initScreenshotHotkey();

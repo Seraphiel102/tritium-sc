@@ -125,13 +125,29 @@ from app.routers.reid import router as reid_router
 # ---------------------------------------------------------------------------
 
 async def _discover_cameras() -> None:
-    """Auto-discover cameras from NVR and register new ones."""
+    """Auto-discover cameras from NVR and register new ones.
+
+    Runs NVR discovery with a configurable timeout (default 3s) in a
+    background thread so it never blocks server startup.  If the NVR
+    is unreachable, the server starts immediately and logs a warning.
+    """
     try:
         from app.discovery.nvr import discover_cameras
         from app.models import Camera
         from sqlalchemy import select
 
-        cameras = await discover_cameras()
+        timeout = getattr(settings, "nvr_discovery_timeout", 3.0)
+        try:
+            cameras = await asyncio.wait_for(
+                discover_cameras(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"NVR camera discovery timed out after {timeout}s — "
+                "server starting without cameras"
+            )
+            return
+
         if cameras:
             async with async_session() as db:
                 result = await db.execute(select(Camera.channel))
@@ -821,8 +837,8 @@ async def lifespan(app: FastAPI):
             f"{settings.map_center_lng:.7f}, alt={settings.map_center_alt:.1f}"
         )
 
-    # NVR camera discovery
-    await _discover_cameras()
+    # NVR camera discovery — run in background so server starts immediately
+    asyncio.create_task(_discover_cameras())
 
     # Amy + subsystems
     amy_instance = None

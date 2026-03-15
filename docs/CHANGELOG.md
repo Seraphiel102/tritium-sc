@@ -14,10 +14,19 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
-## 2026-03-15 — Wave 146: Maintenance
+## 2026-03-15 — Wave 146: RTSP Timeout Fix + Convoy Visualization + First-Seen Notifications
 
 | Change | Verification |
 |--------|-------------|
+| RTSP camera probe timeout fix — asyncio.wait_for with 3s default, non-blocking background task | Code review |
+| ReconnectingFrameBuffer.start() non-blocking — RTSP probe in background thread with 3s timeout | Code review |
+| nvr_discovery_timeout config setting (default 3.0s) | Code review |
+| Convoy visualization on tactical map — ConvoyOverlayManager with MapLibre GL source/layers | Code review |
+| Convoy bounding box color by suspicious score (green/yellow/red) with CONVOY label and count | Code review |
+| Convoy panel — active convoy list with speed, heading, duration, click-to-center | Code review |
+| /api/convoys endpoint — enriched convoy data with member positions and bounding boxes | Code review |
+| BLE first-seen notification — ble:first_seen event on new MAC, auto-creates notification | 17 tests pass |
+| NotificationManager: ble:first_seen added to AUTO_EVENTS | 23 tests pass |
 | Codebase counts updated: 101 app routers, 87 panels, 155 JS files, 772+ route decorators | Verified |
 
 ---
