@@ -124,15 +124,37 @@ export const AmyConversationPanelDef = {
 
                 eventSource.onmessage = (event) => {
                     try {
-                        const data = JSON.parse(event.data);
-                        if (data.thought || data.text) {
-                            addEntry(data.thought || data.text, 'thought', data.timestamp);
+                        const msg = JSON.parse(event.data);
+                        // Events come as {type, data, timestamp} from the SSE bridge.
+                        // The inner payload is in msg.data (object with text/thought fields).
+                        const etype = msg.type || '';
+                        const payload = msg.data || {};
+                        const ts = msg.timestamp;
+
+                        // Extract thought text from either flat or nested format
+                        const thoughtText = payload.text || payload.thought
+                            || msg.thought || msg.text;
+                        if (thoughtText && (etype === 'thought' || etype === 'inner_monologue'
+                            || etype === '' || etype === 'unknown')) {
+                            addEntry(thoughtText, 'thought', ts);
                         }
-                        if (data.layer_activity) {
-                            updateLayers(data.layer_activity);
+
+                        // Amy announcements (war commentary)
+                        if (etype === 'amy_announcement' && payload.text) {
+                            const cat = payload.category || 'announce';
+                            addEntry(payload.text, cat === 'elimination' ? 'action' : 'thought', ts);
                         }
-                        if (data.action) {
-                            addEntry(`ACTION: ${data.action}`, 'action');
+
+                        // Layer activity updates
+                        const layers = payload.layer_activity || msg.layer_activity;
+                        if (layers) {
+                            updateLayers(layers);
+                        }
+
+                        // Action results
+                        const actionText = payload.action || msg.action;
+                        if (actionText) {
+                            addEntry(`ACTION: ${actionText}`, 'action', ts);
                         }
                     } catch (_) {
                         // Plain text thought

@@ -2304,7 +2304,19 @@ function warHandleEliminationStreak(data) {
 
 function warHandleGameOver(data) {
     if (typeof warHudShowGameOver === 'function') {
-        warHudShowGameOver(data.result, data.final_score, data.waves_completed, data.total_eliminations || data.total_kills);
+        // Backend sends 'wave' (singular); support both for resilience
+        var wavesCompleted = data.waves_completed || data.waves || data.wave || 0;
+        var modeData = {
+            game_mode_type: data.game_mode_type,
+            reason: data.reason,
+            de_escalation_score: data.de_escalation_score,
+            civilian_harm_count: data.civilian_harm_count,
+            civilian_harm_limit: data.civilian_harm_limit,
+            weighted_total_score: data.weighted_total_score,
+            infrastructure_health: data.infrastructure_health,
+            infrastructure_max: data.infrastructure_max
+        };
+        warHudShowGameOver(data.result, data.final_score || data.score, wavesCompleted, data.total_eliminations || data.total_kills, modeData);
     }
 }
 

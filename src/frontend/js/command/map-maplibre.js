@@ -110,7 +110,7 @@ const _state = {
     showUnits: true,           // DOM unit markers (colored dots)
     allianceFilter: null,      // null = show all, or ['hostile','friendly','neutral']
     showLabels: true,          // DOM unit name labels
-    showModels3d: true,        // Three.js 3D unit models
+    showModels3d: false,       // 3D models — off by default (causes visual clutter with circles)
     showFog: false,            // fog of war
     showMesh: true,            // mesh radio overlay (master toggle)
     showMeshNodes: true,       // mesh node icons
@@ -139,13 +139,13 @@ const _state = {
     showThoughts: true,        // NPC thought bubbles above markers
     showWeaponRange: false,    // weapon range circle — off by default (visual clutter)
     showHeatmap: false,        // combat zone heatmap (off by default)
-    showSwarmHull: true,       // drone swarm convex hull polygon
+    showSwarmHull: false,      // swarm hull — off by default
     showSquadHulls: false,     // squad hulls — off by default (visual clutter)
-    showHazardZones: true,     // environmental hazard zones (fire/flood/roadblock)
+    showHazardZones: false,    // hazard zones — off by default
     showHostileObjectives: false, // hostile objectives — off by default
     showCrowdDensity: true,    // crowd density heatmap (civil_unrest mode only)
     showCoverPoints: false,    // tactical cover positions (off by default — too noisy during battle)
-    showUnitSignals: true,     // unit communication signals (distress/contact/etc)
+    showUnitSignals: false,    // unit signals — off by default
     showHostileIntel: false,   // hostile intel — off by default (visual clutter)
 
     // Cinematic auto-follow camera
@@ -783,6 +783,10 @@ function _buildStyle() {
 function _addThreeJsLayer() {
     if (typeof THREE === 'undefined') {
         console.warn('[MAP-ML] Three.js not loaded, skipping tactical overlay');
+        return;
+    }
+    if (!_state.showModels3d) {
+        console.log('[MAP-ML] 3D models disabled, skipping Three.js layer');
         return;
     }
 
