@@ -19,6 +19,8 @@ const _hudState = {
     eliminations: 0,
     wave: 0,
     totalWaves: 10,
+    waveHostilesRemaining: 0,  // hostiles still alive in current wave
+    waveName: '',              // current wave name from backend
     gameState: 'idle', // idle | setup | countdown | active | wave_complete | game_over
     eliminationFeed: [],      // { text, interceptorColor, targetColor, time }
     announcements: [], // queued amy announcements
@@ -87,6 +89,8 @@ function warHudUpdateGameState(data) {
     if (data.score !== undefined) _hudState.score = data.score;
     if (data.total_eliminations !== undefined) _hudState.eliminations = data.total_eliminations;
     else if (data.total_kills !== undefined) _hudState.eliminations = data.total_kills;
+    if (data.wave_hostiles_remaining !== undefined) _hudState.waveHostilesRemaining = data.wave_hostiles_remaining;
+    if (data.wave_name !== undefined) _hudState.waveName = data.wave_name;
 
     // Mission mode type and mode-specific fields
     if (data.game_mode_type !== undefined) _hudState.gameModeType = data.game_mode_type;
@@ -385,7 +389,14 @@ function _updateWaveCounter() {
     }
 
     el.style.display = 'block';
-    el.textContent = 'WAVE ' + _hudState.wave + '/' + _hudState.totalWaves;
+    let text = 'WAVE ' + _hudState.wave + '/' + _hudState.totalWaves;
+    // Show hostiles remaining during active wave
+    if (_hudState.gameState === 'active' && _hudState.waveHostilesRemaining > 0) {
+        text += '  //  ' + _hudState.waveHostilesRemaining + ' HOSTILES';
+    } else if (_hudState.gameState === 'wave_complete') {
+        text += '  //  CLEARED';
+    }
+    el.textContent = text;
 }
 
 // ============================================================
@@ -585,6 +596,8 @@ function warHudPlayAgain() {
     _hudState.eliminations = 0;
     _hudState.wave = 0;
     _hudState.totalWaves = 10;
+    _hudState.waveHostilesRemaining = 0;
+    _hudState.waveName = '';
     _hudState.gameState = 'idle';
     _hudState.eliminationFeed = [];
     // Reset mission mode fields

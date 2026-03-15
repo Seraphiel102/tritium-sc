@@ -498,19 +498,20 @@ export class WebSocketManager {
             case 'game_kill':
             case 'amy_game_elimination':
             case 'amy_game_kill':
-                // Route through warHandle* for audio + visual + kill feed.
-                // warHandleTargetEliminated (war.js) already calls warCombatAddEliminationEffect
-                // and warHudAddKillFeedEntry internally, so only use fallback when it is absent.
+                // Route through warHandle* for audio hooks (war-events.js patches
+                // these even when war.js is absent, so this always fires audio)
                 if (typeof window.warHandleTargetEliminated === 'function') {
                     window.warHandleTargetEliminated(msg.data || msg);
-                } else {
-                    // Fallback when war.js is not loaded (e.g. Command Center without legacy canvas)
-                    if (typeof window.warCombatAddEliminationEffect === 'function') {
-                        window.warCombatAddEliminationEffect(msg.data || msg);
-                    }
-                    if (typeof window.warHudAddKillFeedEntry === 'function') {
-                        window.warHudAddKillFeedEntry(msg.data || msg);
-                    }
+                }
+                // Always add elimination effect + kill feed entry.
+                // In Command Center (unified.html), war.js is NOT loaded so the
+                // warHandle* above only fires audio via war-events.js.  The visual
+                // effect + kill feed must be called unconditionally here.
+                if (typeof window.warCombatAddEliminationEffect === 'function') {
+                    window.warCombatAddEliminationEffect(msg.data || msg);
+                }
+                if (typeof window.warHudAddKillFeedEntry === 'function') {
+                    window.warHudAddKillFeedEntry(msg.data || msg);
                 }
                 EventBus.emit('combat:elimination', msg.data || msg);
                 EventBus.emit('game:elimination', msg.data || msg);
@@ -707,7 +708,7 @@ export class WebSocketManager {
                 }
                 TritiumStore.addAlert({
                     type: 'warning',
-                    message: `WAVE ${d.wave || '?'} INCOMING — ${d.hostile_count || '?'} hostiles`,
+                    message: `WAVE ${d.wave_number || d.wave || '?'} INCOMING — ${d.hostile_count || '?'} hostiles`,
                     source: 'game',
                 });
                 // Store wave direction for late-joining browsers
@@ -721,7 +722,7 @@ export class WebSocketManager {
                 const d = msg.data || msg;
                 TritiumStore.addAlert({
                     type: 'info',
-                    message: `WAVE ${d.wave || '?'} CLEAR`,
+                    message: `WAVE ${d.wave_number || d.wave || '?'} CLEAR`,
                     source: 'game',
                 });
                 // Route through warHandle* for audio hooks

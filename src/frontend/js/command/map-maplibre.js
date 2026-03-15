@@ -5333,6 +5333,15 @@ function _onGameStateChange(data) {
         _stopHostileObjectivePoll();
         _showBattleVignette(false);
         _removeDirectionalThreatArrows();
+    } else if (data.state === 'setup') {
+        // Reset after a game — clear game-over overlay but keep effects initialized
+        _removeGameOverOverlay();
+        _showBattleVignette(false);
+        _removeDirectionalThreatArrows();
+        _state.battleStartTime = 0;
+        _state._waveDirection = null;
+        _state._nextWaveCountdown = 0;
+        _state._nextWaveCountdownStart = 0;
     } else if (data.state === 'idle') {
         _stopHostileObjectivePoll();
         _showBattleVignette(false);
