@@ -14,6 +14,60 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 158: Maintenance
+
+| Change | Verification |
+|--------|-------------|
+| Codebase counts: 101 app routers, 93 panels, 161 JS files, 704 SC test files, 21 plugin dirs | Verified |
+
+---
+
+## 2026-03-15 — Wave 157: RL 92% Accuracy + Indoor Panel
+
+| Change | Verification |
+|--------|-------------|
+| RL GridSearchCV hyperparameter optimization — 92.0% accuracy, 16-feature model | 113 tests pass |
+| Indoor positioning panel, fleet indoor position display, acoustic panel verification | Code review |
+
+---
+
+## 2026-03-15 — Wave 156: Indoor Positioning Plugin + Collaboration
+
+| Change | Verification |
+|--------|-------------|
+| indoor_positioning plugin — WiFi+BLE fusion for indoor localization | Code review |
+| Collaboration API wired to frontend panels | Code review |
+| Dead JS cleanup, acoustic test fix | Code review |
+
+---
+
+## 2026-03-15 — Wave 155: Security Audit
+
+| Change | Verification |
+|--------|-------------|
+| Security audit — acoustic/LPR panel fixes, auth hardening on new endpoints | Code review |
+
+---
+
+## 2026-03-15 — Wave 154: Geofence + Patrol Drawing
+
+| Change | Verification |
+|--------|-------------|
+| Geofence polygon drawing tool on tactical map | Code review |
+| Patrol route drawing tool on tactical map | Code review |
+
+---
+
+## 2026-03-15 — Wave 153: Map Layer Switcher + Fusion Viz
+
+| Change | Verification |
+|--------|-------------|
+| Map layer switcher panel with per-layer toggles | Code review |
+| Fused target indicators with multi-source visualization | Code review |
+| Dossier auto-enrichment with signal history and behavioral profile | Code review |
+
+---
+
 ## 2026-03-15 — Wave 152: Maintenance
 
 | Change | Verification |
