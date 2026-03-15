@@ -99,6 +99,9 @@ import { OperatorActivityPanelDef } from './panels/operator-activity.js';
 import { SwarmCoordinationPanelDef } from './panels/swarm-coordination.js';
 import { TrainingDashboardPanelDef } from './panels/training-dashboard.js';
 import { ConvoyPanelDef } from './panels/convoy-panel.js';
+import { OperatorCursorsPanelDef } from './panels/operator-cursors-panel.js';
+import { WeatherOverlayPanelDef } from './panels/weather-overlay-panel.js';
+import { TrailExportPanelDef } from './panels/trail-export-panel.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -666,6 +669,9 @@ function initPanelSystem(container) {
     panelManager.register(SwarmCoordinationPanelDef);
     panelManager.register(TrainingDashboardPanelDef);
     panelManager.register(ConvoyPanelDef);
+    panelManager.register(OperatorCursorsPanelDef);
+    panelManager.register(WeatherOverlayPanelDef);
+    panelManager.register(TrailExportPanelDef);
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();

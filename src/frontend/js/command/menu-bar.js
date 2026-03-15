@@ -56,13 +56,15 @@ function _fileMenuItems(layoutManager) {
     ];
 }
 
-// Panel categories — group 54 panels into logical sections
+// Panel categories — group all panels into logical sections
 const PANEL_CATEGORIES = {
-    'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks'],
-    'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard', 'dwell-monitor'],
-    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak'],
-    'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets', 'command-history', 'federation'],
-    'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs'],
+    'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks', 'annotations', 'watchlist', 'swarm-coordination', 'convoy'],
+    'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'dossier-timeline', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard', 'dwell-monitor', 'behavioral-intelligence', 'reid-matches', 'lpr', 'fusion-dashboard', 'acoustic-intelligence', 'activity-feed', 'trail-export'],
+    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector'],
+    'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets', 'command-history', 'federation', 'training-dashboard'],
+    'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs', 'voice-command'],
+    'Collaboration': ['operator-activity', 'operator-cursors', 'map-share', 'keyboard-macros'],
+    'Map & GIS':     ['grid-overlay', 'floorplan', 'building-occupancy', 'weather-overlay', 'map-replay'],
     'Simulation':    ['game', 'battle-stats', 'replay', 'scenarios'],
     'System':        ['system', 'system-health', 'security-audit', 'deployment', 'testing', 'export-scheduler', 'events', 'videos', 'quick-start', 'setup-wizard'],
 };

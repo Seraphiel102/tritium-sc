@@ -131,12 +131,249 @@ async def get_target_trail(
     }
 
 
+@router.get("/targets/{target_id}/trail/gpx")
+async def export_target_trail_gpx_direct(
+    request: Request,
+    target_id: str,
+    start_time: Optional[str] = Query(None, description="Start time filter (ISO8601)"),
+    end_time: Optional[str] = Query(None, description="End time filter (ISO8601)"),
+    simplify: bool = Query(False, description="Simplify trail points using RDP algorithm"),
+    max_points: int = Query(10000, ge=1, le=100000, description="Max trail points"),
+):
+    """Export target trail as GPX 1.1 XML.
+
+    Direct GPX endpoint for ATAK, Google Earth, and any GPX-compatible
+    GIS application. Returns ``application/gpx+xml`` content type.
+
+    Query parameters:
+    - ``start_time`` / ``end_time`` — ISO8601 time window filter
+    - ``simplify`` — reduce point count using Ramer-Douglas-Peucker
+    - ``max_points`` — maximum number of trail points to return
+    """
+    from fastapi.responses import Response
+    from tritium_lib.models.gpx import GPXDocument
+    from tritium_lib.models.trail_export import TrailExport, TrailPoint, TrailFormat
+
+    tracker = _get_tracker(request)
+    if tracker is None:
+        return {"error": "No tracker available"}
+
+    target = tracker.get_target(target_id)
+    if target is None:
+        return {"error": "Target not found"}
+
+    trail = tracker.history.get_trail_dicts(target_id, max_points=max_points)
+    trail = _filter_trail_by_time(trail, start_time, end_time)
+    target_dict = target.to_dict()
+    safe_id = target_id.replace("/", "_").replace("\\", "_")
+
+    # Build TrailExport model for optional simplification
+    if simplify and len(trail) > 2:
+        export_model = TrailExport(
+            target_id=target_id,
+            format=TrailFormat.GPX,
+            points=[TrailPoint.from_dict(_normalize_trail_pt(pt)) for pt in trail],
+        )
+        export_model = export_model.simplify()
+        # Rebuild trail from simplified points
+        trail = [p.to_dict() for p in export_model.points]
+
+    doc = GPXDocument(
+        creator="Tritium Command Center",
+        name=f"Target {target_id} trail",
+        desc=f"Movement trail for target {target_id}",
+    )
+    trk = doc.add_track(name=target_id, desc=target_dict.get("name", ""))
+
+    for pt in trail:
+        lat, lng = _extract_lat_lng(pt)
+        ele = pt.get("ele", pt.get("altitude", pt.get("alt")))
+        t_dt = _parse_trail_time(pt)
+        trk.add_point(lat, lng, ele=ele, time=t_dt)
+
+    if trail:
+        first = trail[0]
+        last = trail[-1]
+        for label, pt_data in [("First seen", first), ("Last seen", last)]:
+            lat, lng = _extract_lat_lng(pt_data)
+            doc.add_waypoint(lat, lng, name=f"{target_id} - {label}", sym="Flag")
+
+    return Response(
+        content=doc.to_xml(),
+        media_type="application/gpx+xml",
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_id}_trail.gpx",
+        },
+    )
+
+
+@router.get("/targets/{target_id}/trail/kml")
+async def export_target_trail_kml(
+    request: Request,
+    target_id: str,
+    start_time: Optional[str] = Query(None, description="Start time filter (ISO8601)"),
+    end_time: Optional[str] = Query(None, description="End time filter (ISO8601)"),
+    simplify: bool = Query(False, description="Simplify trail points using RDP algorithm"),
+    max_points: int = Query(10000, ge=1, le=100000, description="Max trail points"),
+):
+    """Export target trail as KML 2.2 XML.
+
+    For Google Earth, ATAK, and any KML-compatible GIS application.
+    Returns ``application/vnd.google-earth.kml+xml`` content type.
+
+    Query parameters:
+    - ``start_time`` / ``end_time`` — ISO8601 time window filter
+    - ``simplify`` — reduce point count using Ramer-Douglas-Peucker
+    - ``max_points`` — maximum number of trail points to return
+    """
+    from fastapi.responses import Response
+    from tritium_lib.models.kml import KMLDocument
+    from tritium_lib.models.trail_export import TrailExport, TrailPoint, TrailFormat
+
+    tracker = _get_tracker(request)
+    if tracker is None:
+        return {"error": "No tracker available"}
+
+    target = tracker.get_target(target_id)
+    if target is None:
+        return {"error": "Target not found"}
+
+    trail = tracker.history.get_trail_dicts(target_id, max_points=max_points)
+    trail = _filter_trail_by_time(trail, start_time, end_time)
+    target_dict = target.to_dict()
+    safe_id = target_id.replace("/", "_").replace("\\", "_")
+
+    # Build TrailExport model for optional simplification
+    if simplify and len(trail) > 2:
+        export_model = TrailExport(
+            target_id=target_id,
+            format=TrailFormat.KML,
+            points=[TrailPoint.from_dict(_normalize_trail_pt(pt)) for pt in trail],
+        )
+        export_model = export_model.simplify()
+        trail = [p.to_dict() for p in export_model.points]
+
+    doc = KMLDocument(
+        name=f"Target {target_id} trail",
+        desc=f"Movement trail for target {target_id}",
+    )
+    trk = doc.add_track(name=target_id, desc=target_dict.get("name", ""))
+
+    for pt in trail:
+        lat, lng = _extract_lat_lng(pt)
+        alt = pt.get("alt", pt.get("ele", pt.get("altitude")))
+        t_dt = _parse_trail_time(pt)
+        trk.add_point(lat, lng, alt=alt, time=t_dt)
+
+    # Add start/end placemarks
+    if trail:
+        first = trail[0]
+        last = trail[-1]
+        for label, pt_data in [("First seen", first), ("Last seen", last)]:
+            lat, lng = _extract_lat_lng(pt_data)
+            doc.add_placemark(lat, lng, name=f"{target_id} - {label}")
+
+    return Response(
+        content=doc.to_xml(),
+        media_type="application/vnd.google-earth.kml+xml",
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_id}_trail.kml",
+        },
+    )
+
+
+def _extract_lat_lng(pt: dict) -> tuple[float, float]:
+    """Extract lat/lng from a trail point dict, falling back to x/y."""
+    lat = pt.get("lat", 0.0) or 0.0
+    lng = pt.get("lng", pt.get("lon", 0.0)) or 0.0
+    if lat == 0.0 and lng == 0.0:
+        lng = pt.get("x", 0.0)
+        lat = pt.get("y", 0.0)
+    return lat, lng
+
+
+def _parse_trail_time(pt: dict):
+    """Parse a trail point's time field into a datetime, or None."""
+    t_str = pt.get("time", pt.get("timestamp"))
+    if t_str is None:
+        return None
+    try:
+        from datetime import datetime as dt_cls
+        if isinstance(t_str, (int, float)):
+            from datetime import timezone as tz
+            return dt_cls.fromtimestamp(t_str, tz=tz.utc)
+        return dt_cls.fromisoformat(str(t_str))
+    except Exception:
+        return None
+
+
+def _normalize_trail_pt(pt: dict) -> dict:
+    """Normalize a trail point dict for TrailPoint.from_dict()."""
+    lat, lng = _extract_lat_lng(pt)
+    return {
+        "lat": lat,
+        "lng": lng,
+        "alt": pt.get("alt", pt.get("ele", pt.get("altitude"))),
+        "timestamp": pt.get("time", pt.get("timestamp")),
+        "speed": pt.get("speed"),
+        "heading": pt.get("heading"),
+        "confidence": pt.get("confidence"),
+    }
+
+
+def _filter_trail_by_time(trail: list[dict], start_time: str | None, end_time: str | None) -> list[dict]:
+    """Filter trail points by ISO8601 time window."""
+    if not start_time and not end_time:
+        return trail
+
+    from datetime import datetime as dt_cls
+
+    start_dt = None
+    end_dt = None
+    if start_time:
+        try:
+            start_dt = dt_cls.fromisoformat(start_time)
+        except ValueError:
+            pass
+    if end_time:
+        try:
+            end_dt = dt_cls.fromisoformat(end_time)
+        except ValueError:
+            pass
+
+    if start_dt is None and end_dt is None:
+        return trail
+
+    filtered = []
+    for pt in trail:
+        t_dt = _parse_trail_time(pt)
+        if t_dt is None:
+            filtered.append(pt)  # keep points without timestamps
+            continue
+        # Make comparison timezone-aware if needed
+        if start_dt and t_dt.tzinfo and not start_dt.tzinfo:
+            from datetime import timezone as tz
+            start_dt = start_dt.replace(tzinfo=tz.utc)
+        if end_dt and t_dt.tzinfo and not end_dt.tzinfo:
+            from datetime import timezone as tz
+            end_dt = end_dt.replace(tzinfo=tz.utc)
+        if start_dt and t_dt < start_dt:
+            continue
+        if end_dt and t_dt > end_dt:
+            continue
+        filtered.append(pt)
+    return filtered
+
+
 @router.get("/targets/{target_id}/trail/export")
 async def export_target_trail_gpx(
     request: Request,
     target_id: str,
-    format: str = Query("gpx", description="Export format: gpx, csv, json, geojson"),
+    format: str = Query("gpx", description="Export format: gpx, kml, csv, json, geojson"),
     max_points: int = Query(10000, ge=1, le=100000, description="Max trail points"),
+    start_time: Optional[str] = Query(None, description="Start time filter (ISO8601)"),
+    end_time: Optional[str] = Query(None, description="End time filter (ISO8601)"),
+    simplify: bool = Query(False, description="Simplify trail points using RDP algorithm"),
 ):
     """Export a target's movement trail for external mapping tools.
 
@@ -145,10 +382,23 @@ async def export_target_trail_gpx(
 
     Supported formats:
     - ``gpx`` — GPX 1.1 XML (default, for ATAK/Google Earth)
+    - ``kml`` — KML 2.2 XML (for Google Earth)
     - ``geojson`` — GeoJSON Feature with LineString geometry (web-friendly)
     - ``csv`` / ``json`` — delegates to history/export
     """
     fmt = format.lower().strip()
+
+    # Delegate to dedicated endpoints for GPX and KML
+    if fmt == "gpx":
+        return await export_target_trail_gpx_direct(
+            request, target_id, start_time=start_time, end_time=end_time,
+            simplify=simplify, max_points=max_points,
+        )
+    if fmt == "kml":
+        return await export_target_trail_kml(
+            request, target_id, start_time=start_time, end_time=end_time,
+            simplify=simplify, max_points=max_points,
+        )
 
     # GeoJSON: direct implementation for trail-specific export
     if fmt == "geojson":
