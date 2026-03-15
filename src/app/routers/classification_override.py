@@ -12,9 +12,11 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
 from loguru import logger
+
+from app.auth import require_auth
 
 router = APIRouter(prefix="/api/targets", tags=["target-classification"])
 
@@ -40,6 +42,7 @@ async def override_classification(
     target_id: str,
     request: Request,
     override: ClassificationOverride = Body(...),
+    user: dict = Depends(require_auth),
 ):
     """Override a target's classification (alliance and/or device type).
 
@@ -48,6 +51,10 @@ async def override_classification(
     2. The DossierStore (persisted for future sessions)
     3. The audit log (compliance trail)
     """
+    # Auto-fill operator from authenticated user if not specified
+    if not override.operator and user:
+        override.operator = user.get("sub", "operator")
+
     # Validate
     if override.alliance and override.alliance not in VALID_ALLIANCES:
         raise HTTPException(400, f"Invalid alliance: {override.alliance}. Must be one of {VALID_ALLIANCES}")

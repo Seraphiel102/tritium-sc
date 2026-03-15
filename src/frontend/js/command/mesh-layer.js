@@ -5,16 +5,20 @@
  * TRITIUM Command Center -- Mesh Radio Map Layer
  *
  * Dedicated draw layer for Meshtastic mesh radio nodes on the tactical map.
- * Draws protocol-specific icons (M=Meshtastic, C=MeshCore, W=Web),
- * dotted links between communicating nodes, and LoRa coverage circles.
+ * Draws protocol-specific icons (M=Meshtastic, C=MeshCore, W=Web) sized by
+ * actual SNR, link lines between nodes that share real neighbor data colored
+ * by actual SNR, and hop count labels on links.
+ *
+ * NO estimated coverage circles. Only renders what the mesh network actually
+ * reports: real nodes, real neighbor relationships, real signal quality.
  *
  * Fetches live node data from /api/meshtastic/nodes?has_gps=true with
- * 30-second auto-refresh. Sub-layers: nodes, links, coverage.
+ * 30-second auto-refresh. Sub-layers: nodes, links.
  *
  * Exports: meshDrawNodes, meshGetIconForProtocol, meshShouldDrawLink,
  *          meshState, meshFetchNodes, meshGetNodeCount,
  *          MESH_PROTOCOL_ICONS, MESH_NODE_COLOR, MESH_LINK_COLOR,
- *          MESH_LINK_RANGE, MESH_COVERAGE_RADIUS
+ *          MESH_LINK_RANGE
  */
 
 // ============================================================
@@ -29,8 +33,7 @@ const MESH_PROTOCOL_ICONS = {
 
 const MESH_NODE_COLOR = '#00d4aa';      // teal-green for mesh nodes
 const MESH_LINK_COLOR = 'rgba(0, 212, 170, 0.25)';
-const MESH_LINK_RANGE = 500;             // meters -- max link draw distance
-const MESH_COVERAGE_RADIUS = 10000;      // meters -- ~10km LoRa range per node
+const MESH_LINK_RANGE = 500;             // meters -- max link draw distance (fallback)
 
 // Link quality color scale (SNR-based)
 const MESH_LINK_QUALITY = {
@@ -48,7 +51,6 @@ const meshState = {
     visible: true,
     showNodes: true,
     showLinks: true,
-    showCoverage: false,
     opacity: 1.0,
     // Fetched API nodes (GPS-enabled Meshtastic nodes)
     apiNodes: [],
@@ -177,57 +179,113 @@ function meshGetNodeRadius(node) {
 }
 
 // ============================================================
+// Neighbor lookup
+// ============================================================
+
+/**
+ * Build a map of node_id -> node object for fast neighbor lookup.
+ * @param {Array} meshTargets
+ * @returns {Object} map of target_id/node_id -> node
+ */
+function meshBuildNodeMap(meshTargets) {
+    var map = {};
+    for (var i = 0; i < meshTargets.length; i++) {
+        var n = meshTargets[i];
+        var id = n.target_id || (n.metadata && n.metadata.node_id) || '';
+        if (id) map[id] = n;
+        // Also index by short forms (mesh_XXXX -> XXXX)
+        if (id.indexOf('mesh_') === 0) map[id.slice(5)] = n;
+    }
+    return map;
+}
+
+/**
+ * Check if node A lists node B as a neighbor (or vice versa).
+ * Uses metadata.neighbors (array of node IDs) or metadata.rssi_map keys.
+ * @param {object} a
+ * @param {object} b
+ * @returns {{ linked: boolean, snrAB: number|undefined, snrBA: number|undefined, hops: number|undefined }}
+ */
+function meshAreNeighbors(a, b) {
+    var result = { linked: false, snrAB: undefined, snrBA: undefined, hops: undefined };
+    var metaA = a.metadata || {};
+    var metaB = b.metadata || {};
+
+    var idA = a.target_id || metaA.node_id || '';
+    var idB = b.target_id || metaB.node_id || '';
+    var shortA = idA.indexOf('mesh_') === 0 ? idA.slice(5) : idA;
+    var shortB = idB.indexOf('mesh_') === 0 ? idB.slice(5) : idB;
+
+    // Check A's neighbor list for B
+    var neighborsA = metaA.neighbors || [];
+    var rssiMapA = metaA.rssi_map || {};
+    var neighborsB = metaB.neighbors || [];
+    var rssiMapB = metaB.rssi_map || {};
+
+    var aHasB = neighborsA.indexOf(idB) >= 0 || neighborsA.indexOf(shortB) >= 0
+             || rssiMapA[idB] !== undefined || rssiMapA[shortB] !== undefined;
+    var bHasA = neighborsB.indexOf(idA) >= 0 || neighborsB.indexOf(shortA) >= 0
+             || rssiMapB[idA] !== undefined || rssiMapB[shortA] !== undefined;
+
+    if (!aHasB && !bHasA) return result;
+
+    result.linked = true;
+
+    // Extract per-link SNR from rssi_map if available
+    if (rssiMapA[idB] !== undefined) result.snrAB = rssiMapA[idB];
+    else if (rssiMapA[shortB] !== undefined) result.snrAB = rssiMapA[shortB];
+
+    if (rssiMapB[idA] !== undefined) result.snrBA = rssiMapB[idA];
+    else if (rssiMapB[shortA] !== undefined) result.snrBA = rssiMapB[shortA];
+
+    // Hop count: use the lower of the two nodes' hop_count values if present
+    var hopsA = metaA.hop_count !== undefined ? metaA.hop_count : (a.hop_count !== undefined ? a.hop_count : undefined);
+    var hopsB = metaB.hop_count !== undefined ? metaB.hop_count : (b.hop_count !== undefined ? b.hop_count : undefined);
+    if (hopsA !== undefined && hopsB !== undefined) {
+        result.hops = Math.abs(hopsA - hopsB);
+    } else if (hopsA !== undefined || hopsB !== undefined) {
+        result.hops = hopsA !== undefined ? hopsA : hopsB;
+    }
+
+    return result;
+}
+
+/**
+ * Get link color based on actual per-link SNR values.
+ * @param {number|undefined} snrAB - SNR from A's perspective
+ * @param {number|undefined} snrBA - SNR from B's perspective
+ * @param {object} a - node A (fallback to node-level SNR)
+ * @param {object} b - node B (fallback to node-level SNR)
+ * @returns {string} CSS color
+ */
+function meshGetLinkColorFromSNR(snrAB, snrBA, a, b) {
+    // Prefer per-link SNR, fall back to node-level SNR
+    var snrVals = [];
+    if (snrAB !== undefined) snrVals.push(snrAB);
+    if (snrBA !== undefined) snrVals.push(snrBA);
+    if (snrVals.length === 0) {
+        // Fall back to node-level SNR
+        return meshGetLinkColor(a, b);
+    }
+    var avg = 0;
+    for (var i = 0; i < snrVals.length; i++) avg += snrVals[i];
+    avg /= snrVals.length;
+
+    if (avg > 5) return MESH_LINK_QUALITY.excellent;
+    if (avg > 0) return MESH_LINK_QUALITY.good;
+    if (avg > -5) return MESH_LINK_QUALITY.fair;
+    return MESH_LINK_QUALITY.poor;
+}
+
+// ============================================================
 // Draw functions
 // ============================================================
 
 /**
- * Draw LoRa coverage circles for each mesh node.
- * Large translucent circles (~10km radius) showing estimated range.
- *
- * @param {CanvasRenderingContext2D} ctx
- * @param {function} worldToScreen
- * @param {Array} meshTargets
- * @param {number} metersToPixels - conversion factor for coverage radius
- */
-function meshDrawCoverage(ctx, worldToScreen, meshTargets, metersToPixels) {
-    if (!meshState.showCoverage || !meshTargets || meshTargets.length === 0) return;
-
-    ctx.save();
-    ctx.globalAlpha = 0.06 * meshState.opacity;
-
-    const radiusPx = MESH_COVERAGE_RADIUS * (metersToPixels || 0.01);
-
-    for (let i = 0; i < meshTargets.length; i++) {
-        const node = meshTargets[i];
-        const sp = worldToScreen(node.x, node.y);
-
-        // Gradient fill for coverage circle
-        const gradient = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, radiusPx);
-        gradient.addColorStop(0, 'rgba(0, 212, 170, 0.4)');
-        gradient.addColorStop(0.5, 'rgba(0, 212, 170, 0.15)');
-        gradient.addColorStop(1, 'rgba(0, 212, 170, 0)');
-
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Dashed outline
-        ctx.strokeStyle = 'rgba(0, 212, 170, 0.15)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([8, 12]);
-        ctx.beginPath();
-        ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }
-
-    ctx.restore();
-}
-
-/**
- * Draw links between mesh nodes that have communicated recently.
- * Lines colored by link quality (SNR-based).
+ * Draw links between mesh nodes that are actual neighbors.
+ * Only draws links when real neighbor data exists (metadata.neighbors or
+ * metadata.rssi_map). Lines colored by actual per-link SNR.
+ * Hop count labels drawn at link midpoints.
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {function} worldToScreen
@@ -241,18 +299,43 @@ function meshDrawLinks(ctx, worldToScreen, meshTargets) {
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 6]);
 
-    for (let i = 0; i < meshTargets.length; i++) {
-        for (let j = i + 1; j < meshTargets.length; j++) {
-            const a = meshTargets[i];
-            const b = meshTargets[j];
-            if (meshShouldDrawLink(a, b, MESH_LINK_RANGE)) {
-                ctx.strokeStyle = meshGetLinkColor(a, b);
-                const sa = worldToScreen(a.x, a.y);
-                const sb = worldToScreen(b.x, b.y);
-                ctx.beginPath();
-                ctx.moveTo(sa.x, sa.y);
-                ctx.lineTo(sb.x, sb.y);
-                ctx.stroke();
+    // Track drawn pairs to avoid duplicates
+    var drawn = {};
+
+    for (var i = 0; i < meshTargets.length; i++) {
+        for (var j = i + 1; j < meshTargets.length; j++) {
+            var a = meshTargets[i];
+            var b = meshTargets[j];
+
+            // Only draw if real neighbor data confirms a link
+            var link = meshAreNeighbors(a, b);
+            if (!link.linked) continue;
+
+            var pairKey = i + ':' + j;
+            if (drawn[pairKey]) continue;
+            drawn[pairKey] = true;
+
+            ctx.strokeStyle = meshGetLinkColorFromSNR(link.snrAB, link.snrBA, a, b);
+            var sa = worldToScreen(a.x, a.y);
+            var sb = worldToScreen(b.x, b.y);
+            ctx.beginPath();
+            ctx.moveTo(sa.x, sa.y);
+            ctx.lineTo(sb.x, sb.y);
+            ctx.stroke();
+
+            // Draw hop count label at midpoint
+            if (link.hops !== undefined) {
+                var mx = (sa.x + sb.x) / 2;
+                var my = (sa.y + sb.y) / 2;
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 0.6 * meshState.opacity;
+                ctx.fillStyle = MESH_NODE_COLOR;
+                ctx.font = '8px "JetBrains Mono", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(link.hops + 'h', mx, my - 6);
+                ctx.globalAlpha = meshState.opacity;
+                ctx.setLineDash([4, 6]);
             }
         }
     }
@@ -275,10 +358,7 @@ function meshDrawLinks(ctx, worldToScreen, meshTargets) {
 function meshDrawNodes(ctx, worldToScreen, meshTargets, visible, metersToPixels) {
     if (!visible || !meshTargets || meshTargets.length === 0) return;
 
-    // Draw coverage circles first (behind everything)
-    meshDrawCoverage(ctx, worldToScreen, meshTargets, metersToPixels);
-
-    // Draw links
+    // Draw links (real neighbor data only, no fake coverage)
     meshDrawLinks(ctx, worldToScreen, meshTargets);
 
     // Draw nodes
@@ -340,19 +420,20 @@ if (typeof module !== 'undefined' && module.exports) {
         MESH_NODE_COLOR,
         MESH_LINK_COLOR,
         MESH_LINK_RANGE,
-        MESH_COVERAGE_RADIUS,
         MESH_LINK_QUALITY,
         meshDrawNodes,
-        meshDrawCoverage,
         meshDrawLinks,
         meshGetIconForProtocol,
         meshShouldDrawLink,
         meshGetLinkColor,
+        meshGetLinkColorFromSNR,
         meshGetNodeRadius,
         meshGetNodeCount,
         meshFetchNodes,
         meshStartAutoRefresh,
         meshStopAutoRefresh,
+        meshAreNeighbors,
+        meshBuildNodeMap,
         meshState,
     };
 }

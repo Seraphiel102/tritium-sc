@@ -14,6 +14,19 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 106: Maintenance — Real Mesh Links + MQTT Security + Auth Fix
+
+| Change | Verification |
+|--------|-------------|
+| mesh-layer.js: Removed fake 10km LoRa coverage circles (meshDrawCoverage, MESH_COVERAGE_RADIUS deleted) | 34 JS tests |
+| mesh-layer.js: Links only drawn between real neighbors (metadata.neighbors / rssi_map) | 34 JS tests |
+| mesh-layer.js: Link color from actual per-link SNR, hop count labels at link midpoints | 34 JS tests |
+| mesh-layer.js: Added meshAreNeighbors(), meshBuildNodeMap(), meshGetLinkColorFromSNR() | 34 JS tests |
+| conf/mosquitto/acl.conf: Role-based MQTT topic ACL template (admin, SC, devices, cameras, robots, monitor) | Created |
+| docs/MQTT_SECURITY.md: Full deployment guide (passwords, ACL, TLS, edge provisioning) | Created |
+| classification_override.py: POST /{target_id}/classify now requires require_auth (security fix) | Code change |
+| classification_override.py: Auto-fills operator field from authenticated user | Code change |
+
 ## 2026-03-14 — Wave 105: Security Audit + Threat Level History
 
 | Change | Verification |
