@@ -10,7 +10,7 @@
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { WebSocketManager } from './websocket.js';
-import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow, toggleGeoLayers, togglePatrolRoutes, toggleWeaponRange, toggleHeatmap, toggleSwarmHull, toggleHazardZones, toggleHostileObjectives, toggleCrowdDensity, toggleCoverPoints, toggleUnitSignals, toggleHostileIntel } from './map-maplibre.js';
+import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow, toggleGeoLayers, togglePatrolRoutes, toggleWeaponRange, toggleHeatmap, toggleSwarmHull, toggleHazardZones, toggleHostileObjectives, toggleCrowdDensity, toggleCoverPoints, toggleUnitSignals, toggleHostileIntel, togglePredictionCones } from './map-maplibre.js';
 import { PanelManager } from './panel-manager.js';
 import { LayoutManager } from './layout-manager.js';
 import { createMenuBar, focusSaveInput } from './menu-bar.js';
@@ -84,6 +84,7 @@ import { initTargetCounter } from './target-counter.js';
 import { initTargetFilter, matchesFilter, getTargetFilters } from './target-filter.js';
 import { initCommandPalette, openCommandPalette } from './command-palette.js';
 import { createTacticalBanner } from './tactical-banner.js';
+import { createMapQuickToggles } from './map-quick-toggles.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -276,6 +277,9 @@ function init() {
     const tacticalArea = document.getElementById('tactical-area');
     if (tacticalArea) {
         initTargetFilter(tacticalArea);
+
+        // Map layer quick toggles (floating buttons on map right edge)
+        createMapQuickToggles(tacticalArea);
     }
 
     // Expose filter functions for map renderers
