@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 91: Swarm Intelligence + Edge Autonomy
+
+| Change | Verification |
+|--------|-------------|
+| Swarm coordination plugin — multi-robot formation management (line, wedge, circle, diamond, column), waypoint patrol, unit loss handling | Unit Tested (14 tests) |
+| Swarm API routes — CRUD swarms, add/remove members, issue commands, get formation offsets | Unit Tested |
+| Edge autonomy plugin — processes autonomous decisions from edge devices, confirm/override workflow, per-device accuracy tracking | Unit Tested (9 tests) |
+| Edge autonomy API routes — submit/list/confirm/override decisions, device accuracy stats | Unit Tested |
+| Swarm visualization panel (swarm-coordination.js) — canvas formation rendering, waypoint display, map overlay, command controls | Created |
+
 ## 2026-03-14 — Wave 89: Forensic Replay + Incident Reports
 
 | Change | Verification |
