@@ -14,6 +14,42 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 152: Maintenance
+
+| Change | Verification |
+|--------|-------------|
+| Codebase counts: 101 app routers, 91 panels, 159 JS files, 638 SC test files | Verified |
+
+---
+
+## 2026-03-15 — Wave 151: Acoustic MFCC+KNN + Federation v2
+
+| Change | Verification |
+|--------|-------------|
+| Acoustic classifier MFCC+KNN upgrade — scipy MFCC + sklearn KNN (k=5), 3-tier graceful degradation | 60 tests pass |
+| Federation v2.0.0 — target dedup, shared threat assessments, site health monitoring | 71 tests pass |
+| Federation dashboard — health grid, threat list, dedup stats | Code review |
+
+---
+
+## 2026-03-15 — Wave 150: RL Retrain + Dead Routes
+
+| Change | Verification |
+|--------|-------------|
+| RL retrain: 81.7% accuracy (up from 54.8%) on clean 10-feature data | API verified |
+| Dead routes wired to frontend consumers | Code review |
+
+---
+
+## 2026-03-15 — Wave 149: Maintenance + Quality Audit
+
+| Change | Verification |
+|--------|-------------|
+| Unused lib models wired into SC consumers | Code review |
+| Quality audit: 1 test fixed, 12 assertions added | pytest verified |
+
+---
+
 ## 2026-03-15 — Wave 148: LPR Panel + ReID Cross-Camera Panel
 
 | Change | Verification |
