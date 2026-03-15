@@ -31,7 +31,7 @@ export function initTargetCounter() {
     if (!_totalEl) return;
 
     // Subscribe to unit changes
-    TritiumStore.subscribe('units', _scheduleUpdate);
+    TritiumStore.on('units', _scheduleUpdate);
 
     // Initial count
     _updateCounts();
