@@ -187,15 +187,13 @@ class TargetTracker:
     def _check_geofence(self, target_id: str, game_x: float, game_y: float) -> None:
         """Check if a target's position triggers geofence enter/exit events.
 
-        Converts game coordinates (meters from geo center) to lat/lng
-        for comparison against geofence zone polygons.
+        Zone polygons are stored in game coordinates (meters from geo center),
+        so we pass game coordinates directly for point-in-polygon tests.
         """
         if not self._geofence_engine:
             return
         try:
-            from .geo import local_to_latlng_2d
-            lat, lng = local_to_latlng_2d(game_x, game_y)
-            self._geofence_engine.check(target_id, (lat, lng))
+            self._geofence_engine.check(target_id, (game_x, game_y))
         except Exception:
             pass  # Don't let geofence errors break target tracking
 

@@ -137,16 +137,16 @@ const _state = {
     showBanners: true,         // wave/game state announcements
     showLayerHud: false,       // top-center status bar (hidden by default — overlaps tactical banner)
     showThoughts: true,        // NPC thought bubbles above markers
-    showWeaponRange: true,     // weapon range circle on selected unit
+    showWeaponRange: false,    // weapon range circle — off by default (visual clutter)
     showHeatmap: false,        // combat zone heatmap (off by default)
     showSwarmHull: true,       // drone swarm convex hull polygon
-    showSquadHulls: true,      // squad formation convex hulls
+    showSquadHulls: false,     // squad hulls — off by default (visual clutter)
     showHazardZones: true,     // environmental hazard zones (fire/flood/roadblock)
-    showHostileObjectives: true, // hostile objective lines (dashed lines to targets)
+    showHostileObjectives: false, // hostile objectives — off by default
     showCrowdDensity: true,    // crowd density heatmap (civil_unrest mode only)
     showCoverPoints: false,    // tactical cover positions (off by default — too noisy during battle)
     showUnitSignals: true,     // unit communication signals (distress/contact/etc)
-    showHostileIntel: true,    // hostile commander intel HUD
+    showHostileIntel: false,   // hostile intel — off by default (visual clutter)
 
     // Cinematic auto-follow camera
     autoFollow: false,         // auto-follow camera mode
@@ -433,6 +433,12 @@ function _createMap(mapDiv) {
         EventBus.on('unit:aim-mode', _onAimModeEnter);
         EventBus.on('patrol:drawRoute', _onPatrolDrawRouteStart);
         EventBus.on('geofence:drawZone', _onGeofenceDrawStart);
+        // Re-fetch geofence zones when enter/exit events fire or zones change
+        EventBus.on('geofence:enter', () => { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); });
+        EventBus.on('geofence:exit', () => { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); });
+        EventBus.on('zone:selected', (data) => {
+            if (data && data.polygon) { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); }
+        });
         EventBus.on('map:drawFinish', _onDrawFinishML);
         EventBus.on('map:drawCancel', _onDrawCancelML);
         EventBus.on('tak:center-on-client', (data) => {
@@ -2301,6 +2307,8 @@ function _renderGeofenceZones() {
         return;
     }
 
+    console.log(`[MAP-ML] Rendering ${zones.length} geofence zone(s)`);
+
     const features = [];
     const labelFeatures = [];
 
@@ -2376,27 +2384,32 @@ function _renderGeofenceZones() {
         });
     }
 
-    if (_state.map.getSource(GEOFENCE_LABEL_SOURCE)) {
-        _state.map.getSource(GEOFENCE_LABEL_SOURCE).setData(labelGeojson);
-    } else {
-        _state.map.addSource(GEOFENCE_LABEL_SOURCE, { type: 'geojson', data: labelGeojson });
-        _state.map.addLayer({
-            id: GEOFENCE_ZONES_LABEL,
-            type: 'symbol',
-            source: GEOFENCE_LABEL_SOURCE,
-            layout: {
-                'text-field': ['get', 'label'],
-                'text-font': ['Open Sans Bold'],
-                'text-size': 11,
-                'text-anchor': 'center',
-                'text-allow-overlap': true,
-            },
-            paint: {
-                'text-color': ['get', 'color'],
-                'text-halo-color': 'rgba(10,10,20,0.8)',
-                'text-halo-width': 1.5,
-            },
-        });
+    try {
+        if (_state.map.getSource(GEOFENCE_LABEL_SOURCE)) {
+            _state.map.getSource(GEOFENCE_LABEL_SOURCE).setData(labelGeojson);
+        } else {
+            _state.map.addSource(GEOFENCE_LABEL_SOURCE, { type: 'geojson', data: labelGeojson });
+            _state.map.addLayer({
+                id: GEOFENCE_ZONES_LABEL,
+                type: 'symbol',
+                source: GEOFENCE_LABEL_SOURCE,
+                layout: {
+                    'text-field': ['get', 'label'],
+                    'text-font': ['Open Sans Bold'],
+                    'text-size': 11,
+                    'text-anchor': 'center',
+                    'text-allow-overlap': true,
+                },
+                paint: {
+                    'text-color': ['get', 'color'],
+                    'text-halo-color': 'rgba(10,10,20,0.8)',
+                    'text-halo-width': 1.5,
+                },
+            });
+        }
+    } catch (_labelErr) {
+        // Symbol layer can fail if fonts unavailable — fill/stroke still render
+        console.warn('[MAP-ML] Geofence label layer failed:', _labelErr.message);
     }
 }
 
