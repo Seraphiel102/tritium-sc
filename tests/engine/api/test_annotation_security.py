@@ -16,14 +16,11 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clear_stores():
-    """Reset annotation and watchlist stores before each test."""
-    from app.routers.annotations import _annotations
+    """Reset watchlist stores before each test."""
     from app.routers.watchlist import _watch_entries, _alert_history
-    _annotations.clear()
     _watch_entries.clear()
     _alert_history.clear()
     yield
-    _annotations.clear()
     _watch_entries.clear()
     _alert_history.clear()
 
@@ -110,14 +107,10 @@ class TestAnnotationLimits:
             AnnotationCreate(type="freehand", lat=0, lng=0, points=big_points)
 
     @pytest.mark.unit
-    def test_annotation_count_limit(self):
-        from app.routers.annotations import _annotations, _MAX_ANNOTATIONS
-        # Fill to limit
-        for i in range(_MAX_ANNOTATIONS):
-            _annotations[f"ann_{i}"] = {"id": f"ann_{i}"}
-        assert len(_annotations) == _MAX_ANNOTATIONS
-        # The endpoint would reject, we test the guard condition
-        assert len(_annotations) >= _MAX_ANNOTATIONS
+    def test_annotation_count_limit_constant_exists(self):
+        from app.routers.annotations import _MAX_ANNOTATIONS
+        # Verify the limit constant is set to a reasonable value
+        assert _MAX_ANNOTATIONS == 10000
 
 
 class TestWatchlistXSS:

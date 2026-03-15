@@ -11,18 +11,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.routers.annotations import router, _annotations
+from app.routers.annotations import router
 
 
 @pytest.fixture
-def client():
-    """Create a TestClient with the annotations router and clean store."""
-    _annotations.clear()
+def client(tmp_path, monkeypatch):
+    """Create a TestClient with the annotations router and a temp SQLite DB."""
+    import app.routers.annotations as ann_mod
+    db_path = str(tmp_path / "test_annotations.db")
+    monkeypatch.setattr(ann_mod, "_DB_PATH", db_path)
+    monkeypatch.setattr(ann_mod, "_db_initialized", False)
     app = FastAPI()
     app.include_router(router)
     c = TestClient(app)
     yield c
-    _annotations.clear()
 
 
 class TestAnnotationsAPI:
