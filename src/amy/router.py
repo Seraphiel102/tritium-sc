@@ -877,3 +877,154 @@ async def fleet_actions(request: Request):
         return {"actions": actions, "count": len(actions)}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Tactical summary SSE stream
+# ---------------------------------------------------------------------------
+
+@router.get("/tactical-stream")
+async def amy_tactical_stream(request: Request):
+    """SSE stream of Amy's running tactical commentary.
+
+    Returns Server-Sent Events with Amy's continuous narration of the
+    tactical situation: what she sees, what changed, what concerns her.
+    Events are JSON with fields: type, timestamp, summary, details, concerns.
+
+    Each event is generated every ~5 seconds by analyzing the current
+    tactical state: target counts, alliance distribution, recent changes,
+    threat levels, and sensor coverage.
+    """
+    amy = _get_amy(request)
+    sim_engine = _get_sim_engine(request)
+
+    async def tactical_stream():
+        prev_state = {}
+        try:
+            while True:
+                event = _build_tactical_summary(amy, sim_engine, prev_state)
+                prev_state = event.get("_prev", {})
+                # Remove internal state from output
+                output = {k: v for k, v in event.items() if not k.startswith("_")}
+                yield f"data: {json.dumps(output)}\n\n"
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        tactical_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _build_tactical_summary(
+    amy: "Commander | None",
+    sim_engine,
+    prev_state: dict,
+) -> dict:
+    """Build a tactical summary event from current system state."""
+    now = time.time()
+    summary_parts = []
+    concerns = []
+    details = {}
+
+    # --- Target counts ---
+    target_counts = {"friendly": 0, "hostile": 0, "neutral": 0, "unknown": 0, "total": 0}
+    if sim_engine is not None:
+        try:
+            targets = list(sim_engine.targets.values()) if hasattr(sim_engine, "targets") else []
+            for t in targets:
+                alliance = getattr(t, "alliance", "unknown")
+                if isinstance(alliance, str):
+                    alliance = alliance.lower()
+                else:
+                    alliance = str(alliance.value).lower() if hasattr(alliance, "value") else "unknown"
+                target_counts[alliance] = target_counts.get(alliance, 0) + 1
+                target_counts["total"] += 1
+        except Exception:
+            pass
+    details["targets"] = target_counts
+
+    # Narrate target situation
+    if target_counts["total"] == 0:
+        summary_parts.append("No targets on scope.")
+    else:
+        parts = []
+        if target_counts["hostile"] > 0:
+            parts.append(f"{target_counts['hostile']} hostile")
+        if target_counts["friendly"] > 0:
+            parts.append(f"{target_counts['friendly']} friendly")
+        if target_counts["neutral"] > 0:
+            parts.append(f"{target_counts['neutral']} neutral")
+        if target_counts["unknown"] > 0:
+            parts.append(f"{target_counts['unknown']} unknown")
+        summary_parts.append(f"Tracking {target_counts['total']} targets: {', '.join(parts)}.")
+
+    # --- Changes from previous state ---
+    prev_counts = prev_state.get("target_counts", {})
+    if prev_counts:
+        hostile_delta = target_counts.get("hostile", 0) - prev_counts.get("hostile", 0)
+        if hostile_delta > 0:
+            summary_parts.append(f"ALERT: {hostile_delta} new hostile target{'s' if hostile_delta > 1 else ''} detected.")
+            concerns.append(f"hostile_increase:{hostile_delta}")
+        elif hostile_delta < 0:
+            summary_parts.append(f"{abs(hostile_delta)} hostile target{'s' if abs(hostile_delta) > 1 else ''} neutralized or lost.")
+
+        total_delta = target_counts.get("total", 0) - prev_counts.get("total", 0)
+        if total_delta > 3:
+            concerns.append(f"rapid_target_increase:{total_delta}")
+
+    # --- Game state ---
+    if sim_engine is not None:
+        try:
+            game_mode = getattr(sim_engine, "game_mode", None)
+            if game_mode is not None:
+                phase = getattr(game_mode, "phase", None)
+                wave = getattr(game_mode, "current_wave", 0)
+                if phase is not None:
+                    phase_str = phase.value if hasattr(phase, "value") else str(phase)
+                    details["game"] = {"phase": phase_str, "wave": wave}
+                    if phase_str == "active":
+                        summary_parts.append(f"Battle active, wave {wave}.")
+                    elif phase_str == "idle":
+                        summary_parts.append("Standing by. No active engagement.")
+        except Exception:
+            pass
+
+    # --- Amy state ---
+    if amy is not None:
+        try:
+            mood = amy.sensorium.mood if hasattr(amy, "sensorium") else "unknown"
+            state = amy._state.value if hasattr(amy._state, "value") else str(getattr(amy, "_state", "unknown"))
+            details["amy"] = {"mood": mood, "state": state}
+            if mood == "alert" or mood == "alarmed":
+                concerns.append(f"amy_mood:{mood}")
+                summary_parts.append(f"Amy is {mood}.")
+        except Exception:
+            pass
+
+    # --- Threat assessment ---
+    if target_counts.get("hostile", 0) > 0 and target_counts.get("friendly", 0) > 0:
+        ratio = target_counts["hostile"] / max(1, target_counts["friendly"])
+        if ratio > 2:
+            concerns.append(f"outnumbered:{ratio:.1f}x")
+            summary_parts.append(f"Warning: outnumbered {ratio:.1f}:1.")
+        details["force_ratio"] = round(ratio, 2)
+
+    # Build final event
+    event_type = "alert" if concerns else "status"
+    summary = " ".join(summary_parts) if summary_parts else "All quiet. Nothing to report."
+
+    return {
+        "type": event_type,
+        "timestamp": now,
+        "summary": summary,
+        "details": details,
+        "concerns": concerns,
+        "_prev": {"target_counts": target_counts},
+    }
