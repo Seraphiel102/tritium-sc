@@ -739,11 +739,10 @@ function initPanelSystem(container) {
         _updateBellBadge(unread);
     }).catch(() => {});
 
-    // Try loading saved layout; if none, open defaults
+    // Try loading saved layout; if none, open minimal defaults.
+    // Users open additional panels via VIEW menu (organized by category).
     if (!panelManager.loadLayout()) {
         panelManager.open('amy');
-        panelManager.open('units');
-        panelManager.open('alerts');
         panelManager.open('minimap');
     }
 
@@ -855,8 +854,8 @@ function updateClock() {
 // Toast notifications
 // ---------------------------------------------------------------------------
 
-const TOAST_MAX = 5;
-const TOAST_DURATION = 6000;
+const TOAST_MAX = 3;
+const TOAST_DURATION = 4000;
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
