@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from tritium_lib.intelligence.base_learner import BaseLearner
+
 logger = logging.getLogger("ble_classification_learner")
 
 # Feature extraction keys
@@ -116,12 +118,13 @@ def extract_features(
     return features
 
 
-class BLEClassificationLearner:
+class BLEClassificationLearner(BaseLearner):
     """Trains and manages a BLE device type classification model.
 
     Uses labeled BLE advertisement data to train a multi-class classifier
     (Random Forest or Logistic Regression depending on data volume).
     Provides predictions that supplement the rule-based DeviceClassifier.
+    Extends BaseLearner for shared persistence and status tracking.
     """
 
     def __init__(
@@ -129,48 +132,26 @@ class BLEClassificationLearner:
         model_path: str = MODEL_PATH,
         training_data: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._model_path = model_path
-        self._model: Any = None
+        super().__init__(model_path)
         self._label_encoder: Any = None
-        self._accuracy: float = 0.0
-        self._training_count: int = 0
-        self._last_trained: float = 0.0
         self._sklearn_available = _check_sklearn()
         self._training_data: list[dict[str, Any]] = training_data or []
         self._lock = threading.Lock()
 
         # Try to load existing model
-        self._load_model()
+        self.load()
 
     @property
-    def is_trained(self) -> bool:
-        return self._model is not None
-
-    @property
-    def accuracy(self) -> float:
-        return self._accuracy
-
-    @property
-    def training_count(self) -> int:
-        return self._training_count
+    def name(self) -> str:
+        return "ble_classifier"
 
     def get_status(self) -> dict[str, Any]:
         """Return model status for API response."""
-        return {
-            "trained": self.is_trained,
-            "accuracy": self._accuracy,
-            "training_count": self._training_count,
-            "last_trained": self._last_trained,
-            "last_trained_iso": (
-                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._last_trained))
-                if self._last_trained > 0
-                else None
-            ),
-            "sklearn_available": self._sklearn_available,
-            "model_path": self._model_path,
-            "feature_names": FEATURE_NAMES,
-            "device_types": DEVICE_TYPES,
-        }
+        stats = self.get_stats()
+        stats["sklearn_available"] = self._sklearn_available
+        stats["feature_names"] = FEATURE_NAMES
+        stats["device_types"] = DEVICE_TYPES
+        return stats
 
     def add_training_example(
         self,
@@ -290,7 +271,7 @@ class BLEClassificationLearner:
             self._last_trained = time.time()
 
             # Save model
-            self._save_model()
+            self.save()
 
             logger.info(
                 "BLE classifier trained: accuracy=%.3f, n=%d, classes=%d",
@@ -351,50 +332,16 @@ class BLEClassificationLearner:
             logger.debug("BLE classifier prediction failed: %s", exc)
             return "unknown", 0.0
 
-    def _load_model(self) -> bool:
-        """Load a previously saved model."""
-        try:
-            p = Path(self._model_path)
-            if not p.exists():
-                return False
+    def _serialize(self) -> dict[str, Any]:
+        """Extend BaseLearner serialization with label_encoder."""
+        data = super()._serialize()
+        data["label_encoder"] = self._label_encoder
+        return data
 
-            with open(p, "rb") as f:
-                data = pickle.load(f)
-
-            self._model = data.get("model")
-            self._label_encoder = data.get("label_encoder")
-            self._accuracy = data.get("accuracy", 0.0)
-            self._training_count = data.get("training_count", 0)
-            self._last_trained = data.get("last_trained", 0.0)
-
-            logger.info(
-                "Loaded BLE classifier: accuracy=%.3f, n=%d",
-                self._accuracy, self._training_count,
-            )
-            return True
-        except Exception as exc:
-            logger.debug("No existing BLE classifier to load: %s", exc)
-            return False
-
-    def _save_model(self) -> bool:
-        """Save the current model to disk."""
-        try:
-            p = Path(self._model_path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-
-            data = {
-                "model": self._model,
-                "label_encoder": self._label_encoder,
-                "accuracy": self._accuracy,
-                "training_count": self._training_count,
-                "last_trained": self._last_trained,
-            }
-            with open(p, "wb") as f:
-                pickle.dump(data, f)
-            return True
-        except Exception as exc:
-            logger.warning("Failed to save BLE classifier: %s", exc)
-            return False
+    def _deserialize(self, data: dict[str, Any]) -> None:
+        """Extend BaseLearner deserialization with label_encoder."""
+        super()._deserialize(data)
+        self._label_encoder = data.get("label_encoder")
 
 
 class DeviceClassifierMLBackend:

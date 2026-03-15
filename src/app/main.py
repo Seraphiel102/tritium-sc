@@ -97,6 +97,8 @@ from app.routers.amy_briefing import router as amy_briefing_router
 from app.routers.ar_export import router as ar_export_router
 from app.routers.weather import router as weather_router
 from app.routers.history_analytics import router as history_analytics_router
+from app.routers.readiness import router as readiness_router
+from app.routers.unified_events import router as unified_events_router
 
 
 # ---------------------------------------------------------------------------
@@ -1240,6 +1242,8 @@ app.include_router(amy_briefing_router)
 app.include_router(ar_export_router)
 app.include_router(weather_router)
 app.include_router(history_analytics_router)
+app.include_router(readiness_router)
+app.include_router(unified_events_router)
 
 # Static files
 frontend_path = Path(__file__).parent.parent / "frontend"

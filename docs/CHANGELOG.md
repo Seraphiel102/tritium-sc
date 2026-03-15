@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 84: Maintenance — Learner Consolidation, Readiness, Unified Events
+
+| Change | Verification |
+|--------|-------------|
+| `CorrelationLearner` extends `BaseLearner` — shared persistence/status | Unit tested (10 tests) |
+| `BLEClassificationLearner` extends `BaseLearner` — shared persistence/status | Unit tested (10 tests) |
+| `/api/system/readiness` — operational readiness checklist (green/yellow/red) | Unit tested (10 tests) |
+| `/api/events/unified` — unified event feed from all sources | Unit tested (10 tests) |
+| New routers registered in main.py (readiness, unified_events) | Verified |
+
 ## 2026-03-14 — Wave 82: Dossier Enrichment, Weather, Operator Viewports
 
 | Change | Verification |
