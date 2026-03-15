@@ -25,6 +25,7 @@ import { drawMinimapContent } from './panels/minimap.js';
 import { DeviceModalManager } from './device-modal.js';
 import { FrontendVisionSystem } from './vision-system.js';
 import { ContextMenu } from './context-menu.js';
+import { _esc } from './panel-utils.js';
 
 // ============================================================
 // Constants
@@ -4051,7 +4052,7 @@ function _createUnitMarker(id, unit, lngLat) {
         if (u) {
             const hpPct = u.maxHealth ? Math.round((u.health / u.maxHealth) * 100) : '?';
             const hpColor = hpPct > 60 ? 'var(--green)' : hpPct > 30 ? 'var(--amber)' : 'var(--magenta)';
-            const fsm = u.fsmState ? ` <span style="color:var(--text-ghost)">${_escFx(u.fsmState)}</span>` : '';
+            const fsm = u.fsmState ? ` <span style="color:var(--text-ghost)">${_esc(u.fsmState)}</span>` : '';
             const kills = u.kills ? ` <span style="color:var(--amber)">${u.kills} kills</span>` : '';
             const ammo = (u.ammoCount != null && u.ammoMax) ? ` <span style="color:#aaa">${u.ammoCount}/${u.ammoMax}</span>` : '';
             // Robot-specific tooltip extras: battery, speed, current task
@@ -4063,8 +4064,8 @@ function _createUnitMarker(id, unit, lngLat) {
                 const spd = u.speed != null ? u.speed.toFixed(1) + ' m/s' : '';
                 robotInfo = `<div style="color:var(--cyan);font-size:0.5rem">BAT: ${bat}${spd ? '  SPD: ' + spd : ''}</div>`;
             }
-            tooltip.innerHTML = `<div style="color:${ALLIANCE_COLORS[u.alliance] || 'var(--cyan)'};font-weight:bold">${_escFx(u.name || id)}</div>` +
-                `<div>${_escFx(u.type || '?')}${fsm}</div>` +
+            tooltip.innerHTML = `<div style="color:${ALLIANCE_COLORS[u.alliance] || 'var(--cyan)'};font-weight:bold">${_esc(u.name || id)}</div>` +
+                `<div>${_esc(u.type || '?')}${fsm}</div>` +
                 `<div>HP: <span style="color:${hpColor}">${hpPct}%</span>${kills}${ammo}</div>` +
                 robotInfo;
             tooltip.style.display = 'block';
@@ -5736,12 +5737,12 @@ function _showMapBanner(title, subtitle, color, durationMs) {
         'letter-spacing:4px; text-transform:uppercase; color:' + color + ';',
         'text-shadow: 0 0 15px ' + color + ', 0 0 30px ' + color + '66, 0 2px 6px #000;',
         'animation: fx-streak-pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-        '">' + _escFx(title) + '</div>',
+        '">' + _esc(title) + '</div>',
         '<div style="',
         'font-family:JetBrains Mono,monospace; font-size:14px;',
         'color:#aaa; letter-spacing:2px; margin-top:6px;',
         'animation: fx-streak-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-        '">' + _escFx(subtitle) + '</div>',
+        '">' + _esc(subtitle) + '</div>',
     ].join('');
 
     clearTimeout(banner._hideTimer);
@@ -6217,7 +6218,7 @@ function _showStreakBanner(text, color, durationMs) {
         'color:' + color + ';',
         'text-shadow: 0 0 20px ' + color + ', 0 0 40px ' + color + '88, 0 0 80px ' + color + '44, 0 4px 8px #000;',
         'animation: fx-streak-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-    ].join('') + '">' + _escFx(text) + '</div>';
+    ].join('') + '">' + _esc(text) + '</div>';
 
     // Inject streak pop animation if not present
     if (!document.getElementById('tritium-fx-streak-css')) {
@@ -6933,7 +6934,7 @@ function _showGameOverOverlay(result, data) {
                     const m = d.mvp;
                     mvpEl.innerHTML = '<span style="color:#666;font-size:10px;letter-spacing:2px">MVP</span>'
                         + '<br><span style="color:#fcee0a;font-weight:700;font-size:16px;text-shadow:0 0 8px #fcee0a44">'
-                        + _escFx(m.name || m.unit_name || 'Unknown') + '</span>'
+                        + _esc(m.name || m.unit_name || 'Unknown') + '</span>'
                         + '<br><span style="color:#aaa;font-size:11px">'
                         + (m.kills || 0) + ' kills'
                         + (m.accuracy ? ' / ' + Math.round(m.accuracy * 100) + '% acc' : '')
@@ -7041,12 +7042,12 @@ function _addKillFeedEntry(killerName, targetName, weaponLabel) {
         'animation: fx-killfeed-in 0.3s ease-out;',
     ].join('');
     const weaponTag = weaponLabel
-        ? ' <span style="color:#fcee0a;font-size:10px;letter-spacing:1px">[' + _escFx(weaponLabel) + ']</span> '
+        ? ' <span style="color:#fcee0a;font-size:10px;letter-spacing:1px">[' + _esc(weaponLabel) + ']</span> '
         : ' ';
-    entry.innerHTML = '<span style="color:#05ffa1">' + _escFx(killerName) + '</span>'
+    entry.innerHTML = '<span style="color:#05ffa1">' + _esc(killerName) + '</span>'
         + weaponTag
         + '<span style="color:#ff2a6d66">//</span> '
-        + '<span style="color:#ff2a6d">' + _escFx(targetName) + '</span>';
+        + '<span style="color:#ff2a6d">' + _esc(targetName) + '</span>';
 
     feed.prepend(entry);
 
@@ -7060,11 +7061,6 @@ function _addKillFeedEntry(killerName, targetName, weaponLabel) {
         entry.style.animation = 'fx-killfeed-out 0.5s ease-in forwards';
         setTimeout(() => entry.remove(), 500);
     }, 8000);
-}
-
-function _escFx(text) {
-    if (!text) return '';
-    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function _weaponDisplayName(weaponType) {
@@ -7849,6 +7845,7 @@ function _geofenceDrawFinish() {
         _showGeofencePromptML(verts);
     } else {
         EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a geofence zone', type: 'alert' });
+        EventBus.emit('geofence:drawEnd', {});
     }
 }
 
@@ -7862,6 +7859,7 @@ function _geofenceDrawCancel() {
     _geofenceDrawCleanup();
 
     EventBus.emit('toast:show', { message: 'Geofence drawing cancelled', type: 'info' });
+    EventBus.emit('geofence:drawEnd', {});
     console.log('[MAP-ML] Geofence draw cancelled');
 }
 
@@ -7935,6 +7933,7 @@ function _showGeofencePromptML(polygon) {
         const name = nameInput.value.trim() || `Zone ${Date.now() % 10000}`;
         overlay.remove();
         EventBus.emit('geofence:zoneDrawn', { polygon, zone_type: selectedType, name });
+        EventBus.emit('geofence:drawEnd', {});
         // Trigger re-fetch to show the new zone
         setTimeout(() => {
             _state._lastGeofenceFetch = 0;
@@ -7944,6 +7943,7 @@ function _showGeofencePromptML(polygon) {
 
     cancelBtn.addEventListener('click', () => {
         overlay.remove();
+        EventBus.emit('geofence:drawEnd', {});
     });
 
     nameInput.addEventListener('keydown', (e) => {

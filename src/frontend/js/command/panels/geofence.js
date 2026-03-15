@@ -200,11 +200,42 @@ export const GeofencePanelDef = {
             }
         }
 
+        let drawingActive = false;
+
+        function enterDrawMode() {
+            drawingActive = true;
+            // Minimize the panel so it does not overlap the map canvas
+            panel.minimize();
+            if (drawBtn) {
+                drawBtn.textContent = 'DRAWING...';
+                drawBtn.classList.add('panel-action-btn-primary');
+            }
+        }
+
+        function exitDrawMode() {
+            if (!drawingActive) return;
+            drawingActive = false;
+            // Restore the panel after drawing completes or is cancelled
+            panel.restore();
+            if (drawBtn) {
+                drawBtn.textContent = '+ DRAW ZONE';
+                drawBtn.classList.remove('panel-action-btn-primary');
+            }
+        }
+
         function drawZone() {
-            // Emit event to start polygon drawing on the map
+            // Minimize panel and start polygon drawing on the map
+            enterDrawMode();
             EventBus.emit('geofence:drawZone', {});
             EventBus.emit('toast:show', { message: 'Click to place vertices, double-click or Enter to finish, Escape to cancel', type: 'info' });
         }
+
+        // Restore panel when geofence drawing fully ends (zone saved, prompt
+        // cancelled, or draw cancelled via Escape). The geofence:drawEnd event
+        // fires from both map renderers after the prompt completes or is dismissed.
+        const onDrawEnd = () => exitDrawMode();
+        EventBus.on('geofence:drawEnd', onDrawEnd);
+        panel._unsubs.push(() => EventBus.off('geofence:drawEnd', onDrawEnd));
 
         // Listen for completed polygon from map (includes name + zone_type from prompt)
         const onZoneDrawn = async (data) => {

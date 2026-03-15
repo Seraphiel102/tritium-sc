@@ -21,6 +21,7 @@ import { EventBus } from './events.js';
 import { resolveLabels } from './label-collision.js';
 import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator, drawFusionIndicator } from './unit-icons.js';
 import { DeviceModalManager } from './device-modal.js';
+import { _esc } from './panel-utils.js';
 
 // ============================================================
 // Constants
@@ -4084,13 +4085,13 @@ async function _openTargetDetailModal(targetId, unit) {
 
     // Build identifiers section
     const identifiers = [];
-    identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">TARGET ID</span><span class="tdm-id-val mono">${_escMap(targetId)}</span></div>`);
-    if (unit.mac) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MAC</span><span class="tdm-id-val mono">${_escMap(unit.mac)}</span></div>`);
-    if (unit.device_id) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">DEVICE ID</span><span class="tdm-id-val mono">${_escMap(unit.device_id)}</span></div>`);
-    if (manufacturer) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MFR</span><span class="tdm-id-val">${_escMap(manufacturer)}</span></div>`);
-    if (deviceClass) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">CLASS</span><span class="tdm-id-val">${_escMap(deviceClass)}</span></div>`);
-    if (unit.ssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">SSID</span><span class="tdm-id-val">${_escMap(unit.ssid)}</span></div>`);
-    if (unit.bssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">BSSID</span><span class="tdm-id-val mono">${_escMap(unit.bssid)}</span></div>`);
+    identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">TARGET ID</span><span class="tdm-id-val mono">${_esc(targetId)}</span></div>`);
+    if (unit.mac) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MAC</span><span class="tdm-id-val mono">${_esc(unit.mac)}</span></div>`);
+    if (unit.device_id) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">DEVICE ID</span><span class="tdm-id-val mono">${_esc(unit.device_id)}</span></div>`);
+    if (manufacturer) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MFR</span><span class="tdm-id-val">${_esc(manufacturer)}</span></div>`);
+    if (deviceClass) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">CLASS</span><span class="tdm-id-val">${_esc(deviceClass)}</span></div>`);
+    if (unit.ssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">SSID</span><span class="tdm-id-val">${_esc(unit.ssid)}</span></div>`);
+    if (unit.bssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">BSSID</span><span class="tdm-id-val mono">${_esc(unit.bssid)}</span></div>`);
 
     // Fetch trail data for mini-map
     let trailHtml = '<div class="tdm-trail-empty">No trail data</div>';
@@ -4112,11 +4113,11 @@ async function _openTargetDetailModal(targetId, unit) {
             const linkedUnit = TritiumStore.units.get(cid);
             const linkedSource = linkedUnit ? (linkedUnit.source || '').toUpperCase() : '';
             const linkedType = linkedUnit ? (linkedUnit.asset_type || linkedUnit.type || '').toUpperCase() : '';
-            const linkedBadge = linkedSource ? `<span class="tdm-corr-source">${_escMap(linkedSource)}</span>` : '';
-            const linkedTypeBadge = linkedType ? `<span class="tdm-corr-type">${_escMap(linkedType)}</span>` : '';
+            const linkedBadge = linkedSource ? `<span class="tdm-corr-source">${_esc(linkedSource)}</span>` : '';
+            const linkedTypeBadge = linkedType ? `<span class="tdm-corr-type">${_esc(linkedType)}</span>` : '';
             const truncId = cid.length > 24 ? cid.substring(0, 22) + '..' : cid;
-            return `<div class="tdm-corr-item" data-corr-target="${_escMap(cid)}" title="Click to inspect ${_escMap(cid)}">
-                <span class="tdm-corr-id mono">${_escMap(truncId)}</span>
+            return `<div class="tdm-corr-item" data-corr-target="${_esc(cid)}" title="Click to inspect ${_esc(cid)}">
+                <span class="tdm-corr-id mono">${_esc(truncId)}</span>
                 ${linkedBadge}${linkedTypeBadge}
             </div>`;
         }).join('');
@@ -4136,7 +4137,7 @@ async function _openTargetDetailModal(targetId, unit) {
         const dosRes = await fetch(`/api/dossiers/by-target?target_id=${encodeURIComponent(targetId)}`);
         if (dosRes.ok) {
             const dossier = await dosRes.json();
-            dossierLink = `<a href="#" class="tdm-dossier-link" data-action="open-dossier" data-target-id="${_escMap(targetId)}">VIEW FULL DOSSIER</a>`;
+            dossierLink = `<a href="#" class="tdm-dossier-link" data-action="open-dossier" data-target-id="${_esc(targetId)}">VIEW FULL DOSSIER</a>`;
             const enrichments = dossier.enrichments || [];
             // Extract RL / device classification from enrichments
             const classEnrich = enrichments.find(e => e.enrichment_type === 'device_classification' || e.provider === 'device_classifier');
@@ -4148,7 +4149,7 @@ async function _openTargetDetailModal(targetId, unit) {
                 rlClassHtml = `
                     <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
                     <div class="tdm-rl-class">
-                        <span class="tdm-rl-type">${_escMap(clType.toUpperCase())}</span>
+                        <span class="tdm-rl-type">${_esc(clType.toUpperCase())}</span>
                         <span class="tdm-rl-conf" style="color:${confColor}">${clConf}% confidence</span>
                         <span class="tdm-rl-label">RL model</span>
                     </div>`;
@@ -4157,7 +4158,7 @@ async function _openTargetDetailModal(targetId, unit) {
                 rlClassHtml = `
                     <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
                     <div class="tdm-rl-class">
-                        <span class="tdm-rl-type">${_escMap(deviceClass.toUpperCase())}</span>
+                        <span class="tdm-rl-type">${_esc(deviceClass.toUpperCase())}</span>
                         <span class="tdm-rl-conf" style="color:#05ffa1">92% confidence</span>
                         <span class="tdm-rl-label">RL model</span>
                     </div>`;
@@ -4165,7 +4166,7 @@ async function _openTargetDetailModal(targetId, unit) {
             if (enrichments.length > 0) {
                 enrichHtml = '<div class="tdm-section-title">ENRICHMENTS</div>';
                 for (const e of enrichments.filter(en => en.enrichment_type !== 'device_classification').slice(0, 5)) {
-                    enrichHtml += `<div class="tdm-enrich-row"><span class="tdm-enrich-src">${_escMap(e.source || '')}</span><span class="tdm-enrich-val">${_escMap(e.value || e.data || '')}</span></div>`;
+                    enrichHtml += `<div class="tdm-enrich-row"><span class="tdm-enrich-src">${_esc(e.source || '')}</span><span class="tdm-enrich-val">${_esc(e.value || e.data || '')}</span></div>`;
                 }
             }
         }
@@ -4178,11 +4179,11 @@ async function _openTargetDetailModal(targetId, unit) {
         <div class="tdm-content">
             <div class="tdm-header" style="border-left: 3px solid ${allianceColor}">
                 <div class="tdm-header-info">
-                    <div class="tdm-name mono">${_escMap(name)}</div>
+                    <div class="tdm-name mono">${_esc(name)}</div>
                     <div class="tdm-subtitle">
                         <span class="tdm-badge" style="background:${allianceColor}">${alliance.toUpperCase()}</span>
-                        <span class="tdm-type">${_escMap(type.toUpperCase())}</span>
-                        <span class="tdm-source">${_escMap(source)}</span>
+                        <span class="tdm-type">${_esc(type.toUpperCase())}</span>
+                        <span class="tdm-source">${_esc(source)}</span>
                     </div>
                 </div>
                 <button class="tdm-close" onclick="document.getElementById('target-detail-modal')?.remove()">&times;</button>
@@ -4203,7 +4204,7 @@ async function _openTargetDetailModal(targetId, unit) {
                     <div class="tdm-section-title" style="margin-top:12px">STATUS</div>
                     <div class="tdm-stats-grid">
                         <div class="tdm-stat"><div class="tdm-stat-label">HEALTH</div><div class="tdm-stat-value">${health}</div></div>
-                        <div class="tdm-stat"><div class="tdm-stat-label">STATE</div><div class="tdm-stat-value">${_escMap(String(fsm))}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">STATE</div><div class="tdm-stat-value">${_esc(String(fsm))}</div></div>
                         <div class="tdm-stat"><div class="tdm-stat-label">POS</div><div class="tdm-stat-value mono" style="font-size:0.55rem">${lat}, ${lng}</div></div>
                     </div>
 
@@ -4219,21 +4220,21 @@ async function _openTargetDetailModal(targetId, unit) {
 
                     <div class="tdm-section-title" style="margin-top:12px">TAG TARGET</div>
                     <div class="tdm-tag-buttons">
-                        <button class="tdm-tag-btn tdm-tag-friendly" data-target="${_escMap(targetId)}" data-alliance="friendly" title="Tag as Friendly">FRIENDLY</button>
-                        <button class="tdm-tag-btn tdm-tag-hostile" data-target="${_escMap(targetId)}" data-alliance="hostile" title="Tag as Hostile">HOSTILE</button>
-                        <button class="tdm-tag-btn tdm-tag-vip" data-target="${_escMap(targetId)}" data-alliance="friendly" data-vip="true" title="Tag as VIP">VIP</button>
+                        <button class="tdm-tag-btn tdm-tag-friendly" data-target="${_esc(targetId)}" data-alliance="friendly" title="Tag as Friendly">FRIENDLY</button>
+                        <button class="tdm-tag-btn tdm-tag-hostile" data-target="${_esc(targetId)}" data-alliance="hostile" title="Tag as Hostile">HOSTILE</button>
+                        <button class="tdm-tag-btn tdm-tag-vip" data-target="${_esc(targetId)}" data-alliance="friendly" data-vip="true" title="Tag as VIP">VIP</button>
                     </div>
 
                     <div class="tdm-section-title" style="margin-top:12px">QUICK ACTIONS</div>
                     <div class="tdm-quick-actions">
-                        <button class="tdm-qa-btn tdm-qa-investigate" data-target="${_escMap(targetId)}" title="Create investigation for this target">INVESTIGATE</button>
-                        <button class="tdm-qa-btn tdm-qa-watch" data-target="${_escMap(targetId)}" title="Add to watch list">WATCH</button>
-                        <button class="tdm-qa-btn tdm-qa-classify" data-target="${_escMap(targetId)}" title="Override alliance classification">CLASSIFY</button>
-                        <button class="tdm-qa-btn tdm-qa-track" data-target="${_escMap(targetId)}" title="Enable prediction cones">TRACK</button>
+                        <button class="tdm-qa-btn tdm-qa-investigate" data-target="${_esc(targetId)}" title="Create investigation for this target">INVESTIGATE</button>
+                        <button class="tdm-qa-btn tdm-qa-watch" data-target="${_esc(targetId)}" title="Add to watch list">WATCH</button>
+                        <button class="tdm-qa-btn tdm-qa-classify" data-target="${_esc(targetId)}" title="Override alliance classification">CLASSIFY</button>
+                        <button class="tdm-qa-btn tdm-qa-track" data-target="${_esc(targetId)}" title="Enable prediction cones">TRACK</button>
                     </div>
 
                     <div class="tdm-actions" style="margin-top:8px">
-                        <button class="tdm-action-btn tdm-action-dossier" data-action="open-dossier" data-target-id="${_escMap(targetId)}">DOSSIER</button>
+                        <button class="tdm-action-btn tdm-action-dossier" data-action="open-dossier" data-target-id="${_esc(targetId)}">DOSSIER</button>
                         <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'graph-explorer'}); document.getElementById('target-detail-modal')?.remove()">GRAPH</button>
                         <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'unit-inspector'}); document.getElementById('target-detail-modal')?.remove()">INSPECT</button>
                     </div>
@@ -4482,11 +4483,6 @@ function _renderTrailMiniMap(trail, width, height) {
         <circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="4" fill="#00f0ff" stroke="#fff" stroke-width="1"/>
         <text x="${width-4}" y="${height-4}" text-anchor="end" fill="#666" font-size="8" font-family="monospace">${trail.length} pts</text>
     </svg>`;
-}
-
-function _escMap(text) {
-    if (!text) return '';
-    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function _onContextMenu(e) {
@@ -4875,6 +4871,7 @@ function _geofenceFinish() {
         _showGeofencePrompt(verts);
     } else {
         EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a zone', type: 'alert' });
+        EventBus.emit('geofence:drawEnd', {});
     }
 }
 
@@ -4955,26 +4952,30 @@ function _showGeofencePrompt(polygon) {
     function submit() {
         const name = (nameInput.value || '').trim() || 'Unnamed Zone';
         EventBus.emit('geofence:zoneDrawn', { polygon, zone_type: selectedType, name });
+        EventBus.emit('geofence:drawEnd', {});
         cleanup();
         // Refresh saved zones on map after a short delay for API to process
         setTimeout(_fetchGeofencePolygonZones, 500);
     }
 
     saveBtn.addEventListener('click', submit);
-    cancelBtn.addEventListener('click', () => {
+    function cancel() {
         EventBus.emit('toast:show', { message: 'Zone creation cancelled', type: 'info' });
+        EventBus.emit('geofence:drawEnd', {});
         cleanup();
-    });
+    }
+
+    cancelBtn.addEventListener('click', cancel);
 
     // Enter to submit, Escape to cancel
     nameInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); submit(); }
-        if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
 
     // Click outside to cancel
     overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) cleanup();
+        if (e.target === overlay) cancel();
     });
 
     // Focus the input
@@ -4986,6 +4987,7 @@ function _geofenceCancel() {
     _state.geofenceVertices = [];
     _state.canvas.style.cursor = 'crosshair';
     EventBus.emit('toast:show', { message: 'Geofence drawing cancelled', type: 'info' });
+    EventBus.emit('geofence:drawEnd', {});
 }
 
 // -- Patrol waypoint drawing ------------------------------------------
