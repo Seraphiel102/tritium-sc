@@ -79,6 +79,7 @@ import { GridOverlayPanelDef, toggleGridOverlay } from './panels/grid-overlay.js
 import { DeploymentPanelDef } from './panels/deployment.js';
 import { FloorPlanPanelDef } from './panels/floorplan.js';
 import { BuildingOccupancyPanelDef } from './panels/building-occupancy.js';
+import { AnalyticsDashboardPanelDef } from './panels/analytics-dashboard.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
@@ -599,6 +600,7 @@ function initPanelSystem(container) {
     panelManager.register(DeploymentPanelDef);
     panelManager.register(FloorPlanPanelDef);
     panelManager.register(BuildingOccupancyPanelDef);
+    panelManager.register(AnalyticsDashboardPanelDef);
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
     initScreenshotHotkey();

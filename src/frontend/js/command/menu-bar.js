@@ -59,7 +59,7 @@ function _fileMenuItems(layoutManager) {
 // Panel categories — group 54 panels into logical sections
 const PANEL_CATEGORIES = {
     'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks'],
-    'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation'],
+    'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard'],
     'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak'],
     'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets'],
     'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs'],

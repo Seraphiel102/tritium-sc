@@ -14,6 +14,15 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 94: Analytics Dashboard
+
+| Change | Verification |
+|--------|-------------|
+| routers/analytics_dashboard.py — GET /api/analytics/widgets (returns widget configs), POST /api/analytics/widgets/layout (save custom layout) | Import verified |
+| panels/analytics-dashboard.js — Drag-and-drop analytics dashboard panel with counter, chart (bar/line/area), table, timeline widgets, auto-refresh, layout persistence | Written |
+| panels.css — Analytics dashboard styles (grid, widget cards, charts, tables, drag states) | Written |
+| Registered in main.js (panel) + main.py (router) + menu-bar.js (Intelligence category) | Written |
+
 ## 2026-03-14 — Wave 92: Security Hardening + API Scoping
 
 | Change | Verification |
