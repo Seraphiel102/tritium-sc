@@ -14,6 +14,17 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 107: Security + Mesh Chat + CoT Export + Amy Learning
+
+| Change | Verification |
+|--------|-------------|
+| Security: 6 tests proving classify API requires auth (401 unauth, 200 auth, operator in audit) | 6 unit tests |
+| Meshtastic: Message forwarding to MQTT operator chat — mesh users can communicate with SC operators | 4 unit tests |
+| Meshtastic: /api/meshtastic/chat POST route for operator-to-mesh messaging | Unit tested |
+| Target export: Added CoT XML format option (format=cot) alongside CSV/JSON/GeoJSON | 3 unit tests |
+| Amy: Daily learning summary endpoint /api/amy/learning-summary — correlation accuracy, threat assessment, operator feedback narrative | 3 unit tests |
+| tritium-lib: models/tak_export.py — CoTExportEvent, CoTExportPoint, targets_to_cot_xml/file | 11 unit tests |
+
 ## 2026-03-14 — Wave 106: Maintenance — Real Mesh Links + MQTT Security + Auth Fix
 
 | Change | Verification |

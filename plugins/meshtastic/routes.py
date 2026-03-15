@@ -129,6 +129,38 @@ def create_router(plugin: MeshtasticPlugin) -> APIRouter:
         ok = plugin.send_text(text, destination)
         return {"sent": ok, "text": text, "destination": destination or "broadcast"}
 
+    @router.post("/chat")
+    @compat_router.post("/chat")
+    async def operator_chat_to_mesh(text: str, sender: str = "SC Operator"):
+        """Send a message from the operator chat panel to the mesh network.
+
+        Enables SC operators to communicate with mesh radio users.
+        The message is sent via the Meshtastic radio and also logged
+        in the local message buffer.
+        """
+        if not text:
+            return {"error": "Empty message"}
+        if len(text) > 228:
+            return {"error": "Message too long (max 228 bytes for LoRa)"}, 400
+
+        # Send to mesh
+        ok = plugin.send_text(text)
+
+        # Log in local buffer
+        import time as time_mod
+        msg = {
+            "from_name": sender,
+            "text": text,
+            "channel": 0,
+            "timestamp": time_mod.time(),
+            "source": "operator",
+        }
+        plugin._messages.append(msg)
+        if len(plugin._messages) > plugin._max_messages:
+            plugin._messages = plugin._messages[-plugin._max_messages:]
+
+        return {"sent": ok, "text": text, "sender": sender}
+
     @router.post("/waypoint")
     @compat_router.post("/waypoint")
     async def send_waypoint(

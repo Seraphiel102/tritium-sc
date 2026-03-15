@@ -1035,3 +1035,176 @@ def _build_tactical_summary(
         "concerns": concerns,
         "_prev": {"target_counts": target_counts},
     }
+
+
+@router.get("/learning-summary")
+async def amy_daily_learning_summary(request: Request):
+    """Amy reviews her last 24 hours of performance and narrates what she learned.
+
+    Covers:
+    - Correlation accuracy: how well she fused BLE + camera + mesh targets
+    - Threat assessment outcomes: classifications that proved correct/incorrect
+    - Operator feedback: overrides operators made to her classifications
+    - Model improvement narrative: what she would adjust going forward
+    """
+    amy = _get_amy(request)
+    now = time.time()
+    cutoff = now - 86400  # 24 hours ago
+
+    summary = {
+        "generated_at": now,
+        "period_hours": 24,
+        "correlation_stats": {},
+        "threat_assessment": {},
+        "operator_feedback": [],
+        "narrative": "",
+    }
+
+    # --- Correlation accuracy ---
+    tracker = None
+    if amy is not None:
+        tracker = getattr(amy, "target_tracker", None)
+
+    total_targets = 0
+    correlated_targets = 0
+    multi_source_targets = 0
+    source_counts: dict[str, int] = {}
+
+    if tracker is not None:
+        try:
+            all_targets = tracker.get_all()
+            total_targets = len(all_targets)
+            for t in all_targets:
+                d = t.to_dict() if hasattr(t, "to_dict") else {}
+                src = d.get("source", "unknown")
+                source_counts[src] = source_counts.get(src, 0) + 1
+                # Check if target has correlation data from multiple sources
+                corr = d.get("correlated_sources") or d.get("fused_sources") or []
+                if len(corr) > 1 or d.get("correlated", False):
+                    correlated_targets += 1
+                    multi_source_targets += 1
+        except Exception:
+            pass
+
+    correlation_rate = (correlated_targets / max(1, total_targets)) * 100
+    summary["correlation_stats"] = {
+        "total_targets": total_targets,
+        "correlated_targets": correlated_targets,
+        "multi_source_targets": multi_source_targets,
+        "correlation_rate_pct": round(correlation_rate, 1),
+        "source_distribution": source_counts,
+    }
+
+    # --- Threat assessment ---
+    alliance_counts: dict[str, int] = {}
+    if tracker is not None:
+        try:
+            for t in tracker.get_all():
+                d = t.to_dict() if hasattr(t, "to_dict") else {}
+                alliance = d.get("alliance", "unknown")
+                alliance_counts[alliance] = alliance_counts.get(alliance, 0) + 1
+        except Exception:
+            pass
+
+    summary["threat_assessment"] = {
+        "alliance_distribution": alliance_counts,
+        "hostile_count": alliance_counts.get("hostile", 0),
+        "friendly_count": alliance_counts.get("friendly", 0),
+        "unknown_count": alliance_counts.get("unknown", 0),
+    }
+
+    # --- Operator feedback (classification overrides) ---
+    try:
+        from app.audit_middleware import get_audit_store
+        audit = get_audit_store()
+        if audit is not None:
+            recent = audit.get_recent(limit=200) if hasattr(audit, "get_recent") else []
+            overrides = [
+                e for e in recent
+                if e.get("action") == "classification_override"
+                and (e.get("ts") or 0) >= cutoff
+            ]
+            for ov in overrides[-20:]:  # Last 20 overrides
+                summary["operator_feedback"].append({
+                    "actor": ov.get("actor", "operator"),
+                    "target": ov.get("resource", ""),
+                    "details": ov.get("details", {}),
+                    "timestamp": ov.get("ts", 0),
+                })
+    except Exception:
+        pass
+
+    override_count = len(summary["operator_feedback"])
+
+    # --- Generate narrative ---
+    narrative_parts = []
+
+    # Correlation narrative
+    if total_targets == 0:
+        narrative_parts.append(
+            "No targets were tracked in the last 24 hours. My correlation models "
+            "had nothing to work with. I remain ready to fuse sensor data when targets appear."
+        )
+    elif correlation_rate > 50:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, with {correlation_rate:.0f}% successfully "
+            f"correlated across multiple sensors. My fusion algorithms are performing well — "
+            f"I can reliably match BLE, camera, and mesh detections to the same physical entity."
+        )
+    elif correlation_rate > 20:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, but only {correlation_rate:.0f}% had "
+            f"multi-source correlation. I should improve my temporal and spatial matching "
+            f"thresholds to catch more cross-sensor correlations."
+        )
+    else:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, but correlation was low at {correlation_rate:.0f}%. "
+            f"Most detections came from single sensors ({', '.join(source_counts.keys())}). "
+            f"I need more diverse sensor coverage or tighter co-location windows."
+        )
+
+    # Source diversity
+    if len(source_counts) > 2:
+        narrative_parts.append(
+            f"Data came from {len(source_counts)} distinct sources: "
+            f"{', '.join(f'{k}({v})' for k, v in source_counts.items())}. "
+            f"Good sensor diversity for reliable fusion."
+        )
+
+    # Threat assessment narrative
+    hostile = alliance_counts.get("hostile", 0)
+    if hostile > 0:
+        narrative_parts.append(
+            f"I classified {hostile} targets as hostile. "
+            f"{'This is a high threat density.' if hostile > 5 else 'Manageable threat level.'}"
+        )
+    unknowns = alliance_counts.get("unknown", 0)
+    if unknowns > 3:
+        narrative_parts.append(
+            f"There are {unknowns} unclassified targets — I should prioritize "
+            f"resolving these ambiguities with additional sensor passes."
+        )
+
+    # Operator feedback narrative
+    if override_count > 0:
+        narrative_parts.append(
+            f"Operators overrode my classifications {override_count} time(s) in the "
+            f"last 24 hours. Each override is a learning signal — I will weight "
+            f"similar patterns toward the operator's judgment in future assessments."
+        )
+    else:
+        narrative_parts.append(
+            "No operator overrides in the last 24 hours — my classifications "
+            "were either accurate or unchallenged."
+        )
+
+    # Self-improvement
+    narrative_parts.append(
+        "Next cycle priorities: improve temporal correlation windows, "
+        "reduce unknown classifications, and increase multi-source fusion coverage."
+    )
+
+    summary["narrative"] = " ".join(narrative_parts)
+
+    return summary

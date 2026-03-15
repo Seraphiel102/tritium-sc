@@ -404,7 +404,7 @@ async def get_target_clusters(
 @router.get("/targets/export")
 async def export_targets(
     request: Request,
-    format: str = Query("json", description="Export format: json, csv, or geojson"),
+    format: str = Query("json", description="Export format: json, csv, geojson, or cot"),
 ):
     """Export all current targets in standard formats for external analysis.
 
@@ -412,6 +412,7 @@ async def export_targets(
     - ``json`` — Array of target dicts
     - ``csv`` — Comma-separated values with header row
     - ``geojson`` — GeoJSON FeatureCollection with Point geometries
+    - ``cot`` — Cursor on Target XML for ATAK/WinTAK interoperability
     """
     from fastapi.responses import Response
 
@@ -501,6 +502,27 @@ async def export_targets(
             content=json.dumps(geojson, default=str),
             media_type="application/geo+json",
             headers={"Content-Disposition": "attachment; filename=targets.geojson"},
+        )
+
+    elif fmt == "cot":
+        # Cursor on Target XML for ATAK/WinTAK
+        try:
+            from tritium_lib.models.tak_export import targets_to_cot_file
+            cot_xml = targets_to_cot_file(all_targets)
+        except ImportError:
+            # Fall back to engine's cot module for individual events
+            from engine.comms.cot import target_to_cot_xml
+            parts = ['<?xml version="1.0" encoding="UTF-8"?>']
+            parts.append(f'<cot-events version="1.0" count="{len(all_targets)}">')
+            for t in all_targets:
+                parts.append(target_to_cot_xml(t))
+            parts.append('</cot-events>')
+            cot_xml = "\n".join(parts)
+
+        return Response(
+            content=cot_xml,
+            media_type="application/xml",
+            headers={"Content-Disposition": "attachment; filename=targets.cot.xml"},
         )
 
     else:
