@@ -43,10 +43,22 @@ except ImportError:  # pragma: no cover
     BleInterrogationResult = None  # type: ignore[assignment,misc]
     classify_device_from_profile = None  # type: ignore[assignment]
 
+# Geofence engine for zone checking on edge-tracked targets
+try:
+    from app.routers.geofence import get_engine as get_geofence_engine
+except ImportError:  # pragma: no cover
+    get_geofence_engine = None  # type: ignore[assignment]
+
 from engine.tactical.ble_classifier import BLEClassifier
 from engine.tactical.sensor_health_monitor import SensorHealthMonitor
 from engine.tactical.target_handoff import HandoffTracker, HandoffEvent
 from engine.tactical.trilateration import TrilaterationEngine
+
+# Indoor/outdoor transition detector
+try:
+    from plugins.edge_tracker.transition_detector import IndoorOutdoorDetector
+except ImportError:  # pragma: no cover
+    IndoorOutdoorDetector = None  # type: ignore[assignment,misc]
 
 log = logging.getLogger("edge-tracker")
 
@@ -70,6 +82,7 @@ class EdgeTrackerPlugin(PluginInterface):
         self._trilateration: Optional[TrilaterationEngine] = None
         self._handoff_tracker: Optional[HandoffTracker] = None
         self._sensor_health: Optional[SensorHealthMonitor] = None
+        self._transition_detector: Any = None
 
         self._running = False
         self._event_queue: Optional[queue_mod.Queue] = None
@@ -141,6 +154,13 @@ class EdgeTrackerPlugin(PluginInterface):
         # Initialize sensor health monitor
         self._sensor_health = SensorHealthMonitor(event_bus=self._event_bus)
         self._logger.info("Sensor health monitor initialized")
+
+        # Initialize indoor/outdoor transition detector
+        if IndoorOutdoorDetector is not None:
+            self._transition_detector = IndoorOutdoorDetector(event_bus=self._event_bus)
+            self._logger.info("Indoor/outdoor transition detector initialized")
+        else:
+            self._logger.warning("IndoorOutdoorDetector not available")
 
         # Initialize handoff tracker for edge-to-edge target continuity
         self._handoff_tracker = HandoffTracker(
@@ -523,6 +543,44 @@ class EdgeTrackerPlugin(PluginInterface):
                         "trilateration": trilat_pos,
                         "device_type": device_type,
                     })
+
+                    # Check target position against geofence zones
+                    if get_geofence_engine is not None:
+                        try:
+                            geo_engine = get_geofence_engine()
+                            target_pos = None
+                            if trilat_pos:
+                                target_pos = (trilat_pos.get("lat", 0), trilat_pos.get("lon", 0))
+                            elif node_pos:
+                                target_pos = (node_pos.get("x", 0), node_pos.get("y", 0))
+                            if target_pos and (target_pos[0] != 0 or target_pos[1] != 0):
+                                tid = f"ble_{mac.replace(':', '').lower()}"
+                                geo_engine.check(tid, target_pos)
+                        except Exception:
+                            pass  # geofence engine may not be initialized yet
+
+                    # Feed indoor/outdoor transition detector
+                    if self._transition_detector is not None and mac:
+                        has_gps = trilat_pos is not None and trilat_pos.get("method") == "gps"
+                        pos_method = "unknown"
+                        if trilat_pos:
+                            pos_method = trilat_pos.get("method", "trilateration")
+                        elif node_pos:
+                            pos_method = "proximity"
+                        position = None
+                        if trilat_pos:
+                            position = (trilat_pos.get("lat", 0), trilat_pos.get("lon", 0))
+                        elif node_pos:
+                            position = (node_pos.get("x", 0), node_pos.get("y", 0))
+                        self._transition_detector.update_target(
+                            target_id=f"ble_{mac.replace(':', '').lower()}",
+                            position=position,
+                            positioning_method=pos_method,
+                            has_gps=has_gps,
+                            trilateration=trilat_pos,
+                            node_count=trilat_pos.get("node_count", 1) if trilat_pos else 1,
+                            node_id=node_id,
+                        )
         except Exception as exc:
             log.error("Failed to emit BLE update: %s", exc)
 

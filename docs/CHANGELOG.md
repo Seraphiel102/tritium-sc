@@ -14,6 +14,20 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 132: Indoor-Outdoor Transitions, Probe Proximity, Geofence Fix
+
+| Change | Verification |
+|--------|-------------|
+| Indoor-outdoor transition detector (plugins/edge_tracker/transition_detector.py) — detects when BLE targets move between GPS-based and WiFi-only positioning | 12 tests passing |
+| Wired into EdgeTrackerPlugin: every BLE target update feeds the transition detector | Unit Tested |
+| WiFi probe multi-node proximity estimator (plugins/wifi_fingerprint/probe_proximity.py) — ranks closest edge node from probe timing + RSSI | 14 tests passing |
+| Proximity estimator wired into WiFiFingerprintPlugin event handler | Unit Tested |
+| New API endpoints: /api/wifi-fingerprint/proximity, /api/wifi-fingerprint/proximity/{mac}/closest | Unit Tested |
+| Geofence end-to-end fix: edge tracker now calls GeofenceEngine.check() on BLE targets with positions | 7 tests passing |
+| Previously only sim targets were geofence-checked; real edge BLE targets were not — now fixed | Unit Tested |
+
+---
+
 ## 2026-03-15 — Wave 131: Target Groups, Annotation Persistence, Kalman Filter
 
 | Change | Verification |

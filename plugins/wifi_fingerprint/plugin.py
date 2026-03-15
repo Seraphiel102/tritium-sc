@@ -18,6 +18,7 @@ from typing import Any, Optional
 from engine.plugins.base import EventDrainPlugin, PluginContext
 
 from .correlator import ProbeCorrelator
+from .probe_proximity import ProbeProximityEstimator
 from .routes import create_router
 
 log = logging.getLogger("wifi-fingerprint")
@@ -32,6 +33,7 @@ class WiFiFingerprintPlugin(EventDrainPlugin):
     def __init__(self) -> None:
         super().__init__()
         self._correlator = ProbeCorrelator()
+        self._proximity_estimator: Optional[ProbeProximityEstimator] = None
         self._tracker: Any = None
         self._prune_thread: Optional[threading.Thread] = None
 
@@ -59,9 +61,15 @@ class WiFiFingerprintPlugin(EventDrainPlugin):
         """Store tracker reference, register routes."""
         self._tracker = ctx.target_tracker
 
+        # Initialize probe proximity estimator for multi-node correlation
+        self._proximity_estimator = ProbeProximityEstimator(
+            event_bus=self._event_bus,
+        )
+        self._logger.info("Probe proximity estimator initialized")
+
         # Register FastAPI routes
         if self._app is not None:
-            router = create_router(self._correlator)
+            router = create_router(self._correlator, self._proximity_estimator)
             self._app.include_router(router)
             self._logger.info("WiFi fingerprint routes registered")
 
@@ -97,6 +105,22 @@ class WiFiFingerprintPlugin(EventDrainPlugin):
 
     def _handle_wifi_probe(self, data: dict) -> None:
         """Process a WiFi probe request event."""
+        # Feed probe proximity estimator for multi-node correlation
+        if self._proximity_estimator is not None:
+            mac = data.get("mac", "")
+            ssid = data.get("ssid", data.get("ssid_probed", ""))
+            node_id = data.get("observer_id", data.get("node_id", ""))
+            if mac and node_id:
+                self._proximity_estimator.ingest_probe(
+                    device_mac=mac,
+                    ssid=ssid,
+                    node_id=node_id,
+                    rssi=data.get("rssi", -100),
+                    timestamp=data.get("timestamp"),
+                    ntp_timestamp=data.get("ntp_timestamp", 0.0),
+                    channel=data.get("channel", 0),
+                )
+
         links = self._correlator.ingest_probe(data)
         if links:
             for link in links:
@@ -136,6 +160,8 @@ class WiFiFingerprintPlugin(EventDrainPlugin):
                 break
             try:
                 pruned = self._correlator.prune_stale()
+                if self._proximity_estimator is not None:
+                    pruned += self._proximity_estimator.prune_stale()
                 if pruned > 0:
                     self._logger.debug("Pruned %d stale WiFi fingerprint records", pruned)
             except Exception as exc:
