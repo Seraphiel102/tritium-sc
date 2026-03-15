@@ -1,11 +1,11 @@
 [project]
 name = "tritium-sc"
 version = "0.1.0"
-description = "Nerf battle management with AI Commander Amy"
+description = "Tritium Command Center — tactical operating picture with AI Commander Amy"
 requires-python = ">=3.12"
 dependencies = [
     "influxdb-client>=1.36.0",
-    "tritium-lib @ file:///home/scubasonar/Code/tritium-lib",
+    "tritium-lib",  # Install from ../tritium-lib via: pip install -e ../tritium-lib
 ]
 
 [tool.setuptools.packages.find]
