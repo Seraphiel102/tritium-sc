@@ -140,11 +140,18 @@ SCENARIO_DESCRIPTION: dict = {
         "Dossier building over time (signal accumulation)",
         "Correlated multi-sensor confidence boosting",
     ],
-    "geofence_zone": {
-        "name": "Restricted Area",
-        "zone_type": "restricted",
-        "polygon": [[-2.0, 8.0], [2.0, 8.0], [2.0, 12.0], [-2.0, 12.0]],
-    },
+    "geofence_zones": [
+        {
+            "name": "Restricted Area",
+            "zone_type": "restricted",
+            "polygon": [[-2.0, 8.0], [2.0, 8.0], [2.0, 12.0], [-2.0, 12.0]],
+        },
+        {
+            "name": "Patrol Sector",
+            "zone_type": "monitored",
+            "polygon": [[3.0, -2.0], [10.0, -2.0], [10.0, 5.0], [3.0, 5.0]],
+        },
+    ],
 }
 
 

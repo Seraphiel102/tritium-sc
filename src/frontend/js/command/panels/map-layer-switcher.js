@@ -31,7 +31,7 @@ const LAYER_GROUPS = [
         icon: '\u25A3',  // filled square with square inside
         layers: [
             { id: 'convoy-overlay',   label: 'Convoy Overlays',   stateKey: 'showSquadHulls',       toggleFn: 'toggleSquadHulls',       color: '#ff2a6d', description: 'Convex hull outlines around convoy groups' },
-            { id: 'geofence-zones',   label: 'Geofence Zones',    stateKey: 'showHazardZones',      toggleFn: 'toggleHazardZones',      color: '#ff8800', description: 'Defined geofence alert boundaries' },
+            { id: 'geofence-zones',   label: 'Geofence Zones',    stateKey: 'showGeofenceZones',    toggleFn: 'toggleGeofenceZones',    color: '#00f0ff', description: 'Defined geofence alert boundaries' },
             { id: 'patrol-routes',    label: 'Patrol Routes',     stateKey: 'showPatrolRoutes',     toggleFn: 'togglePatrolRoutes',     color: '#05ffa1', description: 'Friendly patrol waypoint paths' },
             { id: 'hostile-obj',      label: 'Hostile Objectives', stateKey: 'showHostileObjectives', toggleFn: 'toggleHostileObjectives', color: '#ff2a6d', description: 'Enemy movement objective lines' },
             { id: 'prediction-cones', label: 'Prediction Cones',  stateKey: 'showPredictionCones',  toggleFn: 'togglePredictionCones',  color: '#fcee0a', description: 'Movement prediction confidence cones' },
