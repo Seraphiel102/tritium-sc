@@ -50,7 +50,7 @@ body.v2 {
 
 .unified-tactical {
     position: absolute;
-    inset: 28px 0 20px 0;   /* Leave 28px for command bar, 20px for status bar */
+    inset: 50px 0 20px 0;   /* Leave 28px command bar + 22px tactical banner, 20px for status bar */
     overflow: hidden;
     background: #060609;
 }
@@ -70,7 +70,7 @@ body.v2 {
 
 .unified-layout > .panel-container {
     position: absolute;
-    inset: 28px 0 20px 0;   /* Reserved: command bar (28px top) + status bar (20px bottom) */
+    inset: 50px 0 20px 0;   /* Reserved: command bar (28px) + tactical banner (22px) top + status bar (20px) bottom */
     pointer-events: none;
     z-index: 100;
     overflow: hidden;
@@ -1661,12 +1661,14 @@ body.v2 {
 /* Toast container */
 .toast-container {
     position: fixed;
-    top: 72px;          /* Below header (36px) + command bar (28px) + gap (8px) */
+    top: 96px;          /* Below header (36px) + command bar (28px) + tactical banner (24px) + gap (8px) */
     right: 12px;
-    width: 300px;
+    width: 280px;
+    max-height: 200px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     z-index: 150;       /* Above panels (z:100), below command bar (z:200) */
     pointer-events: none;
 }
@@ -1677,8 +1679,9 @@ body.v2 {
     border: 1px solid var(--border);
     border-left: 3px solid var(--text-dim);
     border-radius: var(--radius-sm);
-    padding: 8px 12px;
+    padding: 6px 10px;
     animation: v2-fadeIn 0.3s ease;
+    font-size: 0.55rem;
 }
 
 .toast-amy { border-left-color: var(--cyan); }
@@ -3596,13 +3599,13 @@ body.v2 {
         margin: 0 4px;
     }
 
-    /* Unified layout: smaller command bar */
+    /* Unified layout: smaller command bar + tactical banner */
     .unified-tactical {
-        inset: 24px 0 18px 0;
+        inset: 44px 0 18px 0;
     }
 
     .unified-layout > .panel-container {
-        inset: 24px 0 18px 0;
+        inset: 44px 0 18px 0;
     }
 
     /* Panels: reduce default sizes */
@@ -3704,11 +3707,11 @@ body.v2 {
     }
 
     .unified-tactical {
-        inset: 22px 0 16px 0;
+        inset: 40px 0 16px 0;
     }
 
     .unified-layout > .panel-container {
-        inset: 22px 0 16px 0;
+        inset: 40px 0 16px 0;
     }
 
     /* Panels: full-width on mobile, stack vertically */

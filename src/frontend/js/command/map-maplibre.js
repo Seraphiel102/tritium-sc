@@ -135,7 +135,7 @@ const _state = {
     showKillFeed: true,        // top-right combat log
     showScreenFx: true,        // screen shake + flash overlay
     showBanners: true,         // wave/game state announcements
-    showLayerHud: true,        // top-center status bar
+    showLayerHud: false,       // top-center status bar (hidden by default — overlaps tactical banner)
     showThoughts: true,        // NPC thought bubbles above markers
     showWeaponRange: true,     // weapon range circle on selected unit
     showHeatmap: false,        // combat zone heatmap (off by default)
@@ -6348,6 +6348,7 @@ function _createLayerHud() {
         'border:1px solid rgba(0,240,255,0.2);',
         'text-transform:uppercase; letter-spacing:1px;',
         'white-space:nowrap;',
+        _state.showLayerHud ? '' : 'display:none;',
     ].join('');
     _state.container.appendChild(_state.layerHud);
     _updateLayerHud();

@@ -57,6 +57,12 @@ export function createTacticalBanner(container) {
 
     container.appendChild(banner);
 
+    // Click to collapse/expand
+    banner.title = 'Click to collapse/expand tactical banner';
+    banner.addEventListener('click', () => {
+        banner.classList.toggle('collapsed');
+    });
+
     // State
     let currentThreatLevel = 'GREEN';
     let alertCount = 0;

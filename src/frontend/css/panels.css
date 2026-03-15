@@ -4769,14 +4769,28 @@
 .tactical-banner {
     display: flex;
     align-items: center;
-    height: 24px;
+    height: 20px;
     background: var(--surface-1, #0e0e14);
     border-bottom: 1px solid #05ffa133;
     padding: 0 12px;
     gap: 0;
-    z-index: 50;
+    z-index: 200;
+    position: relative;
     flex-shrink: 0;
     user-select: none;
+    cursor: pointer;
+    transition: height 0.15s ease, opacity 0.15s ease;
+    overflow: hidden;
+}
+
+.tactical-banner.collapsed {
+    height: 4px;
+    opacity: 0.4;
+    padding: 0;
+}
+
+.tactical-banner.collapsed:hover {
+    opacity: 0.7;
 }
 
 .tb-section {
@@ -4798,13 +4812,13 @@
 }
 
 .tb-label {
-    font-size: 0.55rem;
+    font-size: 0.5rem;
     color: var(--text-dim, #556);
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
 }
 
 .tb-value {
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     color: var(--cyan, #00f0ff);
     font-weight: 600;
 }
@@ -4857,11 +4871,15 @@
     right: 10px;
     top: 50%;
     transform: translateY(-50%);
-    display: flex;
+    display: none;           /* Hidden by default — use Layer Switcher panel (VIEW > Map & GIS) */
     flex-direction: column;
     gap: 4px;
     z-index: 30;
     pointer-events: auto;
+}
+
+.map-quick-toggles.visible {
+    display: flex;
 }
 
 .mqt-btn {

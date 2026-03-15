@@ -852,8 +852,8 @@ function updateClock() {
 // Toast notifications
 // ---------------------------------------------------------------------------
 
-const TOAST_MAX = 3;
-const TOAST_DURATION = 4000;
+const TOAST_MAX = 2;
+const TOAST_DURATION = 3500;
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
