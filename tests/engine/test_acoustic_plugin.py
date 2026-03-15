@@ -77,10 +77,10 @@ class TestPluginIdentity:
         assert plugin.plugin_id == "tritium.acoustic"
 
     def test_name(self, plugin):
-        assert plugin.name == "Acoustic Classifier"
+        assert plugin.name == "Acoustic Intelligence"
 
     def test_version(self, plugin):
-        assert plugin.version == "1.0.0"
+        assert plugin.version == "2.0.0"
 
     def test_capabilities(self, plugin):
         caps = plugin.capabilities
