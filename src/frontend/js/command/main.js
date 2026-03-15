@@ -612,7 +612,69 @@ function init() {
         }).catch(() => {});
     }
 
+    // Welcome tooltip — show once on first visit
+    _showWelcomeTooltip();
+
     console.log('%c[TRITIUM] Command Center ready', 'color: #05ffa1; font-weight: bold;');
+}
+
+// ---------------------------------------------------------------------------
+// Welcome Tooltip (first visit only)
+// ---------------------------------------------------------------------------
+
+function _showWelcomeTooltip() {
+    const STORAGE_KEY = 'tritium-welcome-shown';
+    if (localStorage.getItem(STORAGE_KEY)) return;
+
+    const tip = document.createElement('div');
+    tip.id = 'welcome-tooltip';
+    tip.style.cssText = `
+        position: fixed; bottom: 24px; right: 24px; z-index: 10000;
+        max-width: 340px; padding: 16px 20px;
+        background: rgba(10, 10, 20, 0.95);
+        border: 1px solid #00f0ff44;
+        border-radius: 6px;
+        font-family: 'JetBrains Mono', 'Inter', monospace;
+        font-size: 11px; line-height: 1.6;
+        color: #c0c0d0;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6), 0 0 12px rgba(0, 240, 255, 0.08);
+        opacity: 0; transform: translateY(12px);
+        transition: opacity 0.4s ease, transform 0.4s ease;
+        pointer-events: auto;
+    `;
+    tip.innerHTML = `
+        <div style="color:#00f0ff;font-weight:bold;font-size:12px;margin-bottom:8px;letter-spacing:0.5px">WELCOME TO TRITIUM</div>
+        <div style="margin-bottom:6px">Click <span style="color:#05ffa1;font-weight:bold">GAME &gt; Start Demo</span> to see targets.</div>
+        <div style="margin-bottom:6px">Click targets on the map to <span style="color:#00f0ff">inspect</span> them.</div>
+        <div style="margin-bottom:10px">Press <span style="color:#fcee0a;font-weight:bold">?</span> for keyboard shortcuts.</div>
+        <button id="welcome-dismiss" style="
+            background: transparent; border: 1px solid #00f0ff44; color: #00f0ff;
+            font-family: 'JetBrains Mono', monospace; font-size: 10px;
+            padding: 4px 12px; border-radius: 3px; cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        ">DISMISS</button>
+    `;
+    document.body.appendChild(tip);
+
+    // Animate in
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            tip.style.opacity = '1';
+            tip.style.transform = 'translateY(0)';
+        });
+    });
+
+    const dismiss = () => {
+        localStorage.setItem(STORAGE_KEY, '1');
+        tip.style.opacity = '0';
+        tip.style.transform = 'translateY(12px)';
+        setTimeout(() => tip.remove(), 400);
+    };
+
+    tip.querySelector('#welcome-dismiss').addEventListener('click', dismiss);
+
+    // Auto-dismiss after 15 seconds
+    setTimeout(dismiss, 15000);
 }
 
 // ---------------------------------------------------------------------------

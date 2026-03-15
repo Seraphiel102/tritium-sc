@@ -3541,13 +3541,30 @@ function _applyMarkerStyle(el, unit) {
         if (oldName) oldName.remove();
 
     } else {
-        // ----- 2D mode: classic circle icon with health bar -----
+        // ----- 2D mode: NATO APP-6 style symbology -----
+        // hostile = red diamond (rotated 45deg), friendly = blue/green circle, unknown = yellow square
         const size = alliance === 'hostile' ? 22 : 26;
         const pulse = (_state.showSelectionFx && alliance === 'hostile' && !dead) ? 'animation: hostile-pulse 1.5s ease-in-out infinite;' : '';
         const selGlow = selected && _state.showSelectionFx;
+
+        // NATO shape: hostile=diamond, friendly=circle, unknown/neutral=square
+        let borderRadius, markerTransform;
+        if (alliance === 'hostile') {
+            borderRadius = '3px';
+            markerTransform = 'rotate(45deg)';
+        } else if (alliance === 'friendly') {
+            borderRadius = '50%';
+            markerTransform = '';
+        } else {
+            // unknown / neutral = square
+            borderRadius = '3px';
+            markerTransform = '';
+        }
+        if (selGlow) markerTransform = (markerTransform ? markerTransform + ' ' : '') + 'scale(1.3)';
+
         el.style.cssText = `
             width: ${size}px; height: ${size}px;
-            border-radius: ${alliance === 'hostile' ? '4px' : '50%'};
+            border-radius: ${borderRadius};
             background: ${dead ? '#33333366' : `radial-gradient(circle, ${color}55, ${color}22)`};
             border: 1.5px solid ${color};
             display: flex; align-items: center; justify-content: center;
@@ -3558,12 +3575,17 @@ function _applyMarkerStyle(el, unit) {
             opacity: ${opacity};
             transition: transform 0.15s, box-shadow 0.15s;
             box-shadow: 0 0 ${selGlow ? '14' : '5'}px ${color}${selGlow ? '' : '44'};
-            ${selGlow ? 'transform: scale(1.3);' : ''}
+            ${markerTransform ? `transform: ${markerTransform};` : ''}
             ${pulse}
             position: relative;
             text-shadow: 0 0 4px ${color};
         `;
-        el.textContent = icon;
+        // For diamond (hostile), counter-rotate the icon letter so it stays upright
+        if (alliance === 'hostile') {
+            el.innerHTML = `<span style="display:inline-block;transform:rotate(-45deg)">${icon}</span>`;
+        } else {
+            el.textContent = icon;
+        }
 
         // Remove 3D-mode elements if switching
         const old3dName = el.querySelector('.unit-name-3d');
@@ -3599,7 +3621,7 @@ function _applyMarkerStyle(el, unit) {
             }
             const fireColor = alliance === 'hostile' ? '#ff2a6d' : '#ffa500';
             combatRing.style.setProperty('--fire-color', fireColor);
-            combatRing.style.borderRadius = alliance === 'hostile' ? '7px' : '50%';
+            combatRing.style.borderRadius = alliance === 'friendly' ? '50%' : '7px';
         } else if (combatRing) {
             combatRing.remove();
         }
