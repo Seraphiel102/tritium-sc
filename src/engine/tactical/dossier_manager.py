@@ -354,6 +354,8 @@ class DossierManager:
                         self._handle_ble_presence(data)
                     elif event_type == "fleet.ble_sighting":
                         self._handle_ble_sighting(data)
+                    elif event_type == "fleet.wifi_presence":
+                        self._handle_wifi_presence(data)
                     elif event_type in ("detections", "detection:camera", "detection:camera:fusion"):
                         self._handle_detection(data)
                     elif event_type == "enrichment_complete":
@@ -510,6 +512,95 @@ class DossierManager:
             },
             confidence=max(0.0, min(1.0, (data.get("rssi", -100) + 100) / 70)),
         )
+
+    def _handle_wifi_presence(self, data: dict) -> None:
+        """Handle fleet.wifi_presence events — enrich BLE dossiers with WiFi probe SSIDs.
+
+        When an edge node reports WiFi networks (including probe requests),
+        check if any existing BLE device dossiers were created from the same
+        observer node. If so, add the probed SSIDs as enrichment data.
+
+        This lets us say: "This device probes for HomeNet-5G — likely a
+        home network user" in the dossier.
+        """
+        node_id = data.get("node_id", "")
+        networks = data.get("networks", [])
+        if not networks or not node_id:
+            return
+
+        # Extract probe SSIDs (networks that the device probed for, not APs)
+        probe_ssids = []
+        ap_ssids = []
+        for net in networks:
+            ssid = net.get("ssid", "")
+            if not ssid:
+                continue
+            # If network has a 'probe' flag or is marked as probe request
+            if net.get("probe", False) or net.get("type") == "probe":
+                probe_ssids.append(ssid)
+            else:
+                ap_ssids.append(ssid)
+
+        # If no explicit probe flag, treat all SSIDs as environmental WiFi data
+        all_ssids = probe_ssids or ap_ssids
+        if not all_ssids:
+            return
+
+        # Find BLE dossiers that share the same observer node
+        enriched_count = 0
+        with self._lock:
+            for target_id, dossier_id in list(self._target_dossier_map.items()):
+                if not target_id.startswith("ble_"):
+                    continue
+
+                # Check if this BLE target was reported by the same node
+                dossier = self._store.get_dossier(dossier_id)
+                if dossier is None:
+                    continue
+
+                # Look through signals for matching node_id
+                signals = dossier.get("signals", [])
+                same_node = any(
+                    s.get("data", {}).get("node_id") == node_id
+                    for s in signals
+                    if isinstance(s.get("data"), dict)
+                )
+
+                if not same_node:
+                    continue
+
+                # Enrich dossier with WiFi probe SSIDs
+                ssid_summary = ", ".join(all_ssids[:5])
+                if len(all_ssids) > 5:
+                    ssid_summary += f" (+{len(all_ssids) - 5} more)"
+
+                note = (
+                    f"WiFi probe enrichment from observer {node_id}: "
+                    f"device probes for {ssid_summary} — "
+                    f"{'likely a home/work network user' if len(all_ssids) <= 3 else 'probes multiple networks'}"
+                )
+
+                # Add as enrichment (not signal) for richer dossier context
+                self._store.add_enrichment(
+                    dossier_id=dossier_id,
+                    provider="wifi_probe_enrichment",
+                    enrichment_type="probed_ssids",
+                    data={
+                        "node_id": node_id,
+                        "ssids": all_ssids[:20],  # cap at 20 SSIDs
+                        "probe_ssids": probe_ssids[:20],
+                        "ap_ssids": ap_ssids[:20],
+                        "note": note,
+                    },
+                )
+                self._dirty.add(dossier_id)
+                enriched_count += 1
+
+        if enriched_count:
+            logger.info(
+                "WiFi probe enriched %d BLE dossiers from node %s (%d SSIDs)",
+                enriched_count, node_id, len(all_ssids),
+            )
 
     def _handle_detection(self, data: dict) -> None:
         """Handle a YOLO detection event."""

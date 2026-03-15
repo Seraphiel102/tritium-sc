@@ -14,6 +14,16 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-15 — Wave 127: Maintenance + Dossier Enrichment
+
+| Change | Verification |
+|--------|-------------|
+| DossierManager handles fleet.wifi_presence events — auto-enriches BLE dossiers with WiFi probe SSIDs from same observer node | 4 new tests, 38 total passing |
+| WiFi probe enrichment adds probed SSIDs as enrichment data with contextual note ("likely a home network user") | Unit tested |
+| 6-strategy correlator weights verified balanced: sum=1.00, no single strategy dominates | Code review |
+
+---
+
 ## 2026-03-15 — Wave 126: RL Feature Expansion + WiFi Probe Correlation Strategy
 
 | Change | Verification |

@@ -488,3 +488,120 @@ class TestDossierStoreUpdateJsonField:
         result = store._update_json_field("fake_id", "tags", ["x"])
         assert result is False
         store.close()
+
+
+class TestWiFiProbeEnrichment:
+    """WiFi probe data auto-enrichment of BLE dossiers."""
+
+    @pytest.mark.unit
+    def test_wifi_probe_enriches_ble_dossier(self):
+        """BLE dossier with matching node_id gets WiFi probe enrichment."""
+        store = _make_store()
+        mgr = DossierManager(store=store)
+
+        # Create BLE dossier with signal from node "edge-01"
+        did = mgr.find_or_create_for_target(
+            "ble_aabbccddeeff",
+            name="Phone",
+            identifiers={"mac": "AA:BB:CC:DD:EE:FF"},
+        )
+        mgr.add_signal_to_target(
+            "ble_aabbccddeeff",
+            source="ble",
+            signal_type="presence",
+            data={"mac": "AA:BB:CC:DD:EE:FF", "rssi": -50, "node_id": "edge-01"},
+        )
+
+        # Now WiFi presence arrives from the same node
+        mgr._handle_wifi_presence({
+            "node_id": "edge-01",
+            "networks": [
+                {"ssid": "HomeNet-5G", "probe": True},
+                {"ssid": "WorkOffice", "probe": True},
+            ],
+        })
+
+        dossier = mgr.get_dossier(did)
+        assert dossier is not None
+        enrichments = dossier.get("enrichments", [])
+        wifi_enrichments = [e for e in enrichments if e.get("provider") == "wifi_probe_enrichment"]
+        assert len(wifi_enrichments) >= 1
+        data = wifi_enrichments[0].get("data", {})
+        assert "HomeNet-5G" in data.get("ssids", [])
+        assert "WorkOffice" in data.get("ssids", [])
+        store.close()
+
+    @pytest.mark.unit
+    def test_wifi_probe_no_enrichment_different_node(self):
+        """BLE dossier from different node should NOT be enriched."""
+        store = _make_store()
+        mgr = DossierManager(store=store)
+
+        # Create BLE dossier from node "edge-01"
+        mgr.find_or_create_for_target(
+            "ble_112233445566",
+            name="Watch",
+            identifiers={"mac": "11:22:33:44:55:66"},
+        )
+        mgr.add_signal_to_target(
+            "ble_112233445566",
+            source="ble",
+            signal_type="presence",
+            data={"mac": "11:22:33:44:55:66", "rssi": -70, "node_id": "edge-01"},
+        )
+
+        # WiFi from a different node
+        mgr._handle_wifi_presence({
+            "node_id": "edge-99",
+            "networks": [{"ssid": "OtherNet", "probe": True}],
+        })
+
+        dossier = mgr.get_dossier_for_target("ble_112233445566")
+        enrichments = dossier.get("enrichments", [])
+        wifi_enrichments = [e for e in enrichments if e.get("provider") == "wifi_probe_enrichment"]
+        assert len(wifi_enrichments) == 0
+        store.close()
+
+    @pytest.mark.unit
+    def test_wifi_probe_empty_networks_ignored(self):
+        """Empty network list should be ignored."""
+        store = _make_store()
+        mgr = DossierManager(store=store)
+        mgr.find_or_create_for_target("ble_aabb")
+        # Should not raise
+        mgr._handle_wifi_presence({"node_id": "edge-01", "networks": []})
+        mgr._handle_wifi_presence({"node_id": "", "networks": [{"ssid": "test"}]})
+        store.close()
+
+    @pytest.mark.unit
+    def test_wifi_probe_uses_ap_ssids_as_fallback(self):
+        """When no probe flag, AP SSIDs are used as environmental data."""
+        store = _make_store()
+        mgr = DossierManager(store=store)
+
+        mgr.find_or_create_for_target(
+            "ble_ffeeddccbbaa",
+            name="Tablet",
+        )
+        mgr.add_signal_to_target(
+            "ble_ffeeddccbbaa",
+            source="ble",
+            signal_type="presence",
+            data={"node_id": "edge-05"},
+        )
+
+        mgr._handle_wifi_presence({
+            "node_id": "edge-05",
+            "networks": [
+                {"ssid": "CoffeeShop-WiFi"},  # No probe flag
+                {"ssid": "ATT-Guest"},
+            ],
+        })
+
+        dossier = mgr.get_dossier_for_target("ble_ffeeddccbbaa")
+        enrichments = dossier.get("enrichments", [])
+        wifi_enrichments = [e for e in enrichments if e.get("provider") == "wifi_probe_enrichment"]
+        assert len(wifi_enrichments) >= 1
+        data = wifi_enrichments[0].get("data", {})
+        assert "CoffeeShop-WiFi" in data.get("ap_ssids", [])
+        store.close()
