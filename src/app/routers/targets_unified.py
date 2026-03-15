@@ -131,6 +131,88 @@ async def get_target_trail(
     }
 
 
+@router.get("/targets/{target_id}/trail/export")
+async def export_target_trail_gpx(
+    request: Request,
+    target_id: str,
+    format: str = Query("gpx", description="Export format: gpx, csv, json, geojson"),
+    max_points: int = Query(10000, ge=1, le=100000, description="Max trail points"),
+):
+    """Export a target's movement trail for external mapping tools.
+
+    Default format is GPX for direct import into ATAK, Google Earth,
+    or any GPX-compatible GIS application.
+
+    Supported formats:
+    - ``gpx`` — GPX 1.1 XML (default, for ATAK/Google Earth)
+    - ``csv`` / ``json`` / ``geojson`` — delegates to history/export
+    """
+    # Delegate non-GPX formats to existing history/export
+    if format.lower().strip() != "gpx":
+        return await export_target_history(
+            request, target_id, format=format, max_points=max_points,
+        )
+
+    from fastapi.responses import Response
+    from tritium_lib.models.gpx import GPXDocument
+
+    tracker = _get_tracker(request)
+    if tracker is None:
+        return {"error": "No tracker available"}
+
+    target = tracker.get_target(target_id)
+    if target is None:
+        return {"error": "Target not found"}
+
+    trail = tracker.history.get_trail_dicts(target_id, max_points=max_points)
+    target_dict = target.to_dict()
+    safe_id = target_id.replace("/", "_").replace("\\", "_")
+
+    doc = GPXDocument(
+        creator="Tritium Command Center",
+        name=f"Target {target_id} trail",
+        desc=f"Movement trail for target {target_id}",
+    )
+    trk = doc.add_track(name=target_id, desc=target_dict.get("name", ""))
+
+    for pt in trail:
+        lat = pt.get("lat", 0.0) or 0.0
+        lng = pt.get("lng", 0.0) or 0.0
+        if lat == 0.0 and lng == 0.0:
+            lng = pt.get("x", 0.0)
+            lat = pt.get("y", 0.0)
+        ele = pt.get("ele", pt.get("altitude"))
+        t_str = pt.get("time", pt.get("timestamp"))
+        t_dt = None
+        if t_str:
+            try:
+                from datetime import datetime as dt_cls
+                if isinstance(t_str, (int, float)):
+                    from datetime import timezone as tz
+                    t_dt = dt_cls.fromtimestamp(t_str, tz=tz.utc)
+                else:
+                    t_dt = dt_cls.fromisoformat(str(t_str))
+            except Exception:
+                pass
+        trk.add_point(lat, lng, ele=ele, time=t_dt)
+
+    if trail:
+        first = trail[0]
+        last = trail[-1]
+        for label, pt_data in [("First seen", first), ("Last seen", last)]:
+            lat = pt_data.get("lat", 0.0) or pt_data.get("y", 0.0) or 0.0
+            lng = pt_data.get("lng", 0.0) or pt_data.get("x", 0.0) or 0.0
+            doc.add_waypoint(lat, lng, name=f"{target_id} - {label}", sym="Flag")
+
+    return Response(
+        content=doc.to_xml(),
+        media_type="application/gpx+xml",
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_id}_trail.gpx",
+        },
+    )
+
+
 @router.get("/targets/predictions")
 async def get_target_predictions(
     request: Request,
@@ -488,6 +570,55 @@ async def export_target_history(
             media_type="text/csv",
             headers={
                 "Content-Disposition": f"attachment; filename={safe_id}_history.csv",
+            },
+        )
+
+    elif fmt == "gpx":
+        from tritium_lib.models.gpx import GPXDocument
+
+        doc = GPXDocument(
+            creator="Tritium Command Center",
+            name=f"Target {target_id} trail",
+            desc=f"Movement trail for target {target_id}",
+        )
+        trk = doc.add_track(name=target_id, desc=target_dict.get("name", ""))
+
+        for pt in trail:
+            lat = pt.get("lat", 0.0) or 0.0
+            lng = pt.get("lng", 0.0) or 0.0
+            if lat == 0.0 and lng == 0.0:
+                # Fall back to local x/y as pseudo-coords
+                lng = pt.get("x", 0.0)
+                lat = pt.get("y", 0.0)
+            ele = pt.get("ele", pt.get("altitude"))
+            t_str = pt.get("time", pt.get("timestamp"))
+            t_dt = None
+            if t_str:
+                try:
+                    from datetime import datetime as dt_cls
+                    if isinstance(t_str, (int, float)):
+                        from datetime import timezone as tz
+                        t_dt = dt_cls.fromtimestamp(t_str, tz=tz.utc)
+                    else:
+                        t_dt = dt_cls.fromisoformat(str(t_str))
+                except Exception:
+                    pass
+            trk.add_point(lat, lng, ele=ele, time=t_dt)
+
+        # Add first/last seen as waypoints
+        if trail:
+            first = trail[0]
+            last = trail[-1]
+            for label, pt_data in [("First seen", first), ("Last seen", last)]:
+                lat = pt_data.get("lat", 0.0) or pt_data.get("y", 0.0) or 0.0
+                lng = pt_data.get("lng", 0.0) or pt_data.get("x", 0.0) or 0.0
+                doc.add_waypoint(lat, lng, name=f"{target_id} - {label}", sym="Flag")
+
+        return Response(
+            content=doc.to_xml(),
+            media_type="application/gpx+xml",
+            headers={
+                "Content-Disposition": f"attachment; filename={safe_id}_trail.gpx",
             },
         )
 

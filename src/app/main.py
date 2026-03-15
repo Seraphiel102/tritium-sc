@@ -480,6 +480,21 @@ def _start_escalation(amy_instance, sim_engine, mqtt_bridge) -> None:
         amy_instance.auto_dispatcher = dispatcher
 
         logger.info("Threat escalation system started")
+
+        # System-wide threat level calculator
+        try:
+            from engine.tactical.threat_level_calculator import ThreatLevelCalculator
+            threat_calc = ThreatLevelCalculator(
+                event_bus=amy_instance.event_bus,
+                target_tracker=amy_instance.target_tracker,
+                escalation=classifier,
+            )
+            threat_calc.start()
+            amy_instance.threat_level_calculator = threat_calc
+            logger.info("Threat level calculator started")
+        except Exception as e2:
+            logger.warning(f"Threat level calculator failed: {e2}")
+
     except Exception as e:
         logger.warning(f"Threat escalation failed to start: {e}")
 

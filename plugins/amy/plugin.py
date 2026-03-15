@@ -1,7 +1,7 @@
 # Created by Matthew Valancy
 # Copyright 2026 Valpatel Software LLC
 # Licensed under AGPL-3.0 — see LICENSE for details.
-"""AmyCommanderPlugin — Phase 3 plugin for the Amy AI Commander.
+"""AmyCommanderPlugin — Phase 4 plugin for the Amy AI Commander.
 
 This wraps the existing src/amy/ code WITHOUT moving any files. It provides
 a PluginInterface-compliant wrapper so Amy can be discovered, configured,
@@ -9,11 +9,14 @@ and managed through the plugin system alongside other plugins.
 
 Phase 1 (done): Plugin shell wrapping existing code.
 Phase 2 (done): Move Amy router registration into this plugin.
-Phase 3 (current): Move Amy lifecycle (create/start/stop) fully into plugin.
-    - start() creates Amy, launches the thinking loop thread, pushes
-      sensorium updates, and sets app.state.amy.
-    - stop() shuts down Amy and clears app.state.amy.
-    - main.py lifespan no longer directly manages Amy's thread.
+Phase 3 (done): Move Amy lifecycle (create/start/stop) fully into plugin.
+Phase 4 (current): Move EventBus subscriptions into the plugin.
+    - start_amy_event_bridge (sim_telemetry, fleet.ble_presence,
+      meshtastic:nodes_updated) — the WebSocket event bridge that forwards
+      Amy EventBus events to the browser.
+    - WarAnnouncer — game event commentary via TTS.
+    These were previously wired in main.py's lifespan. Now the plugin owns
+    all Amy-related EventBus wiring. main.py only calls plugin.start().
 """
 
 from __future__ import annotations
@@ -30,11 +33,12 @@ log = logging.getLogger("amy-plugin")
 class AmyCommanderPlugin(PluginInterface):
     """Plugin wrapper around the existing Amy AI Commander.
 
-    Phase 3: This plugin now OWNS Amy's full lifecycle:
+    Phase 4: This plugin now OWNS Amy's full lifecycle AND EventBus wiring:
     - configure(): Registers routes, stores references.
     - start(): Creates the Amy Commander instance, starts the thinking
-      loop in a background thread, and publishes app.state.amy.
-    - stop(): Shuts down Amy, clears app.state.amy.
+      loop in a background thread, wires EventBus bridge to WebSocket,
+      starts the WarAnnouncer, and publishes app.state.amy.
+    - stop(): Shuts down Amy, announcer, clears app.state.amy.
 
     main.py lifespan delegates to this plugin instead of managing Amy directly.
     """
@@ -42,9 +46,11 @@ class AmyCommanderPlugin(PluginInterface):
     def __init__(self) -> None:
         self._amy_instance: Any = None
         self._amy_thread: Optional[threading.Thread] = None
+        self._announcer: Any = None
         self._app: Any = None
         self._settings: Any = None
         self._simulation_engine: Any = None
+        self._event_loop: Any = None
         self._logger = log
         self._running = False
 
@@ -60,7 +66,7 @@ class AmyCommanderPlugin(PluginInterface):
 
     @property
     def version(self) -> str:
-        return "3.0.0"
+        return "4.0.0"
 
     @property
     def capabilities(self) -> set[str]:
@@ -76,6 +82,7 @@ class AmyCommanderPlugin(PluginInterface):
         """
         self._app = ctx.app
         self._simulation_engine = ctx.simulation_engine
+        self._event_loop = getattr(ctx, "event_loop", None)
         self._logger = ctx.logger or self._logger
 
         # Import settings lazily to avoid circular imports at module level
@@ -109,10 +116,12 @@ class AmyCommanderPlugin(PluginInterface):
     def start(self) -> None:
         """Create and start the Amy AI Commander.
 
-        Phase 3: This plugin now owns Amy's full lifecycle.
-        Creates the Commander instance, starts the background thinking loop,
-        and publishes the instance to app.state.amy so other subsystems
-        (event bridge, MQTT, escalation, etc.) can find it.
+        Phase 4: This plugin now owns Amy's full lifecycle AND EventBus
+        wiring. Creates the Commander instance, starts the background
+        thinking loop, wires the EventBus bridge to WebSocket for
+        real-time browser updates (sim_telemetry, fleet.ble_presence,
+        meshtastic:nodes_updated), starts the WarAnnouncer for game
+        commentary, and publishes the instance to app.state.amy.
         """
         self._running = True
 
@@ -128,8 +137,11 @@ class AmyCommanderPlugin(PluginInterface):
             existing = getattr(self._app.state, "amy", None)
             if existing is not None:
                 self._amy_instance = existing
+                self._start_event_bridge()
+                self._start_announcer()
                 self._logger.info(
-                    "Amy Commander plugin started (wrapping pre-existing instance)"
+                    "Amy Commander plugin started (wrapping pre-existing instance, "
+                    "Phase 4 — event bridge + announcer plugin-owned)"
                 )
                 return
 
@@ -159,7 +171,11 @@ class AmyCommanderPlugin(PluginInterface):
             if self._app is not None:
                 self._app.state.amy = self._amy_instance
 
-            self._logger.info("Amy AI Commander started (Phase 3 — plugin-owned)")
+            # Phase 4: Wire EventBus bridge and announcer
+            self._start_event_bridge()
+            self._start_announcer()
+
+            self._logger.info("Amy AI Commander started (Phase 4 — plugin-owned)")
 
         except Exception as e:
             self._logger.error("Amy Commander failed to start: %s", e)
@@ -167,12 +183,60 @@ class AmyCommanderPlugin(PluginInterface):
             if self._app is not None:
                 self._app.state.amy = None
 
+    def _start_event_bridge(self) -> None:
+        """Wire Amy's EventBus to the WebSocket broadcast system.
+
+        Phase 4: This was previously done in main.py's lifespan via
+        start_amy_event_bridge(). Now the plugin owns this wiring.
+        """
+        if self._amy_instance is None:
+            return
+        try:
+            import asyncio
+            from app.routers.ws import start_amy_event_bridge
+
+            loop = self._event_loop or asyncio.get_event_loop()
+            start_amy_event_bridge(self._amy_instance, loop)
+            self._logger.info("Amy event bridge started (Phase 4 — plugin-owned)")
+        except Exception as e:
+            self._logger.warning("Amy event bridge failed: %s", e)
+
+    def _start_announcer(self) -> None:
+        """Start the WarAnnouncer for game event commentary.
+
+        Phase 4: This was previously done in main.py's lifespan.
+        Now the plugin owns it.
+        """
+        if self._amy_instance is None or self._simulation_engine is None:
+            return
+        try:
+            from amy.actions.announcer import WarAnnouncer
+            self._announcer = WarAnnouncer(
+                self._amy_instance.event_bus,
+                speaker=getattr(self._amy_instance, "speaker", None),
+            )
+            self._announcer.start()
+            if self._app is not None:
+                self._app.state.announcer = self._announcer
+            self._logger.info("War announcer started (Phase 4 — plugin-owned)")
+        except Exception as e:
+            self._logger.warning("War announcer failed to start: %s", e)
+
     def stop(self) -> None:
         """Shut down Amy AI Commander.
 
-        Phase 3: Calls Amy's shutdown() method and clears references.
+        Phase 4: Stops announcer, shuts down Amy, and clears references.
         """
         self._running = False
+
+        # Stop announcer first
+        if self._announcer is not None:
+            try:
+                self._announcer.stop()
+                self._logger.info("War announcer stopped")
+            except Exception as e:
+                self._logger.warning("Announcer stop error: %s", e)
+            self._announcer = None
 
         if self._amy_instance is not None:
             self._logger.info("Shutting down Amy AI Commander...")
@@ -185,14 +249,15 @@ class AmyCommanderPlugin(PluginInterface):
         if self._amy_thread is not None:
             self._amy_thread = None
 
-        # Clear app.state reference
+        # Clear app.state references
         if self._app is not None:
             try:
                 self._app.state.amy = None
+                self._app.state.announcer = None
             except Exception:
                 pass
 
-        self._logger.info("Amy Commander plugin stopped")
+        self._logger.info("Amy Commander plugin stopped (Phase 4)")
 
     @property
     def healthy(self) -> bool:

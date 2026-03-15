@@ -352,3 +352,20 @@ async def get_sitrep_text(
         if llm_summary:
             sitrep["llm_summary"] = llm_summary
     return _sitrep_to_text(sitrep)
+
+
+@router.get("/threat-level")
+async def get_threat_level(request: Request):
+    """Return the current system-wide computed threat level.
+
+    The threat level is calculated in real-time from hostile target count,
+    geofence breaches, active investigations, threat feed matches, and
+    behavioral anomalies. Published to WebSocket as ``system_threat_level``.
+    """
+    amy = getattr(request.app.state, "amy", None)
+    if amy is not None:
+        calc = getattr(amy, "threat_level_calculator", None)
+        if calc is not None:
+            return calc.get_status()
+
+    return {"level": "green", "score": 0.0}

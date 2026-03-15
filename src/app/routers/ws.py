@@ -694,6 +694,17 @@ def start_amy_event_bridge(amy_commander, loop: asyncio.AbstractEventLoop):
                         }),
                         loop,
                     )
+                elif event_type.startswith("system:"):
+                    # System-wide events (threat level, etc.) — convert : to _
+                    ws_type = event_type.replace(":", "_")
+                    asyncio.run_coroutine_threadsafe(
+                        manager.broadcast({
+                            "type": ws_type,
+                            "data": data,
+                            "timestamp": datetime.now(tz=None).isoformat(),
+                        }),
+                        loop,
+                    )
                 else:
                     asyncio.run_coroutine_threadsafe(
                         broadcast_amy_event(event_type, data), loop

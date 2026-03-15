@@ -14,6 +14,18 @@ Changes tracked with verification status. All changes on `dev` branch.
 
 ---
 
+## 2026-03-14 — Wave 104: Threat Level + GPX Export + Amy Phase 4
+
+| Change | Verification |
+|--------|-------------|
+| engine/tactical/threat_level_calculator.py — real-time system-wide threat level from hostile count, geofence breaches, investigations, threat feeds, behavioral anomalies | Unit Tested (17 tests) |
+| GET /api/threat-level — REST endpoint for current computed threat level | Unit Tested |
+| system:threat_level EventBus -> WebSocket broadcast for tactical banner | Unit Tested |
+| GET /api/targets/{id}/trail/export?format=gpx — GPX 1.1 export for ATAK/Google Earth | Unit Tested |
+| GPX format added to /api/targets/{id}/history/export (alongside csv, json, geojson) | Unit Tested |
+| Amy Commander Plugin Phase 4 — EventBus bridge + WarAnnouncer moved from main.py into plugin | Unit Tested |
+| plugins/amy/plugin.py version 4.0.0 — plugin now owns all Amy-related EventBus wiring | Unit Tested |
+
 ## 2026-03-14 — Wave 103: Intelligence Packages + Remote Diagnostics
 
 | Change | Verification |
