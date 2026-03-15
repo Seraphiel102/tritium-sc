@@ -86,6 +86,8 @@ import { BehavioralIntelligencePanelDef } from './panels/behavioral-intelligence
 import { MapReplayPanelDef } from './panels/map-replay.js';
 import { VoiceCommandPanelDef } from './panels/voice-command.js';
 import { WiFiFingerprintPanelDef } from './panels/wifi-fingerprint.js';
+import { CommandHistoryPanelDef } from './panels/command-history.js';
+import { DwellMonitorPanelDef } from './panels/dwell-monitor.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
 import { initTargetCounter } from './target-counter.js';
@@ -613,6 +615,8 @@ function initPanelSystem(container) {
     panelManager.register(MapReplayPanelDef);
     panelManager.register(VoiceCommandPanelDef);
     panelManager.register(WiFiFingerprintPanelDef);
+    panelManager.register(CommandHistoryPanelDef);
+    panelManager.register(DwellMonitorPanelDef);
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
     initScreenshotHotkey();

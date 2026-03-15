@@ -32,9 +32,14 @@ export class WeatherOverlay {
         this._lastFetchLat = null;
         this._lastFetchLng = null;
         this._fetchTimer = null;
+        this._meshTimer = null;
         this._visible = true;
         this._refreshInterval = 600000; // 10 min
+        this._meshRefreshInterval = 60000; // 1 min for mesh env data
         this._panThreshold = 0.05; // degrees of lat/lng change to trigger re-fetch
+        this._meshReadings = []; // environment readings from mesh nodes
+        this._meshBadges = []; // DOM elements for mesh node badges on map
+        this._mapContainer = null;
     }
 
     /**
@@ -74,6 +79,7 @@ export class WeatherOverlay {
         this._container.addEventListener('click', () => this._fetchNow());
 
         mapContainer.appendChild(this._container);
+        this._mapContainer = mapContainer;
 
         // Listen for map move events to update location
         EventBus.on('map:moveend', (data) => this._onMapMove(data));
@@ -82,8 +88,12 @@ export class WeatherOverlay {
         // Start periodic refresh
         this._fetchTimer = setInterval(() => this._fetchNow(), this._refreshInterval);
 
+        // Mesh environment data — refresh every minute
+        this._meshTimer = setInterval(() => this._fetchMeshEnvironment(), this._meshRefreshInterval);
+
         // Initial fetch after short delay (let map initialize)
         setTimeout(() => this._initialFetch(), 2000);
+        setTimeout(() => this._fetchMeshEnvironment(), 3000);
     }
 
     /**
@@ -98,6 +108,12 @@ export class WeatherOverlay {
             clearInterval(this._fetchTimer);
             this._fetchTimer = null;
         }
+        if (this._meshTimer) {
+            clearInterval(this._meshTimer);
+            this._meshTimer = null;
+        }
+        this._clearMeshBadges();
+        this._mapContainer = null;
     }
 
     /**
@@ -202,6 +218,64 @@ export class WeatherOverlay {
     _renderError(msg) {
         if (!this._container) return;
         this._container.innerHTML = `<span style="color:#555">WEATHER // ${msg}</span>`;
+    }
+
+    async _fetchMeshEnvironment() {
+        try {
+            const resp = await fetch('/api/mesh/environment');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            this._meshReadings = data.readings || [];
+
+            // Update the weather widget to show mesh sensor count
+            this._updateMeshIndicator();
+
+            // Store for other components
+            TritiumStore.set('weather.mesh_readings', this._meshReadings);
+        } catch (err) {
+            // Silently ignore — mesh data is supplementary
+        }
+    }
+
+    _updateMeshIndicator() {
+        if (!this._container || this._meshReadings.length === 0) return;
+
+        // Add or update the mesh sensor line in the weather widget
+        let meshLine = this._container.querySelector('[data-mesh-env]');
+        if (!meshLine) {
+            meshLine = document.createElement('div');
+            meshLine.setAttribute('data-mesh-env', '1');
+            meshLine.style.cssText = 'margin-top:2px;border-top:1px solid rgba(0,240,255,0.15);padding-top:2px';
+            this._container.appendChild(meshLine);
+        }
+
+        const count = this._meshReadings.length;
+        const temps = this._meshReadings
+            .filter(r => r.temperature_f != null)
+            .map(r => r.temperature_f);
+        const avgTemp = temps.length > 0
+            ? Math.round(temps.reduce((a, b) => a + b, 0) / temps.length)
+            : null;
+
+        const humids = this._meshReadings
+            .filter(r => r.humidity_pct != null)
+            .map(r => r.humidity_pct);
+        const avgHumid = humids.length > 0
+            ? Math.round(humids.reduce((a, b) => a + b, 0) / humids.length)
+            : null;
+
+        const parts = [`<span style="color:#05ffa1">MESH</span> ${count} node${count !== 1 ? 's' : ''}`];
+        if (avgTemp != null) parts.push(`${avgTemp}F`);
+        if (avgHumid != null) parts.push(`H:${avgHumid}%`);
+
+        meshLine.innerHTML = `<span style="font-size:10px;color:#888">${parts.join(' | ')}</span>`;
+    }
+
+    _clearMeshBadges() {
+        for (const badge of this._meshBadges) {
+            badge.remove();
+        }
+        this._meshBadges = [];
     }
 
     _degToCompass(deg) {
