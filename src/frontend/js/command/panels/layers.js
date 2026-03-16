@@ -87,6 +87,11 @@ const LAYER_CATEGORIES = [
                 { color: 'rgba(0,240,255,0.20)', shape: 'square', label: '2 sensors (redundant)' },
                 { color: 'rgba(252,238,10,0.30)', shape: 'square', label: '3+ sensors (strong)' },
             ]},
+            { id: 'correlationLines', label: 'Correlation Lines', description: 'Lines connecting targets that are likely the same entity across sensors', color: '#00f0ff', source: 'Target Correlator', key: 'showCorrelationLines' },
+            { id: 'predictionCones', label: 'Prediction Cones', description: 'Directional prediction ellipses showing estimated future target positions', color: '#fcee0a', source: 'Kalman Filter', key: 'showPredictionCones' },
+            { id: 'directionalThreats', label: 'Threat Direction Arrows', description: 'Arrows showing threat approach direction from hostile intel', color: '#ff2a6d', source: 'Threat Classifier', key: 'showDirectionalThreatArrows' },
+            { id: 'geofenceZones', label: 'Geofence Zones', description: 'User-defined monitored/restricted areas with entry/exit alerts', color: '#ff8800', source: 'Geofence Engine', key: 'showGeofenceZones' },
+            { id: 'coverage', label: 'Sensor Coverage', description: 'Detection radius circles around BLE/WiFi sensor nodes', color: '#05ffa166', source: 'Fleet Dashboard', key: 'showCoverage' },
             { id: 'trails', label: 'Target Movement Trails', description: 'Speed-colored movement trails for all active targets. Green = slow, Yellow = moderate, Red = fast. Fades with age.', color: '#05ffa1', source: 'Target Tracker', key: null, eventToggle: 'trails:toggle', legend: [
                 { color: '#05ffa1', shape: 'square', label: 'Slow (< 2 m/s, walking)' },
                 { color: '#fcee0a', shape: 'square', label: 'Moderate (2-8 m/s, jogging)' },
