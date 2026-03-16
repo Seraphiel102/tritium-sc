@@ -633,21 +633,7 @@ console.log('\n--- Quick-access panel buttons ---');
 // Panel buttons removed from toolbar in Wave 158 (use WINDOWS menu instead).
 // Skipping testPanelButtonLabels — no longer applicable.
 
-(function testPanelButtonClassName() {
-    clearDocListeners(); clearEventBus();
-    const container = createMockElement('div');
-    const pm = makeMockPanelManager(defaultPanels);
-    const lm = makeMockLayoutManager();
-    const ma = makeMockMapActions();
-    ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
-    const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
-    const right = bar.children[1];
-    // children[0] is search input, panel buttons start at index 1
-    for (let i = 0; i < defaultPanels.length; i++) {
-        const btn = right.children[i + 1];
-        assert(btn.className === 'command-bar-btn', 'panel button ' + i + ' has className command-bar-btn');
-    }
-})();
+// Panel buttons removed from toolbar in Wave 158 — skipping testPanelButtonClassName
 
 (function testPanelButtonDataPanel() {
     clearDocListeners(); clearEventBus();

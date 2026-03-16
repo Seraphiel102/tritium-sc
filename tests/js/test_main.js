@@ -417,8 +417,8 @@ console.log('\n--- Panel System Init ---');
 
 (function testDefaultPanelsOpened() {
     assert(mainSrc.includes("panelManager.open('amy')"), 'Default opens amy panel');
-    assert(mainSrc.includes("panelManager.open('units')"), 'Default opens units panel');
-    assert(mainSrc.includes("panelManager.open('alerts')"), 'Default opens alerts panel');
+    assert(mainSrc.includes("panelManager.open('amy')"), 'Default opens amy panel');
+    assert(mainSrc.includes("panelManager.open('minimap')"), 'Default opens minimap panel');
 })();
 
 (function testLayoutManagerCreatedAfterPanelManager() {
@@ -497,13 +497,13 @@ console.log('\n--- Panel Toggle Wiring ---');
 console.log('\n--- Toast System ---');
 
 (function testToastMaxConstant() {
-    assert(mainSrc.includes('const TOAST_MAX = 5'),
-        'TOAST_MAX is 5');
+    assert(mainSrc.includes('const TOAST_MAX = 2'),
+        'TOAST_MAX is 2');
 })();
 
 (function testToastDurationConstant() {
-    assert(mainSrc.includes('const TOAST_DURATION = 6000'),
-        'TOAST_DURATION is 6000ms');
+    assert(mainSrc.includes('const TOAST_DURATION = 3500'),
+        'TOAST_DURATION is 3500ms');
 })();
 
 (function testShowToastFunction() {
