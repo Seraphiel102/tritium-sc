@@ -79,33 +79,7 @@ class GeoEvent:
         }
 
 
-def point_in_polygon(
-    x: float, y: float, polygon: list[tuple[float, float]]
-) -> bool:
-    """Ray-casting algorithm for point-in-polygon test.
-
-    Casts a ray from (x, y) in the +x direction and counts edge crossings.
-    An odd count means the point is inside the polygon.
-    """
-    n = len(polygon)
-    if n < 3:
-        return False
-
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-
-        # Check if the ray crosses this edge
-        if (yi > y) != (yj > y):
-            # Compute x-coordinate of intersection
-            x_intersect = (xj - xi) * (y - yi) / (yj - yi) + xi
-            if x < x_intersect:
-                inside = not inside
-        j = i
-
-    return inside
+from tritium_lib.geo import point_in_polygon  # noqa: E402 — consolidated from 7 copies
 
 
 class GeofenceEngine:

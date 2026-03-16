@@ -16,13 +16,15 @@ from fastapi import APIRouter, HTTPException, Query
 from .models import RadarConfigRequest
 
 
-def create_router(tracker: Any) -> APIRouter:
+def create_router(tracker: Any, plugin: Any = None) -> APIRouter:
     """Build the radar tracker APIRouter.
 
     Parameters
     ----------
     tracker:
         RadarTracker instance providing track and radar management.
+    plugin:
+        RadarTrackerPlugin instance (optional, enables demo endpoints).
     """
     router = APIRouter(prefix="/api/radar", tags=["radar-tracker"])
 
@@ -130,5 +132,25 @@ def create_router(tracker: Any) -> APIRouter:
     async def get_stats():
         """Return radar tracker statistics."""
         return tracker.get_stats()
+
+    # -- Demo mode ---------------------------------------------------------
+
+    @router.post("/demo/start")
+    async def start_demo():
+        """Start the radar demo data generator.
+
+        Generates synthetic radar tracks (vehicles, aircraft, people, ships)
+        for testing and demonstration purposes.
+        """
+        if plugin is None:
+            return {"status": "error", "message": "Plugin reference not available"}
+        return plugin.start_demo()
+
+    @router.post("/demo/stop")
+    async def stop_demo():
+        """Stop the radar demo data generator."""
+        if plugin is None:
+            return {"status": "error", "message": "Plugin reference not available"}
+        return plugin.stop_demo()
 
     return router

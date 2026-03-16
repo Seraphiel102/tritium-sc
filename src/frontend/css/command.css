@@ -3600,18 +3600,18 @@ body.v2 {
 
 /* --- Keyframes --- */
 @keyframes morale-suppressed-pulse {
-    0%, 100% { border-color: #fcee0a44; box-shadow: 0 0 4px #fcee0a22; }
-    50%      { border-color: #fcee0a;   box-shadow: 0 0 10px #fcee0a66; }
+    0%, 100% { border-color: #fcee0a44; box-shadow: 0 0 3px #fcee0a22; }
+    50%      { border-color: #fcee0a;   box-shadow: 0 0 6px #fcee0a44; }
 }
 
 @keyframes morale-broken-pulse {
-    0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 6px #ff2a6d66; }
-    50%      { border-color: #fcee0a; box-shadow: 0 0 12px #fcee0a88; }
+    0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 4px #ff2a6d44; }
+    50%      { border-color: #fcee0a; box-shadow: 0 0 8px #fcee0a66; }
 }
 
 @keyframes morale-emboldened-glow {
-    0%, 100% { box-shadow: 0 0 8px #00f0ff44; }
-    50%      { box-shadow: 0 0 18px #00f0ff, 0 0 30px #00f0ff44; }
+    0%, 100% { box-shadow: 0 0 4px #00f0ff33; }
+    50%      { box-shadow: 0 0 8px #00f0ff88, 0 0 14px #00f0ff33; }
 }
 
 /* --- Morale state classes (applied to .tritium-unit-marker outer wrapper) --- */
@@ -3936,4 +3936,22 @@ body.v2 {
         width: 16px;
         height: 16px;
     }
+}
+
+
+/* ========================================
+   ADS-B Aircraft Overlay
+   ======================================== */
+
+.adsb-aircraft-marker {
+    z-index: 50;
+}
+
+.adsb-emergency {
+    animation: adsb-emergency-pulse 0.6s ease-in-out infinite;
+}
+
+@keyframes adsb-emergency-pulse {
+    0%, 100% { opacity: 1; filter: drop-shadow(0 0 8px #ff0000); }
+    50% { opacity: 0.5; filter: drop-shadow(0 0 16px #ff0000); }
 }

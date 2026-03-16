@@ -120,6 +120,7 @@ import { createMapQuickToggles } from './map-quick-toggles.js';
 import { TargetTrailManager } from './target-trails.js';
 import { HandoffLineManager } from './handoff-lines.js';
 import { ConvoyOverlayManager } from './convoy-overlay.js';
+import { startAdsbOverlay, toggleAdsbOverlay } from './adsb-overlay.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -825,6 +826,9 @@ function initPanelSystem(container) {
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();
     predictionEllipses.start();
+
+    // Start ADS-B aircraft overlay (auto-polls /api/sdr/adsb)
+    startAdsbOverlay();
 
     // Start convoy bounding box overlay on the map
     const convoyOverlay = new ConvoyOverlayManager();

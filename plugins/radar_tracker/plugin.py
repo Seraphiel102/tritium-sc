@@ -269,5 +269,5 @@ class RadarTrackerPlugin(PluginInterface):
 
         from .routes import create_router
 
-        router = create_router(self._tracker_service)
+        router = create_router(self._tracker_service, plugin=self)
         self._app.include_router(router)

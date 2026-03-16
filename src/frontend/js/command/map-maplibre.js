@@ -2506,7 +2506,7 @@ function _renderGeofenceZones() {
             source: GEOFENCE_ZONES_SOURCE,
             paint: {
                 'fill-color': ['get', 'fill_color'],
-                'fill-opacity': 0.6,
+                'fill-opacity': 0.15,
             },
         });
         _state.map.addLayer({
@@ -2990,10 +2990,10 @@ function _updateCoverPoints() {
                     20, 14,
                 ],
                 'circle-color': '#00f0ff',
-                'circle-opacity': 0.15,
+                'circle-opacity': 0.04,
                 'circle-stroke-color': '#00f0ff',
                 'circle-stroke-width': 1,
-                'circle-stroke-opacity': 0.35,
+                'circle-stroke-opacity': 0.08,
             },
         });
     }
@@ -4225,8 +4225,8 @@ function _applyMarkerStyle(el, unit) {
         css.id = 'tritium-marker-css';
         css.textContent = [
             '@keyframes hostile-pulse {',
-            '  0%, 100% { box-shadow: 0 0 8px #ff2a6d88; }',
-            '  50% { box-shadow: 0 0 20px #ff2a6d, 0 0 40px #ff2a6d66; }',
+            '  0%, 100% { box-shadow: 0 0 4px #ff2a6d66; }',
+            '  50% { box-shadow: 0 0 10px #ff2a6d88, 0 0 20px #ff2a6d33; }',
             '}',
             '',
             '/* Morale state animations */',
@@ -4235,12 +4235,12 @@ function _applyMarkerStyle(el, unit) {
             '  50% { border-color: #fcee0a; box-shadow: 0 0 10px #fcee0a66; }',
             '}',
             '@keyframes morale-broken-pulse {',
-            '  0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 6px #ff2a6d66; }',
-            '  50% { border-color: #fcee0a; box-shadow: 0 0 12px #fcee0a88; }',
+            '  0%, 100% { border-color: #ff2a6d; box-shadow: 0 0 4px #ff2a6d44; }',
+            '  50% { border-color: #fcee0a; box-shadow: 0 0 8px #fcee0a66; }',
             '}',
             '@keyframes morale-emboldened-glow {',
-            '  0%, 100% { box-shadow: 0 0 8px #00f0ff44; }',
-            '  50% { box-shadow: 0 0 18px #00f0ff, 0 0 30px #00f0ff44; }',
+            '  0%, 100% { box-shadow: 0 0 4px #00f0ff33; }',
+            '  50% { box-shadow: 0 0 8px #00f0ff88, 0 0 14px #00f0ff33; }',
             '}',
             '',
             '/* Morale state classes on outer .tritium-unit-marker wrapper */',
@@ -4258,12 +4258,12 @@ function _applyMarkerStyle(el, unit) {
             '',
             '/* Combat firing indicator */',
             '@keyframes combat-fire-pulse {',
-            '  0%, 100% { box-shadow: 0 0 8px var(--fire-color), 0 0 16px var(--fire-color); transform: scale(1); }',
-            '  50% { box-shadow: 0 0 16px var(--fire-color), 0 0 32px var(--fire-color), 0 0 48px var(--fire-color); transform: scale(1.15); }',
+            '  0%, 100% { box-shadow: 0 0 4px var(--fire-color); transform: scale(1); }',
+            '  50% { box-shadow: 0 0 8px var(--fire-color), 0 0 16px var(--fire-color); transform: scale(1.08); }',
             '}',
             '.unit-combat-ring {',
-            '  position: absolute; inset: -8px; border-radius: 50%;',
-            '  border: 2px solid var(--fire-color);',
+            '  position: absolute; inset: -4px; border-radius: 50%;',
+            '  border: 1.5px solid var(--fire-color);',
             '  pointer-events: none;',
             '  animation: combat-fire-pulse 0.6s ease-in-out infinite;',
             '}',
@@ -4413,7 +4413,7 @@ function _applyMarkerStyle(el, unit) {
             width: ${size}px; height: ${size}px;
             border-radius: ${isRobotType ? '0' : borderRadius};
             ${clipPath}
-            background: ${dead ? '#33333366' : (isRobotType ? `linear-gradient(135deg, ${color}99, ${color}22 50%, ${color}99)` : `radial-gradient(circle, ${color}55, ${color}22)`)};
+            background: ${dead ? '#33333366' : (isRobotType ? `linear-gradient(135deg, ${color}44, ${color}11 50%, ${color}44)` : `radial-gradient(circle, ${color}33, ${color}11)`)};
             ${isRobotType ? '' : `border: 1.5px solid ${color};`}
             display: flex; align-items: center; justify-content: center;
             font-family: 'JetBrains Mono', monospace;
@@ -4422,12 +4422,12 @@ function _applyMarkerStyle(el, unit) {
             cursor: pointer;
             opacity: ${opacity};
             transition: transform 0.15s, box-shadow 0.15s;
-            box-shadow: 0 0 ${selGlow ? (isRobotType ? '20' : '14') : (isRobotType ? '12' : '5')}px ${color}${selGlow ? '' : (isRobotType ? '88' : '44')};
+            box-shadow: 0 0 ${selGlow ? (isRobotType ? '16' : '10') : (isRobotType ? '6' : '3')}px ${color}${selGlow ? '' : (isRobotType ? '66' : '33')};
             ${markerTransform ? `transform: ${markerTransform};` : ''}
             ${pulse}
             position: relative;
-            text-shadow: 0 0 ${isRobotType ? '6' : '4'}px ${color};
-            ${isRobotType ? `filter: drop-shadow(0 0 3px ${color});` : ''}
+            text-shadow: 0 0 ${isRobotType ? '5' : '3'}px ${color};
+            ${isRobotType ? `filter: drop-shadow(0 0 2px ${color});` : ''}
         `;
         // For diamond (hostile), counter-rotate the icon letter so it stays upright
         if (alliance === 'hostile') {
@@ -4466,11 +4466,11 @@ function _applyMarkerStyle(el, unit) {
             if (!damageGlow) {
                 damageGlow = document.createElement('div');
                 damageGlow.className = 'unit-damage-glow';
-                damageGlow.style.cssText = 'position:absolute; inset:-6px; border-radius:50%; pointer-events:none;';
+                damageGlow.style.cssText = 'position:absolute; inset:-3px; border-radius:50%; pointer-events:none;';
                 el.appendChild(damageGlow);
             }
             const glowColor = hpRatio < 0.25 ? '#ff2a6d' : '#fcee0a';
-            damageGlow.style.boxShadow = '0 0 10px ' + glowColor + ', 0 0 20px ' + glowColor + '44';
+            damageGlow.style.boxShadow = '0 0 6px ' + glowColor + '88, 0 0 10px ' + glowColor + '33';
             damageGlow.style.animation = 'hostile-pulse 1s ease-in-out infinite';
         } else if (damageGlow) {
             damageGlow.remove();
@@ -4539,11 +4539,11 @@ function _applyMarkerStyle(el, unit) {
             if (!ctrlRing) {
                 ctrlRing = document.createElement('div');
                 ctrlRing.className = 'unit-ctrl-ring';
-                ctrlRing.style.cssText = 'position:absolute; inset:-8px; border-radius:50%; pointer-events:none; border:2px dashed #00f0ff;';
+                ctrlRing.style.cssText = 'position:absolute; inset:-4px; border-radius:50%; pointer-events:none; border:1.5px dashed #00f0ff;';
                 el.appendChild(ctrlRing);
             }
             ctrlRing.style.animation = 'hostile-pulse 1s ease-in-out infinite';
-            ctrlRing.style.boxShadow = '0 0 8px #00f0ff, 0 0 16px #00f0ff44';
+            ctrlRing.style.boxShadow = '0 0 4px #00f0ff88, 0 0 8px #00f0ff33';
         } else if (ctrlRing) {
             ctrlRing.remove();
         }
@@ -9789,7 +9789,10 @@ export function setLayers(layers) {
             _state.showParks = true;
             _state.showUnits = true;
             _state.showLabels = true;
-            _state.showModels3d = true;
+            // showModels3d stays OFF — 3D models cause visual clutter with
+            // large colored circles that stack on top of each other around
+            // unit clusters.  Users can toggle 3D models separately.
+            _state.showModels3d = false;
             _state.showGeoLayers = true;
         }
         // Apply DOM marker visibility

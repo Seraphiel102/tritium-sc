@@ -48,27 +48,7 @@ def _point_in_circle(
     return distance_m <= radius_m
 
 
-def _point_in_polygon(
-    lat: float, lng: float,
-    vertices: list[tuple[float, float]],
-) -> bool:
-    """Ray-casting point-in-polygon test.
-
-    Vertices are (lat, lng) tuples forming a closed polygon.
-    """
-    n = len(vertices)
-    if n < 3:
-        return False
-
-    inside = False
-    j = n - 1
-    for i in range(n):
-        yi, xi = vertices[i]
-        yj, xj = vertices[j]
-        if ((yi > lng) != (yj > lng)) and (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi):
-            inside = not inside
-        j = i
-    return inside
+from tritium_lib.geo import point_in_polygon as _point_in_polygon  # noqa: E402
 
 
 class MissionTargetBinder:
