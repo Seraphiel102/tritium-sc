@@ -54,7 +54,7 @@ assert(mapSrc.includes("'weapon-range-stroke'"), "Stroke layer ID is 'weapon-ran
 
 console.log('\n--- Weapon Range: state variable ---');
 
-assert(/showWeaponRange\s*:\s*true/.test(mapSrc), '_state.showWeaponRange defaults to true');
+assert(/showWeaponRange\s*:\s*false/.test(mapSrc), '_state.showWeaponRange defaults to false (visual clutter fix)');
 
 // ============================================================
 // 3. Weapon Range -- Toggle Function
@@ -288,7 +288,7 @@ assert(mapSrc.includes("'swarm-hull-stroke'"), "Stroke layer ID is 'swarm-hull-s
 
 console.log('\n--- Swarm Hull: state variable ---');
 
-assert(/showSwarmHull\s*:\s*true/.test(mapSrc), '_state.showSwarmHull defaults to true');
+assert(/showSwarmHull\s*:\s*false/.test(mapSrc), '_state.showSwarmHull defaults to false (visual clutter fix)');
 
 // ============================================================
 // 17. Swarm Hull -- Toggle Function

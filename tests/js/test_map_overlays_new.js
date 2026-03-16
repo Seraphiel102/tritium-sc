@@ -59,7 +59,7 @@ assert(mapSrc.includes("'hazard-zones-stroke'"), "Stroke layer ID is 'hazard-zon
 
 console.log('\n--- Hazard Zones: state variable ---');
 
-assert(/showHazardZones\s*:\s*true/.test(mapSrc), '_state.showHazardZones defaults to true');
+assert(/showHazardZones\s*:\s*false/.test(mapSrc), '_state.showHazardZones defaults to false (visual clutter fix)');
 
 // ============================================================
 // 3. Hazard Zones -- Toggle Function
@@ -125,7 +125,7 @@ assert(mapSrc.includes("'hostile-obj-line'"), "Line layer ID is 'hostile-obj-lin
 
 console.log('\n--- Hostile Objectives: state variable ---');
 
-assert(/showHostileObjectives\s*:\s*true/.test(mapSrc), '_state.showHostileObjectives defaults to true');
+assert(/showHostileObjectives\s*:\s*false/.test(mapSrc), '_state.showHostileObjectives defaults to false (visual clutter fix)');
 
 // ============================================================
 // 8. Hostile Objectives -- Toggle Function
@@ -310,7 +310,7 @@ assert(mapSrc.includes("'unit-signals-circle'"), "Circle layer ID is 'unit-signa
 
 console.log('\n--- Unit Signals: state variable ---');
 
-assert(/showUnitSignals\s*:\s*true/.test(mapSrc), '_state.showUnitSignals defaults to true');
+assert(/showUnitSignals\s*:\s*false/.test(mapSrc), '_state.showUnitSignals defaults to false (visual clutter fix)');
 
 // ============================================================
 // 22. Unit Signals -- Toggle Function
@@ -363,7 +363,7 @@ assert(mapSrc.includes("retreat:"), 'SIGNAL_COLORS has retreat entry');
 
 console.log('\n--- Hostile Intel: state/toggle ---');
 
-assert(/showHostileIntel\s*:\s*true/.test(mapSrc), '_state.showHostileIntel defaults to true');
+assert(/showHostileIntel\s*:\s*false/.test(mapSrc), '_state.showHostileIntel defaults to false (visual clutter fix)');
 assert(/export\s+function\s+toggleHostileIntel\b/.test(mapSrc),
     'toggleHostileIntel() is exported');
 assert(/_state\.showHostileIntel\s*=\s*!_state\.showHostileIntel/.test(mapSrc),

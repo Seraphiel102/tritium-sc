@@ -23,13 +23,13 @@ const FETCH_INTERVAL_MS = 2000;
 const TRAIL_MAX_POINTS = 20;
 
 // Altitude color stops (feet -> color)
-// Green (low/ground) -> yellow (mid) -> red (high altitude)
+// Green (low/ground) -> cyan (mid) -> magenta (high altitude)
 const ALT_COLORS = [
     { alt: 0,     color: '#05ffa1' },   // ground — green
     { alt: 5000,  color: '#05ffa1' },   // low — green
-    { alt: 15000, color: '#fcee0a' },   // mid — yellow
-    { alt: 30000, color: '#ff8c00' },   // high — orange
-    { alt: 45000, color: '#ff2a6d' },   // very high — magenta/red
+    { alt: 15000, color: '#00f0ff' },   // mid — cyan
+    { alt: 30000, color: '#00f0ff' },   // high-mid — cyan
+    { alt: 45000, color: '#ff2a6d' },   // very high — magenta
 ];
 
 const EMERGENCY_COLOR = '#ff0000';

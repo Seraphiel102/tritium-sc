@@ -615,8 +615,9 @@ console.log('\n--- Material Setup ---');
 })();
 
 (function testZoneMaterials() {
-    assertContains(source, "materials.zoneRestricted", 'Zone restricted material defined');
-    assertContains(source, "materials.zonePerimeter", 'Zone perimeter material defined');
+    // Zone fill disc materials were removed (visual clutter fix) — only border materials remain
+    assertContains(source, "materials.zoneBorderRestricted", 'Zone border restricted material defined');
+    assertContains(source, "materials.zoneBorderPerimeter", 'Zone border perimeter material defined');
 })();
 
 (function testBuildingMaterials() {
