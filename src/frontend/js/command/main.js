@@ -586,9 +586,9 @@ function init() {
     };
     document.addEventListener('click', _initAudio, { once: true });
     document.addEventListener('keydown', _initAudio, { once: true });
-    // Also init audio on game state changes (user has already clicked BEGIN WAR
-    // before game_state events arrive, so AudioContext will be unlocked)
-    EventBus.on('game:state', _initAudio);
+    // Audio init only on user gesture (click/keydown). Do NOT init on
+    // game:state events — WebSocket delivers state before user gesture,
+    // causing "AudioContext not allowed to start" browser warnings.
 
     // Demo start button — visible when no targets on map, hidden once targets appear
     const demoOverlay = document.getElementById('demo-start-overlay');

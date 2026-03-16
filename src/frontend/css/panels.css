@@ -3438,6 +3438,16 @@
     cursor: pointer;
 }
 
+/* Placement banner — pulsing prompt to click the map */
+.cf-placement-banner {
+    flex-shrink: 0;
+}
+
+@keyframes cf-pulse-border {
+    0%, 100% { border-top-color: rgba(252, 238, 10, 0.20); }
+    50% { border-top-color: rgba(252, 238, 10, 0.60); }
+}
+
 
 /* ========================================
    Graph Explorer Panel

@@ -106,11 +106,9 @@ WarEventMapper.prototype.onGameStateChange = function(data) {
     if (!data) return;
     var state = data.state || data.new_state;
 
-    // Ensure audio is initialized on any game state change (user has already
-    // interacted by clicking BEGIN WAR, so AudioContext will be allowed)
-    if (typeof _initWarAudioOnGesture === 'function') {
-        _initWarAudioOnGesture();
-    }
+    // Audio init happens on user gesture (click/keydown) via document listeners.
+    // Do NOT call _initWarAudioOnGesture here — WebSocket events arrive before
+    // any user gesture, causing 100+ "AudioContext not allowed" warnings.
 
     if (state === 'active') {
         this._gameActive = true;

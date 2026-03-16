@@ -52,8 +52,8 @@ WarAudioManager.prototype.init = function() {
 };
 
 WarAudioManager.prototype._ensureCtx = function() {
-    if (!this._ctx) this.init();
-    if (this._ctx && this._ctx.state === 'suspended') {
+    if (!this._ctx) return null;  // Don't auto-create — wait for user gesture via init()
+    if (this._ctx.state === 'suspended') {
         this._ctx.resume().catch(function() {});
     }
     return this._ctx;
