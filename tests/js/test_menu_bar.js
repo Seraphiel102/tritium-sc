@@ -638,40 +638,9 @@ console.log('\n--- Quick-access panel buttons ---');
 // Panel buttons removed from toolbar in Wave 158 — skipping testPanelButtonDataPanel
 
 // Panel buttons removed in Wave 158 — skipping testOpenPanelButtonHasActiveClass
-(function testOpenPanelButtonHasActiveClass_SKIPPED() {
-    // Buttons no longer exist in toolbar. Panels accessed via WINDOWS menu.
-    // game (index 4) is closed
-    assert(!right.children[4]._classList.has('active'), 'GAME button does NOT have active class (panel is closed)');
-})();
 
-(function testPanelButtonTitle() {
-    clearDocListeners(); clearEventBus();
-    const container = createMockElement('div');
-    const pm = makeMockPanelManager(defaultPanels);
-    const lm = makeMockLayoutManager();
-    const ma = makeMockMapActions();
-    ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
-    const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
-    const right = bar.children[1];
-    // Amy should have key "1" (children[0] is search input, buttons start at 1)
-    assert(right.children[1].title.includes('1'), 'AMY button title includes shortcut key "1"');
-    assert(right.children[1].title.includes('AMY COMMANDER'), 'AMY button title includes panel title');
-})();
-
-(function testPanelButtonClickTogglesPanel() {
-    clearDocListeners(); clearEventBus();
-    const container = createMockElement('div');
-    const pm = makeMockPanelManager(defaultPanels);
-    const lm = makeMockLayoutManager();
-    const ma = makeMockMapActions();
-    ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
-    const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
-    const right = bar.children[1];
-    const unitsBtn = right.children[2]; // units, initially closed (index 0 is search)
-    assert(!pm._openState['units'], 'units is initially closed');
-    unitsBtn.click();
-    assert(pm._openState['units'], 'clicking UNITS button toggles panel open');
-})();
+// Panel buttons (testPanelButtonTitle, testPanelButtonClickTogglesPanel)
+// removed in Wave 158 — panels accessed via WINDOWS menu now
 
 // ============================================================
 // 6. Save input element creation
