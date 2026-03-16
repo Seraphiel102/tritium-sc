@@ -635,23 +635,7 @@ console.log('\n--- Quick-access panel buttons ---');
 
 // Panel buttons removed from toolbar in Wave 158 — skipping testPanelButtonClassName
 
-(function testPanelButtonDataPanel() {
-    clearDocListeners(); clearEventBus();
-    const container = createMockElement('div');
-    const pm = makeMockPanelManager(defaultPanels);
-    const lm = makeMockLayoutManager();
-    const ma = makeMockMapActions();
-    ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
-    const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
-    const right = bar.children[1];
-    // children[0] is search input, panel buttons start at index 1
-    const expectedIds = ['amy', 'units', 'alerts', 'game', 'mesh', 'cameras', 'search', 'tak', 'videos', 'zones'];
-    for (let i = 0; i < expectedIds.length; i++) {
-        const btn = right.children[i + 1];
-        assert(btn.dataset.panel === expectedIds[i],
-            'panel button ' + i + ' data-panel is "' + expectedIds[i] + '", got "' + btn.dataset.panel + '"');
-    }
-})();
+// Panel buttons removed from toolbar in Wave 158 — skipping testPanelButtonDataPanel
 
 (function testOpenPanelButtonHasActiveClass() {
     clearDocListeners(); clearEventBus();
