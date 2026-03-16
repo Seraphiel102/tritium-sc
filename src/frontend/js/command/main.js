@@ -109,6 +109,7 @@ import { IndoorPositioningPanelDef } from './panels/indoor-positioning-panel.js'
 import { UnifiedAlertsPanelDef } from './panels/alerts-panel.js';
 import { RadarScopePanelDef } from './panels/radar-scope.js';
 import { SdrWaterfallPanelDef } from './panels/sdr-waterfall.js';
+import { AdsbTablePanelDef } from './panels/adsb-table.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -822,6 +823,7 @@ function initPanelSystem(container) {
     panelManager.register(UnifiedAlertsPanelDef);
     panelManager.register(RadarScopePanelDef);
     panelManager.register(SdrWaterfallPanelDef);
+    panelManager.register(AdsbTablePanelDef);
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();

@@ -4413,7 +4413,7 @@ function _applyMarkerStyle(el, unit) {
             width: ${size}px; height: ${size}px;
             border-radius: ${isRobotType ? '0' : borderRadius};
             ${clipPath}
-            background: ${dead ? '#33333366' : (isRobotType ? `linear-gradient(135deg, ${color}44, ${color}11 50%, ${color}44)` : `radial-gradient(circle, ${color}33, ${color}11)`)};
+            background: ${dead ? '#33333366' : (isRobotType ? `linear-gradient(135deg, ${color}44, ${color}11 50%, ${color}44)` : `radial-gradient(circle, ${color}15, ${color}08)`)};
             ${isRobotType ? '' : `border: 1.5px solid ${color};`}
             display: flex; align-items: center; justify-content: center;
             font-family: 'JetBrains Mono', monospace;
@@ -4422,7 +4422,7 @@ function _applyMarkerStyle(el, unit) {
             cursor: pointer;
             opacity: ${opacity};
             transition: transform 0.15s, box-shadow 0.15s;
-            box-shadow: 0 0 ${selGlow ? (isRobotType ? '16' : '10') : (isRobotType ? '6' : '3')}px ${color}${selGlow ? '' : (isRobotType ? '66' : '33')};
+            box-shadow: 0 0 ${selGlow ? (isRobotType ? '16' : '10') : (isRobotType ? '4' : '2')}px ${color}${selGlow ? '' : (isRobotType ? '44' : '22')};
             ${markerTransform ? `transform: ${markerTransform};` : ''}
             ${pulse}
             position: relative;
