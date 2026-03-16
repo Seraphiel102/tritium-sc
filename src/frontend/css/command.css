@@ -89,7 +89,7 @@ body.v2 {
     height: 36px;
     background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1) 100%);
     border-bottom: 1px solid var(--border);
-    z-index: 50;
+    z-index: 10;  /* Below command bar (z:200) so menu dropdowns aren't blocked */
 }
 
 .cc-header__left,
