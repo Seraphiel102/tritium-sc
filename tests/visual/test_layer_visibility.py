@@ -157,13 +157,10 @@ class TestLayerCategoryToggle:
 
     def test_hide_combat_effects(self, browser_page):
         page = browser_page
-        # Find COMBAT EFFECTS category NONE button
-        none_btns = page.query_selector_all(".layer-cat-hide-all")
-        for btn in none_btns:
-            if btn.get_attribute("data-cat-name") == "COMBAT EFFECTS":
-                btn.click()
-                time.sleep(0.5)
-                break
+        time.sleep(1)  # Wait for any pending re-render from previous test
+        # Re-query fresh DOM elements (they get replaced on render)
+        page.click('.layer-cat-hide-all[data-cat-name="COMBAT EFFECTS"]', timeout=5000)
+        time.sleep(0.5)
 
         # Verify tracers checkbox is unchecked
         tracer_cb = page.query_selector('input[data-key="showTracers"]')
@@ -172,13 +169,9 @@ class TestLayerCategoryToggle:
 
     def test_show_combat_effects(self, browser_page):
         page = browser_page
-        # Find COMBAT EFFECTS category ALL button
-        all_btns = page.query_selector_all(".layer-cat-show-all")
-        for btn in all_btns:
-            if btn.get_attribute("data-cat-name") == "COMBAT EFFECTS":
-                btn.click()
-                time.sleep(0.5)
-                break
+        time.sleep(0.5)
+        page.click('.layer-cat-show-all[data-cat-name="COMBAT EFFECTS"]', timeout=5000)
+        time.sleep(0.5)
 
         tracer_cb = page.query_selector('input[data-key="showTracers"]')
         if tracer_cb:
