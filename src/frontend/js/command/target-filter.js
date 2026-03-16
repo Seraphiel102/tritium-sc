@@ -171,6 +171,21 @@ export function initTargetFilter(container) {
     overlay.appendChild(dropdown);
     container.appendChild(overlay);
 
+    // Listen for filter changes from the Layers panel
+    EventBus.on('target-filter:set', (data) => {
+        if (data.source !== undefined) _filters.source = data.source;
+        if (data.alliance !== undefined) _filters.alliance = data.alliance;
+        if (data.assetType !== undefined) _filters.assetType = data.assetType;
+        // Sync the dropdowns in the target filter overlay
+        dropdown.querySelectorAll('.tfl-select').forEach(sel => {
+            const key = sel.dataset.filter;
+            if (key && _filters[key]) sel.value = _filters[key];
+        });
+        _updateActiveCount(dropdown);
+        _updateToggleIndicator(toggleBtn);
+        EventBus.emit('target-filter:changed', getTargetFilters());
+    });
+
     return overlay;
 }
 

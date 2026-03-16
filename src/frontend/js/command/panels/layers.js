@@ -136,6 +136,12 @@ const LAYER_CATEGORIES = [
             { id: 'autoFollow', label: 'Auto-Follow Camera', description: 'Camera automatically follows combat action', color: null, source: 'UI', key: 'autoFollow' },
         ],
     },
+    {
+        name: 'TARGET FILTERS',
+        description: 'Filter which targets appear on the map by source, alliance, and device type',
+        targetFilters: true, // Flag for special rendering
+        layers: [],
+    },
 ];
 
 // GIS layer color/description mapping for dynamic layers from the catalog
@@ -166,6 +172,8 @@ export const LayersPanelDef = {
             <div class="layers-global-controls" style="display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #00f0ff33;">
                 <button class="layers-btn-show-all" style="flex:1;background:#1a1a2e;color:#05ffa1;border:1px solid #05ffa133;padding:3px 8px;cursor:pointer;font-family:inherit;font-size:11px;" title="Show all map layers">SHOW ALL</button>
                 <button class="layers-btn-hide-all" style="flex:1;background:#1a1a2e;color:#ff2a6d;border:1px solid #ff2a6d33;padding:3px 8px;cursor:pointer;font-family:inherit;font-size:11px;" title="Hide all map layers">HIDE ALL</button>
+                <button class="layers-btn-expand-all" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:3px 8px;cursor:pointer;font-family:inherit;font-size:11px;" title="Expand all categories">EXPAND</button>
+                <button class="layers-btn-collapse-all" style="flex:1;background:#1a1a2e;color:#fcee0a;border:1px solid #fcee0a33;padding:3px 8px;cursor:pointer;font-family:inherit;font-size:11px;" title="Collapse all categories">COLLAPSE</button>
             </div>
             <div class="layers-search-bar">
                 <input type="text" class="layers-search" placeholder="Search layers..." data-bind="search" title="Type to filter layers by name, description, or data source" />
@@ -195,6 +203,16 @@ export const LayersPanelDef = {
         });
         if (hideAllBtn) hideAllBtn.addEventListener('click', () => {
             if (mapActions && mapActions.setAllLayers) { mapActions.setAllLayers(false); render(); }
+        });
+
+        // Collapse/Expand all categories
+        const expandBtn = bodyEl.querySelector('.layers-btn-expand-all');
+        const collapseBtn = bodyEl.querySelector('.layers-btn-collapse-all');
+        if (expandBtn) expandBtn.addEventListener('click', () => {
+            treeEl.querySelectorAll('.layer-category').forEach(c => c.classList.add('expanded'));
+        });
+        if (collapseBtn) collapseBtn.addEventListener('click', () => {
+            treeEl.querySelectorAll('.layer-category').forEach(c => c.classList.remove('expanded'));
         });
 
         // Fetch GIS catalog for dynamic layer entries
@@ -451,6 +469,25 @@ export const LayersPanelDef = {
                     }
                 }
 
+                // Special: Target Filters category renders filter dropdowns
+                if (cat.targetFilters) {
+                    html += `<div class="layer-item" style="padding:6px 8px;">`;
+                    html += `<div style="display:flex;flex-direction:column;gap:6px;width:100%;">`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">SOURCE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="source" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All Sources</option><option value="ble">BLE</option><option value="wifi">WiFi</option><option value="yolo">Camera/YOLO</option><option value="mesh">Mesh/LoRa</option><option value="rf">RF</option><option value="radar">Radar</option><option value="simulation">Simulation</option></select></div>`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">ALLIANCE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="alliance" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All</option><option value="friendly">Friendly</option><option value="hostile">Hostile</option><option value="neutral">Neutral</option><option value="unknown">Unknown</option></select></div>`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">DEVICE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="assetType" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All Types</option><option value="person">Person</option><option value="vehicle">Vehicle</option><option value="phone">Phone</option><option value="watch">Watch</option><option value="ble_device">BLE Device</option><option value="mesh_radio">Mesh Radio</option><option value="drone">Drone</option><option value="rover">Rover</option><option value="turret">Turret</option><option value="animal">Animal</option></select></div>`;
+                    html += `<button class="tfl-layers-reset" style="background:#1a1a2e;color:#fcee0a;border:1px solid #fcee0a33;padding:2px 8px;cursor:pointer;font-family:inherit;font-size:10px;">RESET FILTERS</button>`;
+                    html += `</div></div>`;
+                }
                 html += `</div></div>`;
             }
 
@@ -558,6 +595,23 @@ export const LayersPanelDef = {
                     render();
                 });
             }
+        }
+
+        // Target filter dropdowns (in TARGET FILTERS category)
+        for (const sel of treeEl.querySelectorAll('.tfl-layers-select')) {
+            sel.addEventListener('change', () => {
+                const filterKey = sel.dataset.tfl;
+                if (filterKey) {
+                    EventBus.emit('target-filter:set', { [filterKey]: sel.value });
+                }
+            });
+        }
+        const resetBtn = treeEl.querySelector('.tfl-layers-reset');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                treeEl.querySelectorAll('.tfl-layers-select').forEach(s => { s.value = 'all'; });
+                EventBus.emit('target-filter:set', { source: 'all', alliance: 'all', assetType: 'all' });
+            });
         }
 
         // Search filter
