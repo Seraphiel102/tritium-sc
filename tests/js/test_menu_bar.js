@@ -637,23 +637,9 @@ console.log('\n--- Quick-access panel buttons ---');
 
 // Panel buttons removed from toolbar in Wave 158 — skipping testPanelButtonDataPanel
 
-(function testOpenPanelButtonHasActiveClass() {
-    clearDocListeners(); clearEventBus();
-    const container = createMockElement('div');
-    // amy and alerts are open
-    const pm = makeMockPanelManager(defaultPanels);
-    const lm = makeMockLayoutManager();
-    const ma = makeMockMapActions();
-    ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
-    const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
-    const right = bar.children[1];
-    // children[0] is search input, panel buttons start at index 1
-    // amy (index 1) is open
-    assert(right.children[1]._classList.has('active'), 'AMY button has active class (panel is open)');
-    // units (index 2) is closed
-    assert(!right.children[2]._classList.has('active'), 'UNITS button does NOT have active class (panel is closed)');
-    // alerts (index 3) is open
-    assert(right.children[3]._classList.has('active'), 'ALERTS button has active class (panel is open)');
+// Panel buttons removed in Wave 158 — skipping testOpenPanelButtonHasActiveClass
+(function testOpenPanelButtonHasActiveClass_SKIPPED() {
+    // Buttons no longer exist in toolbar. Panels accessed via WINDOWS menu.
     // game (index 4) is closed
     assert(!right.children[4]._classList.has('active'), 'GAME button does NOT have active class (panel is closed)');
 })();
