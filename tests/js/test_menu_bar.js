@@ -1324,7 +1324,7 @@ console.log('\n--- Dropdown items structure ---');
 
     mapTrigger.click();
     // Roads (index 5) is checked (showRoads=true)
-    const roadsItem = mapDropdown.children[5];
+    const roadsItem = findMenuItem(mapDropdown, "Roads")?.item || mapDropdown.children[7];
     const roadsCheck = roadsItem.children[0];
     assert(roadsCheck.textContent === '\u2022', 'Roads check indicator shows bullet (checked)');
 })();
@@ -1434,7 +1434,7 @@ console.log('\n--- Menu item actions ---');
 
     mapTrigger.click(); // Open MAP
     // Click "Satellite" (checkable) — index 5 (after Open Layers Window, sep, Show All, Hide All, sep)
-    const satItem = mapDropdown.children[3];
+    const satItem = findMenuItem(mapDropdown, "Satellite")?.item || mapDropdown.children[5];
     satItem.click();
     // Checkable items do NOT close the menu
     assert(mapDropdown.hidden === false, 'clicking checkable item keeps dropdown open');
@@ -1453,7 +1453,7 @@ console.log('\n--- Menu item actions ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    const satItem = mapDropdown.children[3];
+    const satItem = findMenuItem(mapDropdown, "Satellite")?.item || mapDropdown.children[5];
     const satCheck = satItem.children[0];
     assert(satCheck.textContent === '\u2022', 'Satellite starts checked');
 
