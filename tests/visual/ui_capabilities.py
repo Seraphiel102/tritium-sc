@@ -132,15 +132,22 @@ def discover_menu_items(page, menu_label):
     items = page.query_selector_all(".menu-dropdown:not([hidden]) .menu-item")
     labels = []
     for item in items:
-        text = item.text_content().strip()
-        if text and text not in ("", "Show All", "Hide All", "Fullscreen"):
-            # Check if it's a checkable item (has a bullet/check indicator)
-            check = item.query_selector(".menu-check")
-            labels.append({
-                "label": text,
-                "checkable": check is not None,
-                "checked": check.text_content().strip() == "\u2022" if check else False,
-            })
+        # Get the label from the .menu-item-label span (avoids shortcut number suffix)
+        label_el = item.query_selector(".menu-item-label")
+        text = label_el.text_content().strip() if label_el else item.text_content().strip()
+        if not text or text in ("Show All", "Hide All", "Fullscreen"):
+            continue
+        # Check if it has a checkable indicator
+        check = item.query_selector(".menu-item-check")
+        is_checked = False
+        if check:
+            check_text = check.text_content().strip()
+            is_checked = check_text == "\u2022" or check_text == "✓"
+        labels.append({
+            "label": text,
+            "checkable": check is not None,
+            "checked": is_checked,
+        })
 
     close_menu(page)
     return labels
@@ -154,7 +161,10 @@ def click_menu_item(page, menu_label, item_label):
 
     items = page.query_selector_all(".menu-dropdown:not([hidden]) .menu-item")
     for item in items:
-        if item.text_content().strip() == item_label:
+        # Match by .menu-item-label text (ignores shortcut numbers)
+        label_el = item.query_selector(".menu-item-label")
+        text = label_el.text_content().strip() if label_el else item.text_content().strip()
+        if text == item_label:
             item.click()
             time.sleep(0.3)
             return UIResult(success=True, message=f"Clicked '{item_label}' in {menu_label}")
