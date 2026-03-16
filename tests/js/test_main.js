@@ -26,7 +26,7 @@ function assertEqual(a, b, msg) {
 // Load main.js source as a string for static analysis
 // ============================================================
 
-const mainSrc = fs.readFileSync(__dirname + '/../../frontend/js/command/main.js', 'utf8');
+const mainSrc = fs.readFileSync(__dirname + '/../../src/frontend/js/command/main.js', 'utf8');
 const mainLines = mainSrc.split('\n');
 
 // ============================================================
@@ -739,12 +739,14 @@ console.log('\n--- API Endpoints ---');
 console.log('\n--- escapeHtml ---');
 
 (function testEscapeHtmlExists() {
-    assert(mainSrc.includes('function escapeHtml(text)'),
+    // escapeHtml is now an alias for _esc imported from panel-utils.js
+    assert(mainSrc.includes("const escapeHtml = _esc") || mainSrc.includes('function escapeHtml(text)'),
         'escapeHtml function exists');
 })();
 
 (function testEscapeHtmlHandlesEmpty() {
-    assert(mainSrc.includes("if (!text) return ''"),
+    // _esc handles falsy input in panel-utils.js
+    assert(mainSrc.includes("import { _esc }") || mainSrc.includes("if (!text) return ''"),
         'escapeHtml returns empty string for falsy input');
 })();
 

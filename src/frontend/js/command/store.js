@@ -78,6 +78,13 @@ export const TritiumStore = {
     // Alerts (from WebSocket escalation events)
     alerts: [],  // { id, type, message, time, source, read }
 
+    // Pinned targets — always visible, never pruned (persisted to localStorage)
+    pinnedTargets: new Set(
+        typeof localStorage !== 'undefined' && localStorage.getItem('tritium.pinnedTargets')
+            ? JSON.parse(localStorage.getItem('tritium.pinnedTargets'))
+            : []
+    ),
+
     // Cameras (from API /api/cameras)
     cameras: [],
 
@@ -213,9 +220,12 @@ export const TritiumStore = {
 
     /**
      * Remove a unit by id.
+     * Pinned targets are protected from removal.
      * @param {string} id
      */
     removeUnit(id) {
+        // Pinned targets are never pruned
+        if (this.pinnedTargets.has(id)) return;
         this.units.delete(id);
         // Clear selection if the removed unit was selected
         if (this.map.selectedUnitId === id) {
@@ -258,6 +268,9 @@ export const TritiumStore = {
         this.set('game.waveHostilesRemaining', 0);
         this.set('game.difficultyMultiplier', 1.0);
 
+        // Directional state
+        this.set('game.waveDirection', null);
+
         // Per-game overlay data
         this.set('hazards', new Map());
         this.set('game.hostileIntel', null);
@@ -288,6 +301,47 @@ export const TritiumStore = {
     },
 
     /**
+     * Pin a target so it stays visible and is never pruned.
+     * @param {string} id - target/unit ID
+     */
+    pinTarget(id) {
+        this.pinnedTargets.add(id);
+        this._persistPinnedTargets();
+        this._notify('pinnedTargets', this.pinnedTargets);
+    },
+
+    /**
+     * Unpin a target, allowing it to be pruned normally.
+     * @param {string} id - target/unit ID
+     */
+    unpinTarget(id) {
+        this.pinnedTargets.delete(id);
+        this._persistPinnedTargets();
+        this._notify('pinnedTargets', this.pinnedTargets);
+    },
+
+    /**
+     * Check if a target is pinned.
+     * @param {string} id
+     * @returns {boolean}
+     */
+    isTargetPinned(id) {
+        return this.pinnedTargets.has(id);
+    },
+
+    /**
+     * Save pinned targets to localStorage for persistence across reloads.
+     */
+    _persistPinnedTargets() {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(
+                'tritium.pinnedTargets',
+                JSON.stringify([...this.pinnedTargets])
+            );
+        }
+    },
+
+    /**
      * Notify subscribers for a path and wildcard listeners.
      * @param {string} path
      * @param {*} value
@@ -302,5 +356,49 @@ export const TritiumStore = {
         this._listeners.get('*')?.forEach(fn => {
             try { fn(path, value); } catch (e) { console.error('[Store] wildcard error:', e); }
         });
+    },
+
+    // -- Operator cursor sharing ----------------------------------------
+
+    /** @type {Map<string, Object>} session_id -> cursor data */
+    _operatorCursors: new Map(),
+    /** Cursor stale timeout: 15 seconds */
+    _cursorStaleMs: 15000,
+
+    /**
+     * Update an operator's cursor position.
+     * @param {string} sessionId
+     * @param {Object} cursor - {session_id, username, display_name, role, color, lat, lng, timestamp}
+     */
+    setOperatorCursor(sessionId, cursor) {
+        cursor._receivedAt = Date.now();
+        this._operatorCursors.set(sessionId, cursor);
+        this._notify('operatorCursors', this._operatorCursors);
+    },
+
+    /**
+     * Remove an operator's cursor (e.g., on disconnect).
+     * @param {string} sessionId
+     */
+    removeOperatorCursor(sessionId) {
+        this._operatorCursors.delete(sessionId);
+        this._notify('operatorCursors', this._operatorCursors);
+    },
+
+    /**
+     * Get all active (non-stale) operator cursors.
+     * @returns {Array<Object>} cursor data entries
+     */
+    getOperatorCursors() {
+        const now = Date.now();
+        const result = [];
+        for (const [sid, cursor] of this._operatorCursors) {
+            if (now - (cursor._receivedAt || 0) < this._cursorStaleMs) {
+                result.push(cursor);
+            } else {
+                this._operatorCursors.delete(sid);
+            }
+        }
+        return result;
     },
 };

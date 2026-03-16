@@ -125,6 +125,10 @@ class TestSensorNodeDefaults:
     def test_reset_position_no_error(self):
         node = _TestNode("n1", "Test")
         node.reset_position()  # Should not raise
+        # Position should still be at defaults after reset
+        pos = node.get_position()
+        assert pos.pan == 0.0
+        assert pos.tilt == 0.0
 
     def test_record_audio_returns_none(self):
         node = _TestNode("n1", "Test")
@@ -133,8 +137,13 @@ class TestSensorNodeDefaults:
     def test_play_audio_no_error(self):
         node = _TestNode("n1", "Test")
         node.play_audio(b"\x00" * 100)  # Should not raise
+        # Node should still be functional after playing audio
+        assert node.node_id == "n1"
 
     def test_start_stop_no_error(self):
         node = _TestNode("n1", "Test")
         node.start()
         node.stop()
+        # Node should still report correct identity after lifecycle
+        assert node.node_id == "n1"
+        assert node.name == "Test"

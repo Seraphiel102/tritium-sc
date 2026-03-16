@@ -25,6 +25,7 @@ import { drawMinimapContent } from './panels/minimap.js';
 import { DeviceModalManager } from './device-modal.js';
 import { FrontendVisionSystem } from './vision-system.js';
 import { ContextMenu } from './context-menu.js';
+import { _esc } from './panel-utils.js';
 
 // ============================================================
 // Constants
@@ -110,9 +111,14 @@ const _state = {
     showUnits: true,           // DOM unit markers (colored dots)
     allianceFilter: null,      // null = show all, or ['hostile','friendly','neutral']
     showLabels: true,          // DOM unit name labels
-    showModels3d: true,        // Three.js 3D unit models
+    showModels3d: false,       // 3D models — off by default (causes visual clutter with circles)
     showFog: false,            // fog of war
-    showMesh: true,            // mesh radio overlay
+    showMesh: true,            // mesh radio overlay (master toggle)
+    showMeshNodes: true,       // mesh node icons
+    showMeshLinks: true,       // mesh link lines
+    showMeshCoverage: false,   // mesh LoRa coverage circles
+    showPredictionCones: false, // target prediction uncertainty cones
+    showCoverageOverlap: false, // sensor coverage overlap analysis
     showPatrolRoutes: true,    // patrol route lines for friendly units
 
     // Layer visibility — combat FX (debug toggles)
@@ -130,18 +136,19 @@ const _state = {
     showKillFeed: true,        // top-right combat log
     showScreenFx: true,        // screen shake + flash overlay
     showBanners: true,         // wave/game state announcements
-    showLayerHud: true,        // top-center status bar
+    showLayerHud: false,       // top-center status bar (hidden by default — overlaps tactical banner)
     showThoughts: true,        // NPC thought bubbles above markers
-    showWeaponRange: true,     // weapon range circle on selected unit
+    showWeaponRange: false,    // weapon range circle — off by default (visual clutter)
     showHeatmap: false,        // combat zone heatmap (off by default)
-    showSwarmHull: true,       // drone swarm convex hull polygon
-    showSquadHulls: true,      // squad formation convex hulls
-    showHazardZones: true,     // environmental hazard zones (fire/flood/roadblock)
-    showHostileObjectives: true, // hostile objective lines (dashed lines to targets)
+    showSwarmHull: false,      // swarm hull — off by default
+    showSquadHulls: false,     // squad hulls — off by default (visual clutter)
+    showHazardZones: false,    // hazard zones — off by default
+    showGeofenceZones: true,   // geofence monitoring zones — on by default (Loop 5)
+    showHostileObjectives: false, // hostile objectives — off by default
     showCrowdDensity: true,    // crowd density heatmap (civil_unrest mode only)
-    showCoverPoints: true,     // tactical cover positions
-    showUnitSignals: true,     // unit communication signals (distress/contact/etc)
-    showHostileIntel: true,    // hostile commander intel HUD
+    showCoverPoints: false,    // tactical cover positions (off by default — too noisy during battle)
+    showUnitSignals: false,    // unit signals — off by default
+    showHostileIntel: false,   // hostile intel — off by default (visual clutter)
 
     // Cinematic auto-follow camera
     autoFollow: false,         // auto-follow camera mode
@@ -174,6 +181,16 @@ const _state = {
     patrolMode: false,      // true when placing patrol waypoints
     patrolUnitId: null,     // unit ID for patrol mode
     patrolWaypoints: [],    // accumulated patrol waypoints
+    patrolDrawMode: false,       // true when drawing a patrol route (multi-waypoint)
+    patrolDrawUnitId: null,      // unit ID being assigned the drawn route
+    patrolDrawWaypoints: [],     // [{x, y}, ...] game coords accumulated during drawing
+    patrolDrawMarkers: [],       // MapLibre Marker instances for numbered waypoints
+    patrolDrawHudEl: null,       // DOM element for drawing status HUD
+    patrolDrawMouseLngLat: null, // current mouse position for rubber-band line
+    geofenceDrawMode: false,     // true when drawing a geofence polygon
+    geofenceDrawVertices: [],    // [[x,y], ...] game coords accumulated during drawing
+    geofenceDrawMarkers: [],     // MapLibre Marker instances for vertices
+    geofenceDrawMouseLngLat: null, // current mouse position for rubber-band line
     aimMode: false,         // true when setting aim direction
     aimUnitId: null,        // unit ID for aim mode
 
@@ -184,6 +201,18 @@ const _state = {
     effects: [],            // active effect objects
     effectsActive: false,   // repaint loop running
     effectAnimId: null,     // rAF handle
+
+    // Recently-fired tracker: unitId -> { time, targetId } (for combat ring + engagement lines)
+    recentlyFired: {},      // { unitId: { time, targetId } }
+    battleStartTime: 0,     // performance.now() when battle starts
+
+    // Wave direction/countdown
+    _waveDirection: null,          // current wave spawn_direction string
+    _nextWaveDirection: null,      // next wave spawn_direction (from wave_complete)
+    _nextWaveCountdown: 0,         // seconds until next wave
+    _nextWaveCountdownStart: 0,    // performance.now() when countdown started
+    _nextWaveName: null,           // name of next wave
+    _nextHostileCount: 0,          // hostile count for next wave
 
     // Vision system (fog of war + cones)
     visionSystem: null,
@@ -198,6 +227,7 @@ const _state = {
     _lastPatrolHash: null,
     _lastDispatchHash: null,
     _lastWeaponRangeHash: null,
+    _lastEngagementHash: null,
     _lastSwarmHullHash: null,
     _lastSquadHullHash: null,
     _lastHazardHash: null,
@@ -340,11 +370,32 @@ function _createMap(mapDiv) {
         'top-right'
     );
 
+    // Add scale bar control — shows map scale at current zoom
+    _state.map.addControl(
+        new maplibregl.ScaleControl({
+            maxWidth: 150,
+            unit: 'metric',
+        }),
+        'bottom-left'
+    );
+
+    // Add custom compass rose overlay (more visible than NavigationControl compass)
+    _addCompassRose();
+
     // Start standalone FPS loop — uses rAF so it runs every browser frame
     // regardless of MapLibre repaint state (idle map = no 'render' events).
     _startFpsLoop();
 
-    _state.map.on('load', () => {
+    _state.map.on('error', (e) => {
+        console.error('[MAP-ML] Map error:', e.error?.message || e.message || e);
+    });
+
+    console.log('[MAP-ML] Map created, waiting for load event...');
+
+    // If the map is already loaded (cached tiles), the 'load' event won't fire again.
+    // Check immediately and also register the callback.
+    const _onMapLoaded = () => {
+        if (_state.initialized) return; // prevent double-init
         console.log('[MAP-ML] Map loaded');
         _state.initialized = true;
 
@@ -359,6 +410,12 @@ function _createMap(mapDiv) {
 
         // Add layer HUD
         _createLayerHud();
+
+        // Add compact map legend
+        _createMapLegend();
+
+        // Add patrol route drawing button
+        _createPatrolDrawButton();
 
         // Combat effects system
         _initEffects();
@@ -376,6 +433,21 @@ function _createMap(mapDiv) {
         EventBus.on('map:waypoint', _onDropWaypoint);
         EventBus.on('unit:patrol-mode', _onPatrolModeEnter);
         EventBus.on('unit:aim-mode', _onAimModeEnter);
+        EventBus.on('patrol:drawRoute', _onPatrolDrawRouteStart);
+        EventBus.on('geofence:drawZone', _onGeofenceDrawStart);
+        // Re-fetch geofence zones when enter/exit events fire or zones change
+        // Also flash the zone border in magenta briefly on enter
+        EventBus.on('geofence:enter', (data) => {
+            _state._lastGeofenceFetch = 0;
+            _updateGeofenceZones();
+            _flashGeofenceAlert(data);
+        });
+        EventBus.on('geofence:exit', () => { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); });
+        EventBus.on('zone:selected', (data) => {
+            if (data && data.polygon) { _state._lastGeofenceFetch = 0; _updateGeofenceZones(); }
+        });
+        EventBus.on('map:drawFinish', _onDrawFinishML);
+        EventBus.on('map:drawCancel', _onDrawCancelML);
         EventBus.on('tak:center-on-client', (data) => {
             if (data && (data.lat !== undefined || data.x !== undefined)) {
                 _onCenterOnUnit(data);
@@ -394,14 +466,51 @@ function _createMap(mapDiv) {
             }
         });
 
+        // Camera markers from camera-feeds plugin
+        EventBus.on('cameras:changed', _onCamerasChanged);
+
+        // Camera click-to-place: when camera panel requests location picking,
+        // the next map click sends the coordinates back (Loop 8 drag-to-place)
+        EventBus.on('camera:pick-location', _onCameraPickLocation);
+
+        // Target trail and correlation overlay events
+        EventBus.on('target:showTrail', _onShowTargetTrail);
+        EventBus.on('target:hideTrail', _onHideTargetTrail);
+        EventBus.on('target:showCorrelationLines', _onShowCorrelationLines);
+
+        // Fetch cameras immediately on map load so markers appear without
+        // needing to open the camera-feeds panel first.
+        _fetchCamerasForMap();
+
+        // Re-fetch cameras periodically (demo mode may register new cameras)
+        // Also triggered when demo mode starts via the demo:started event
+        setInterval(_fetchCamerasForMap, 15000);
+
         // Apply the initial mode (default: observe) so visual state matches
         setMapMode(_state.currentMode || 'observe');
 
         // Start unit update loop
         _startUnitLoop();
-    });
+    };
+
+    _state.map.on('load', _onMapLoaded);
+
+    // Fallback: if map is already loaded (cached), fire immediately
+    if (_state.map.loaded()) {
+        console.log('[MAP-ML] Map already loaded (cached), initializing immediately');
+        _onMapLoaded();
+    }
+
+    // Safety net: if load event never fires within 5s, force-init
+    setTimeout(() => {
+        if (!_state.initialized) {
+            console.warn('[MAP-ML] Load event did not fire in 5s — force-initializing');
+            _onMapLoaded();
+        }
+    }, 5000);
 
     _state.map.on('click', _onMapClick);
+    _state.map.on('dblclick', _onMapDblClick);
     _state.map.on('contextmenu', _onMapRightClick);
     _state.map.on('mousemove', _onMapMouseMove);
     _state.map.on('moveend', _updateLayerHud);
@@ -409,6 +518,120 @@ function _createMap(mapDiv) {
     _state.map.on('zoomend', _updateLayerHud);
     _state.map.on('zoomend', _reportViewport);
     _state.map.on('pitchend', _updateLayerHud);
+}
+
+// ============================================================
+// Compass Rose — always-visible compass showing north direction
+// ============================================================
+
+function _addCompassRose() {
+    const rose = document.createElement('div');
+    rose.id = 'tritium-compass-rose';
+    rose.style.cssText = `
+        position: absolute;
+        bottom: 50px;
+        left: 12px;
+        width: 72px;
+        height: 72px;
+        pointer-events: none;
+        z-index: 10;
+        opacity: 0.85;
+    `;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 144;
+    canvas.height = 144;
+    canvas.style.cssText = 'width:72px;height:72px;';
+    rose.appendChild(canvas);
+
+    const mapContainer = _state.map.getContainer();
+    mapContainer.appendChild(rose);
+    _state._compassCanvas = canvas;
+
+    function drawCompass() {
+        if (!_state.map) return;
+        const bearing = _state.map.getBearing();
+        const ctx = canvas.getContext('2d');
+        const cx = 72, cy = 72, r = 60;
+
+        ctx.clearRect(0, 0, 144, 144);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(-bearing * Math.PI / 180);
+
+        // Outer ring
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Cardinal ticks and labels
+        const cardinals = [
+            { angle: 0, label: 'N', color: '#ff2a6d' },
+            { angle: 90, label: 'E', color: '#00f0ff' },
+            { angle: 180, label: 'S', color: '#00f0ff' },
+            { angle: 270, label: 'W', color: '#00f0ff' },
+        ];
+        for (const c of cardinals) {
+            const a = (c.angle - 90) * Math.PI / 180;
+            // Tick
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a) * (r - 10), Math.sin(a) * (r - 10));
+            ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+            ctx.strokeStyle = c.color;
+            ctx.lineWidth = c.label === 'N' ? 3 : 1.5;
+            ctx.stroke();
+            // Label
+            ctx.fillStyle = c.color;
+            ctx.font = c.label === 'N' ? 'bold 16px monospace' : '11px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(c.label, Math.cos(a) * (r - 22), Math.sin(a) * (r - 22));
+        }
+
+        // Intercardinal ticks
+        for (let deg = 45; deg < 360; deg += 90) {
+            const a = (deg - 90) * Math.PI / 180;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a) * (r - 5), Math.sin(a) * (r - 5));
+            ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+            ctx.strokeStyle = 'rgba(0, 240, 255, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        // North arrow (triangle pointing up)
+        ctx.beginPath();
+        ctx.moveTo(0, -36);
+        ctx.lineTo(-6, -20);
+        ctx.lineTo(6, -20);
+        ctx.closePath();
+        ctx.fillStyle = '#ff2a6d';
+        ctx.fill();
+
+        // South arrow (dimmer)
+        ctx.beginPath();
+        ctx.moveTo(0, 36);
+        ctx.lineTo(-5, 20);
+        ctx.lineTo(5, 20);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.fill();
+
+        // Center dot
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#00f0ff';
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    // Redraw on bearing change
+    _state.map.on('rotate', drawCompass);
+    _state.map.on('load', drawCompass);
+    drawCompass();
 }
 
 // ============================================================
@@ -584,6 +807,10 @@ function _buildStyle() {
 function _addThreeJsLayer() {
     if (typeof THREE === 'undefined') {
         console.warn('[MAP-ML] Three.js not loaded, skipping tactical overlay');
+        return;
+    }
+    if (!_state.showModels3d) {
+        console.log('[MAP-ML] 3D models disabled, skipping Three.js layer');
         return;
     }
 
@@ -976,6 +1203,9 @@ const COVER_POINTS_ICON   = 'cover-points-icon';
 const UNIT_SIGNALS_SOURCE = 'unit-signals-source';
 const UNIT_SIGNALS_CIRCLE = 'unit-signals-circle';
 
+const ENGAGEMENT_LINES_SOURCE = 'engagement-lines-source';
+const ENGAGEMENT_LINES_LAYER  = 'engagement-lines-layer';
+
 // Hazard type colors
 const HAZARD_COLORS = {
     fire:      '#ff4400',
@@ -1167,6 +1397,18 @@ function _clearSetupGhost() {
  * Handle mousemove on the map — update ghost preview in setup mode.
  */
 function _onMapMouseMove(e) {
+    // Geofence draw mode: update rubber-band line to mouse cursor
+    if (_state.geofenceDrawMode && _state.geofenceDrawVertices.length > 0) {
+        _state.geofenceDrawMouseLngLat = [e.lngLat.lng, e.lngLat.lat];
+        _updateGeofenceDrawPreview();
+    }
+
+    // Patrol draw mode: update rubber-band line to mouse cursor
+    if (_state.patrolDrawMode && _state.patrolDrawWaypoints.length > 0) {
+        _state.patrolDrawMouseLngLat = [e.lngLat.lng, e.lngLat.lat];
+        _updatePatrolDrawPreview();
+    }
+
     if (_state.currentMode !== 'setup') return;
     const lngLat = [e.lngLat.lng, e.lngLat.lat];
     _updateSetupGhost(lngLat);
@@ -1326,15 +1568,21 @@ function _updatePatrolRoutes() {
 
 // ============================================================
 // Dispatch arrow layer (dashed cyan lines, fade after 3s)
+// Also: persistent dispatch lines for robots actively en route.
 // ============================================================
+
+// Animated dash offset counter for robot dispatch lines
+let _dispatchDashPhase = 0;
 
 function _buildDispatchArrowsGeoJSON() {
     const now = Date.now();
     const cutoff = now - DISPATCH_ARROW_LIFETIME;
-    // Prune expired arrows
+    // Prune expired temporary arrows
     _state.dispatchArrows = _state.dispatchArrows.filter(a => a.time > cutoff);
 
     const features = [];
+
+    // 1) Temporary flash arrows (3s fade)
     for (const arrow of _state.dispatchArrows) {
         const fromLL = _gameToLngLat(arrow.fromX, arrow.fromY);
         const toLL = _gameToLngLat(arrow.toX, arrow.toY);
@@ -1346,24 +1594,56 @@ function _buildDispatchArrowsGeoJSON() {
                 type: 'LineString',
                 coordinates: [fromLL, toLL],
             },
-            properties: { opacity },
+            properties: { opacity, lineType: 'flash' },
         });
     }
+
+    // 2) Persistent dispatch lines for robots actively moving to a target
+    const units = TritiumStore.units;
+    units.forEach((unit, id) => {
+        if (unit.alliance !== 'friendly') return;
+        const uType = (unit.type || '').toLowerCase();
+        const isRobot = uType.includes('rover') || uType.includes('drone') || uType.includes('scout') || uType.includes('robot');
+        if (!isRobot) return;
+        // Check if the unit has a dispatch target and is actively moving
+        const dt = unit.dispatch_target || unit.dispatchTarget;
+        if (!dt) return;
+        const fsmState = (unit.fsmState || unit.fsm_state || '').toLowerCase();
+        const isMoving = fsmState === 'moving' || fsmState === 'dispatched' || fsmState === 'pursuing' || fsmState === 'navigating';
+        if (!isMoving && !dt) return;
+        const pos = unit.position;
+        if (!pos) return;
+        const fromLL = _gameToLngLat(pos.x || 0, pos.y || 0);
+        const toLL = _gameToLngLat(dt.x || 0, dt.y || 0);
+        features.push({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [fromLL, toLL],
+            },
+            properties: { opacity: 0.8, lineType: 'active-dispatch' },
+        });
+    });
+
     return { type: 'FeatureCollection', features };
 }
 
 function _updateDispatchArrows() {
     if (!_state.map || !_state.initialized) return;
 
+    // Advance animated dash phase for marching-ant effect
+    _dispatchDashPhase = (_dispatchDashPhase + 0.3) % 100;
+
     const geojson = _buildDispatchArrowsGeoJSON();
 
     if (_state.map.getSource(DISPATCH_ARROWS_SOURCE)) {
-        // Skip setData() if features unchanged (dispatch arrows fade, so
-        // check count + coordinate hash; opacity changes need updates)
-        const hash = _hashGeoJSONFeatures(geojson);
-        if (hash === _state._lastDispatchHash) return;
-        _state._lastDispatchHash = hash;
+        // Dispatch arrows change every tick (fade + robot position), always update
         _state.map.getSource(DISPATCH_ARROWS_SOURCE).setData(geojson);
+        // Animate dash offset for marching-ant effect
+        if (_state.map.getLayer(DISPATCH_ARROWS_LINE)) {
+            _state.map.setPaintProperty(DISPATCH_ARROWS_LINE, 'line-dasharray',
+                [4, 4]);
+        }
     } else {
         _state.map.addSource(DISPATCH_ARROWS_SOURCE, {
             type: 'geojson',
@@ -1421,8 +1701,8 @@ function _updateWeaponRange() {
     const selectedId = _state.selectedUnitId;
     const mode = _state.currentMode;
 
-    // Only show in tactical or setup mode
-    if (!_state.showWeaponRange || !selectedId || mode === 'observe') {
+    // Show in all modes when a unit is selected and weapon range is enabled
+    if (!_state.showWeaponRange || !selectedId) {
         _clearWeaponRange();
         return;
     }
@@ -1995,6 +2275,384 @@ function _clearHazardZones() {
 }
 
 // ============================================================
+// Geofence Zone Overlay (polygon zones + occupancy labels)
+// ============================================================
+
+const GEOFENCE_ZONES_SOURCE = 'geofence-zones-source';
+const GEOFENCE_ZONES_FILL   = 'geofence-zones-fill';
+const GEOFENCE_ZONES_STROKE = 'geofence-zones-stroke';
+const GEOFENCE_ZONES_LABEL  = 'geofence-zones-label';
+const GEOFENCE_LABEL_SOURCE = 'geofence-label-source';
+const GEOFENCE_ALERT_SOURCE = 'geofence-alert-source';
+const GEOFENCE_ALERT_BADGE  = 'geofence-alert-badge';
+
+const GEOFENCE_ZONE_COLORS = {
+    restricted: { fill: 'rgba(255,42,109,0.35)', stroke: '#ff2a6d' },
+    monitored:  { fill: 'rgba(0,240,255,0.28)',  stroke: '#00f0ff' },
+    safe:       { fill: 'rgba(5,255,161,0.25)',   stroke: '#05ffa1' },
+};
+
+// Geofence zone pulse animation state
+let _geofencePulseRAF = null;
+let _geofenceHasActiveZones = false;
+let _geofenceHasMonitoringZones = false;
+
+/**
+ * Animate pulse effect on geofence zones.
+ * - Monitoring zones (alert_on_enter/exit but no occupants): slow subtle cyan pulse on border
+ * - Active zones (occupants inside): faster, stronger pulse on fill + border
+ * Both states use sine wave oscillation for smooth animation.
+ */
+function _geofencePulseLoop() {
+    if (!_state.map || !_state.initialized || (!_geofenceHasActiveZones && !_geofenceHasMonitoringZones)) {
+        _geofencePulseRAF = null;
+        return;
+    }
+    const t = Date.now() / 1000;
+
+    // Active zones (occupants inside): fast strong pulse ~0.4Hz
+    const sinActive = Math.sin(t * 2.5);
+    const activeFillOpacity = 0.5 + 0.25 * sinActive;
+    const activeLineWidth   = 3.5 + 1.5 * sinActive;
+    const activeStrokeOp    = 0.7 + 0.3 * sinActive;
+
+    // Monitoring zones (armed, no occupants): slow subtle pulse ~0.2Hz
+    const sinMonitor = Math.sin(t * 1.2);
+    const monitorLineWidth  = 2.5 + 0.8 * sinMonitor;   // 1.7 .. 3.3
+    const monitorStrokeOp   = 0.5 + 0.2 * sinMonitor;   // 0.3 .. 0.7
+    const monitorFillOp     = 0.15 + 0.05 * sinMonitor;  // 0.10 .. 0.20
+
+    try {
+        if (_state.map.getLayer(GEOFENCE_ZONES_FILL)) {
+            _state.map.setPaintProperty(GEOFENCE_ZONES_FILL, 'fill-opacity', [
+                'case',
+                ['get', 'is_active'], activeFillOpacity,
+                ['get', 'is_monitoring'], monitorFillOp,
+                0.15
+            ]);
+        }
+        if (_state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
+            _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', [
+                'case',
+                ['get', 'is_active'], activeLineWidth,
+                ['get', 'is_monitoring'], monitorLineWidth,
+                2
+            ]);
+            _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-opacity', [
+                'case',
+                ['get', 'is_active'], activeStrokeOp,
+                ['get', 'is_monitoring'], monitorStrokeOp,
+                0.6
+            ]);
+        }
+        // Pulse the alert badge opacity
+        if (_state.map.getLayer(GEOFENCE_ALERT_BADGE)) {
+            const badgeOpacity = 0.7 + 0.3 * sinActive;
+            _state.map.setPaintProperty(GEOFENCE_ALERT_BADGE, 'text-opacity', badgeOpacity);
+        }
+    } catch (_e) { /* layer may have been removed */ }
+
+    _geofencePulseRAF = requestAnimationFrame(_geofencePulseLoop);
+}
+
+function _startGeofencePulse() {
+    if (!_geofencePulseRAF) {
+        _geofencePulseRAF = requestAnimationFrame(_geofencePulseLoop);
+    }
+}
+
+function _stopGeofencePulse() {
+    if (_geofencePulseRAF) {
+        cancelAnimationFrame(_geofencePulseRAF);
+        _geofencePulseRAF = null;
+    }
+}
+
+/**
+ * Fetch geofence zones + occupancy and render on the MapLibre map.
+ * Called on slow tick (~1Hz).
+ */
+function _updateGeofenceZones() {
+    if (!_state.map || !_state.initialized) return;
+    if (!_state.showGeofenceZones) {
+        _clearGeofenceZones();
+        return;
+    }
+
+    // Use cached data, refresh periodically
+    if (!_state._geofenceZones) _state._geofenceZones = [];
+    if (!_state._geofenceOccupancy) _state._geofenceOccupancy = {};
+
+    const now = Date.now();
+    if (!_state._lastGeofenceFetch || now - _state._lastGeofenceFetch > 10000) {
+        _state._lastGeofenceFetch = now;
+        fetch('/api/geofence/zones')
+            .then(r => r.ok ? r.json() : [])
+            .then(data => {
+                if (Array.isArray(data)) _state._geofenceZones = data;
+                _renderGeofenceZones();
+            })
+            .catch(() => {});
+        fetch('/api/geofence/occupancy')
+            .then(r => r.ok ? r.json() : {})
+            .then(data => {
+                if (data && typeof data === 'object') _state._geofenceOccupancy = data;
+                _renderGeofenceZones();
+            })
+            .catch(() => {});
+    }
+}
+
+function _renderGeofenceZones() {
+    if (!_state.map || !_state.initialized) return;
+    const zones = _state._geofenceZones || [];
+    const occupancy = _state._geofenceOccupancy || {};
+
+    if (zones.length === 0) {
+        _clearGeofenceZones();
+        return;
+    }
+
+    console.log(`[MAP-ML] Rendering ${zones.length} geofence zone(s)`);
+
+    const features = [];
+    const labelFeatures = [];
+    const alertFeatures = [];
+    let hasAnyActive = false;
+
+    for (const zone of zones) {
+        const pts = zone.polygon;
+        if (!pts || pts.length < 3) continue;
+
+        const colors = GEOFENCE_ZONE_COLORS[zone.zone_type] || GEOFENCE_ZONE_COLORS.monitored;
+
+        // Convert game coords to [lng, lat] ring
+        const ring = pts.map(p => {
+            const ll = _gameToLngLat(p[0], p[1]);
+            return [ll[0], ll[1]];
+        });
+        // Close the ring
+        if (ring.length > 0) ring.push(ring[0]);
+
+        const occ = occupancy[zone.zone_id] || 0;
+        const isActive = occ > 0;
+        const isMonitoring = !!(zone.alert_on_enter || zone.alert_on_exit);
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [ring] },
+            properties: {
+                zone_id: zone.zone_id,
+                fill_color: colors.fill,
+                stroke_color: colors.stroke,
+                is_active: isActive,
+                is_monitoring: isMonitoring && !isActive,
+            },
+        });
+
+        // Centroid for label
+        const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+        const ll = _gameToLngLat(cx, cy);
+        const label = isActive
+            ? `${zone.name.toUpperCase()}\n${occ} INSIDE`
+            : isMonitoring
+            ? `${zone.name.toUpperCase()}\nMONITORING`
+            : zone.name.toUpperCase();
+
+        labelFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [ll[0], ll[1]] },
+            properties: {
+                label: label,
+                color: colors.stroke,
+                zone_type: zone.zone_type.toUpperCase(),
+            },
+        });
+
+        // Alert/monitoring badge at zone centroid
+        if (isActive) {
+            hasAnyActive = true;
+            alertFeatures.push({
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: [ll[0], ll[1]] },
+                properties: {
+                    badge_text: '\u26A0 ALERT',
+                    badge_color: zone.zone_type === 'restricted' ? '#ff2a6d' : '#fcee0a',
+                },
+            });
+        } else if (isMonitoring) {
+            alertFeatures.push({
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: [ll[0], ll[1]] },
+                properties: {
+                    badge_text: '\u25C9 ACTIVE',
+                    badge_color: '#05ffa1',
+                },
+            });
+        }
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const labelGeojson = { type: 'FeatureCollection', features: labelFeatures };
+
+    if (_state.map.getSource(GEOFENCE_ZONES_SOURCE)) {
+        _state.map.getSource(GEOFENCE_ZONES_SOURCE).setData(geojson);
+    } else {
+        _state.map.addSource(GEOFENCE_ZONES_SOURCE, { type: 'geojson', data: geojson });
+        _state.map.addLayer({
+            id: GEOFENCE_ZONES_FILL,
+            type: 'fill',
+            source: GEOFENCE_ZONES_SOURCE,
+            paint: {
+                'fill-color': ['get', 'fill_color'],
+                'fill-opacity': 0.6,
+            },
+        });
+        _state.map.addLayer({
+            id: GEOFENCE_ZONES_STROKE,
+            type: 'line',
+            source: GEOFENCE_ZONES_SOURCE,
+            paint: {
+                'line-color': ['get', 'stroke_color'],
+                'line-width': 3,
+                'line-dasharray': [6, 4],
+            },
+        });
+    }
+
+    try {
+        if (_state.map.getSource(GEOFENCE_LABEL_SOURCE)) {
+            _state.map.getSource(GEOFENCE_LABEL_SOURCE).setData(labelGeojson);
+        } else {
+            _state.map.addSource(GEOFENCE_LABEL_SOURCE, { type: 'geojson', data: labelGeojson });
+            _state.map.addLayer({
+                id: GEOFENCE_ZONES_LABEL,
+                type: 'symbol',
+                source: GEOFENCE_LABEL_SOURCE,
+                layout: {
+                    'text-field': ['get', 'label'],
+                    'text-font': ['Open Sans Semibold'],
+                    'text-size': 11,
+                    'text-anchor': 'center',
+                    'text-allow-overlap': true,
+                },
+                paint: {
+                    'text-color': ['get', 'color'],
+                    'text-halo-color': 'rgba(10,10,20,0.8)',
+                    'text-halo-width': 1.5,
+                },
+            });
+        }
+    } catch (_labelErr) {
+        // Symbol layer can fail if fonts unavailable — fill/stroke still render
+        console.warn('[MAP-ML] Geofence label layer failed:', _labelErr.message);
+    }
+
+    // Alert badge layer — warning icon at centroid of active zones
+    const alertGeojson = { type: 'FeatureCollection', features: alertFeatures };
+    try {
+        if (_state.map.getSource(GEOFENCE_ALERT_SOURCE)) {
+            _state.map.getSource(GEOFENCE_ALERT_SOURCE).setData(alertGeojson);
+        } else {
+            _state.map.addSource(GEOFENCE_ALERT_SOURCE, { type: 'geojson', data: alertGeojson });
+            _state.map.addLayer({
+                id: GEOFENCE_ALERT_BADGE,
+                type: 'symbol',
+                source: GEOFENCE_ALERT_SOURCE,
+                layout: {
+                    'text-field': ['get', 'badge_text'],
+                    'text-font': ['Open Sans Semibold'],
+                    'text-size': 13,
+                    'text-anchor': 'top',
+                    'text-offset': [0, 1.2],
+                    'text-allow-overlap': true,
+                },
+                paint: {
+                    'text-color': ['get', 'badge_color'],
+                    'text-halo-color': 'rgba(10,10,20,0.9)',
+                    'text-halo-width': 2,
+                },
+            });
+        }
+    } catch (_alertErr) {
+        console.warn('[MAP-ML] Geofence alert badge layer failed:', _alertErr.message);
+    }
+
+    // Check if any zone is monitoring (armed with alert_on_enter/exit)
+    const hasAnyMonitoring = zones.some(z => (z.alert_on_enter || z.alert_on_exit) && !(occupancy[z.zone_id] > 0));
+
+    // Manage pulse animation based on active/monitoring zone state
+    _geofenceHasActiveZones = hasAnyActive;
+    _geofenceHasMonitoringZones = hasAnyMonitoring;
+    if (hasAnyActive || hasAnyMonitoring) {
+        _startGeofencePulse();
+    } else {
+        _stopGeofencePulse();
+        // Reset paint properties to defaults when no zones need animation
+        try {
+            if (_state.map.getLayer(GEOFENCE_ZONES_FILL)) {
+                _state.map.setPaintProperty(GEOFENCE_ZONES_FILL, 'fill-opacity', 0.15);
+            }
+            if (_state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
+                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 2);
+                _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-opacity', 0.6);
+            }
+        } catch (_e) { /* ok */ }
+    }
+}
+
+/**
+ * Briefly flash geofence zone borders in magenta when a target enters.
+ * Temporarily overrides stroke color to magenta, then restores after 800ms.
+ */
+function _flashGeofenceAlert(_data) {
+    if (!_state.map || !_state.initialized) return;
+    try {
+        if (!_state.map.getLayer(GEOFENCE_ZONES_STROKE)) return;
+        // Flash all zone strokes to magenta
+        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-color', '#ff2a6d');
+        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 5);
+        // Restore after 800ms
+        setTimeout(() => {
+            try {
+                if (_state.map && _state.map.getLayer(GEOFENCE_ZONES_STROKE)) {
+                    _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-color', ['get', 'stroke_color']);
+                    // Width will be restored by the pulse loop or default
+                    if (!_geofenceHasActiveZones && !_geofenceHasMonitoringZones) {
+                        _state.map.setPaintProperty(GEOFENCE_ZONES_STROKE, 'line-width', 2);
+                    }
+                }
+            } catch (_e) { /* ok */ }
+        }, 800);
+    } catch (_e) { /* ok */ }
+}
+
+function _clearGeofenceZones() {
+    _stopGeofencePulse();
+    _geofenceHasActiveZones = false;
+    _geofenceHasMonitoringZones = false;
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(GEOFENCE_ALERT_BADGE))
+                _state.map.removeLayer(GEOFENCE_ALERT_BADGE);
+            if (_state.map.getLayer(GEOFENCE_ZONES_LABEL))
+                _state.map.removeLayer(GEOFENCE_ZONES_LABEL);
+            if (_state.map.getLayer(GEOFENCE_ZONES_FILL))
+                _state.map.removeLayer(GEOFENCE_ZONES_FILL);
+            if (_state.map.getLayer(GEOFENCE_ZONES_STROKE))
+                _state.map.removeLayer(GEOFENCE_ZONES_STROKE);
+            if (_state.map.getSource(GEOFENCE_ALERT_SOURCE))
+                _state.map.removeSource(GEOFENCE_ALERT_SOURCE);
+            if (_state.map.getSource(GEOFENCE_ZONES_SOURCE))
+                _state.map.removeSource(GEOFENCE_ZONES_SOURCE);
+            if (_state.map.getSource(GEOFENCE_LABEL_SOURCE))
+                _state.map.removeSource(GEOFENCE_LABEL_SOURCE);
+        }
+    } catch (_e) { /* layers may not exist */ }
+}
+
+// ============================================================
 // Hostile Objective Lines Overlay
 // ============================================================
 
@@ -2463,6 +3121,417 @@ function _clearUnitSignals() {
     _state._lastSignalsHash = null;
 }
 
+/**
+ * Draw dashed engagement lines between units actively firing and their targets.
+ * Uses the recentlyFired tracker populated by _onCombatProjectile().
+ * Lines persist for 3s after last shot — much more visible in screenshots than
+ * fast Three.js tracers (350-700ms).
+ */
+function _updateEngagementLines() {
+    if (!_state.map || !_state.initialized) return;
+
+    const now = performance.now();
+    const features = [];
+
+    for (const [srcId, entry] of Object.entries(_state.recentlyFired)) {
+        if (now - entry.time > 3000) continue; // expired
+        if (!entry.targetId) continue;
+
+        const src = TritiumStore.units.get(srcId);
+        const tgt = TritiumStore.units.get(entry.targetId);
+        if (!src?.position || !tgt?.position) continue;
+
+        const srcLL = _gameToLngLat(src.position.x || 0, src.position.y || 0);
+        const tgtLL = _gameToLngLat(tgt.position.x || 0, tgt.position.y || 0);
+
+        const alliance = src.alliance || 'unknown';
+        const color = alliance === 'friendly' ? '#05ffa1' : alliance === 'hostile' ? '#ff2a6d' : '#ffa500';
+        const age = now - entry.time;
+        const opacity = Math.max(0.15, 0.6 * (1 - age / 3000));
+
+        features.push({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [srcLL, tgtLL],
+            },
+            properties: { color, opacity: parseFloat(opacity.toFixed(2)) },
+        });
+    }
+
+    const geojson = { type: 'FeatureCollection', features };
+    const hash = features.map(f =>
+        f.geometry.coordinates[0][0].toFixed(5) + ',' + f.properties.opacity
+    ).join(';');
+
+    if (_state.map.getSource(ENGAGEMENT_LINES_SOURCE)) {
+        if (hash !== _state._lastEngagementHash) {
+            _state._lastEngagementHash = hash;
+            _state.map.getSource(ENGAGEMENT_LINES_SOURCE).setData(geojson);
+        }
+    } else {
+        _state._lastEngagementHash = hash;
+        _state.map.addSource(ENGAGEMENT_LINES_SOURCE, {
+            type: 'geojson',
+            data: geojson,
+        });
+        _state.map.addLayer({
+            id: ENGAGEMENT_LINES_LAYER,
+            type: 'line',
+            source: ENGAGEMENT_LINES_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 2,
+                'line-opacity': ['get', 'opacity'],
+                'line-dasharray': [6, 4],
+            },
+        });
+    }
+}
+
+// ============================================================
+// Target Movement Trail Overlay (GeoJSON polyline from dossier)
+// ============================================================
+
+const TARGET_TRAIL_SOURCE = 'target-trail-source';
+const TARGET_TRAIL_LINE   = 'target-trail-line';
+const TARGET_TRAIL_DOTS   = 'target-trail-dots';
+
+// State for currently displayed trail
+const _trailState = {
+    targetId: null,
+    points: [],
+    alliance: 'unknown',
+};
+
+const ALLIANCE_TRAIL_COLORS = {
+    friendly: '#05ffa1',
+    hostile: '#ff2a6d',
+    unknown: '#00f0ff',
+};
+
+/**
+ * Show a target's movement trail on the map.
+ * Fetches trail from /api/targets/{id}/trail and draws a GeoJSON polyline.
+ * Emitted by dossier panel "SHOW TRAIL ON MAP" button.
+ * @param {Object} data - { targetId, alliance?, positions? }
+ */
+async function _onShowTargetTrail(data) {
+    if (!_state.map || !_state.initialized || !data || !data.targetId) return;
+
+    _trailState.targetId = data.targetId;
+    _trailState.alliance = data.alliance || 'unknown';
+
+    // Use provided positions (from dossier) or fetch from API
+    let trail = data.positions || [];
+    if (trail.length === 0) {
+        try {
+            const resp = await fetch(`/api/targets/${encodeURIComponent(data.targetId)}/trail?max_points=500`);
+            if (resp.ok) {
+                const result = await resp.json();
+                trail = result.trail || [];
+            }
+        } catch (_) { /* trail API unavailable */ }
+    }
+
+    if (trail.length === 0) {
+        console.log('[MAP-ML] No trail data for', data.targetId);
+        return;
+    }
+
+    _trailState.points = trail;
+    const lineColor = ALLIANCE_TRAIL_COLORS[_trailState.alliance] || '#00f0ff';
+
+    // Sort by timestamp
+    const sorted = [...trail].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    // Build GeoJSON LineString with per-segment opacity (newer = more opaque)
+    const lineCoords = [];
+    const dotFeatures = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+        const pt = sorted[i];
+        const gx = pt.x ?? pt.lng ?? 0;
+        const gy = pt.y ?? pt.lat ?? 0;
+        let lngLat;
+
+        // If lat/lng provided directly, use them; otherwise convert from game coords
+        if (pt.lat != null && pt.lng != null) {
+            lngLat = [pt.lng, pt.lat];
+        } else {
+            lngLat = _gameToLngLat(gx, gy);
+        }
+
+        lineCoords.push(lngLat);
+
+        // Dot opacity fades with age (index 0 = oldest, last = newest)
+        const alpha = 0.2 + 0.8 * (i / Math.max(1, sorted.length - 1));
+        const isLast = i === sorted.length - 1;
+
+        dotFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: lngLat },
+            properties: {
+                opacity: alpha,
+                radius: isLast ? 6 : 3,
+                color: lineColor,
+                isLatest: isLast ? 1 : 0,
+            },
+        });
+    }
+
+    // Line feature with gradient-like segments
+    const lineFeature = {
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: lineCoords },
+        properties: { color: lineColor },
+    };
+
+    const lineGeojson = { type: 'FeatureCollection', features: [lineFeature] };
+    const dotGeojson = { type: 'FeatureCollection', features: dotFeatures };
+
+    // Update or create the trail line layer
+    if (_state.map.getSource(TARGET_TRAIL_SOURCE)) {
+        _state.map.getSource(TARGET_TRAIL_SOURCE).setData(lineGeojson);
+    } else {
+        _state.map.addSource(TARGET_TRAIL_SOURCE, { type: 'geojson', data: lineGeojson });
+        _state.map.addLayer({
+            id: TARGET_TRAIL_LINE,
+            type: 'line',
+            source: TARGET_TRAIL_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 2.5,
+                'line-opacity': 0.7,
+            },
+            layout: {
+                'line-cap': 'round',
+                'line-join': 'round',
+            },
+        });
+    }
+
+    // Update or create the trail dots layer
+    const dotSourceId = TARGET_TRAIL_SOURCE + '-dots';
+    if (_state.map.getSource(dotSourceId)) {
+        _state.map.getSource(dotSourceId).setData(dotGeojson);
+    } else {
+        _state.map.addSource(dotSourceId, { type: 'geojson', data: dotGeojson });
+        _state.map.addLayer({
+            id: TARGET_TRAIL_DOTS,
+            type: 'circle',
+            source: dotSourceId,
+            paint: {
+                'circle-color': ['get', 'color'],
+                'circle-radius': ['get', 'radius'],
+                'circle-opacity': ['get', 'opacity'],
+                'circle-stroke-width': ['case', ['==', ['get', 'isLatest'], 1], 2, 0],
+                'circle-stroke-color': '#ffffff',
+            },
+        });
+    }
+
+    // Fly to the trail bounds
+    if (lineCoords.length > 1) {
+        const bounds = lineCoords.reduce(
+            (b, c) => [
+                [Math.min(b[0][0], c[0]), Math.min(b[0][1], c[1])],
+                [Math.max(b[1][0], c[0]), Math.max(b[1][1], c[1])],
+            ],
+            [[Infinity, Infinity], [-Infinity, -Infinity]]
+        );
+        _state.map.fitBounds(bounds, { padding: 60, maxZoom: 18, duration: 1000 });
+    }
+
+    EventBus.emit('toast:show', {
+        message: `Trail shown for ${data.targetId.substring(0, 12)} (${sorted.length} points)`,
+        type: 'info',
+    });
+}
+
+/**
+ * Hide the target movement trail from the map.
+ */
+function _onHideTargetTrail() {
+    if (!_state.map) return;
+    _trailState.targetId = null;
+    _trailState.points = [];
+
+    const empty = { type: 'FeatureCollection', features: [] };
+    if (_state.map.getSource(TARGET_TRAIL_SOURCE)) {
+        _state.map.getSource(TARGET_TRAIL_SOURCE).setData(empty);
+    }
+    const dotSourceId = TARGET_TRAIL_SOURCE + '-dots';
+    if (_state.map.getSource(dotSourceId)) {
+        _state.map.getSource(dotSourceId).setData(empty);
+    }
+}
+
+// ============================================================
+// Correlation Lines Overlay (GeoJSON lines between fused targets)
+// ============================================================
+
+const CORR_LINES_SOURCE = 'correlation-lines-source';
+const CORR_LINES_LAYER  = 'correlation-lines-layer';
+const CORR_LABELS_SOURCE = 'correlation-labels-source';
+const CORR_LABELS_LAYER  = 'correlation-labels-layer';
+
+const _corrLineState = {
+    lastFetch: 0,
+    fetchInterval: 5000,
+    lastHash: '',
+};
+
+/**
+ * Fetch correlations and draw lines between correlated targets on MapLibre.
+ * Called from the slow-tick overlay update cycle.
+ */
+async function _updateCorrelationLines() {
+    if (!_state.map || !_state.initialized) return;
+
+    const now = Date.now();
+    if (now - _corrLineState.lastFetch < _corrLineState.fetchInterval) return;
+    _corrLineState.lastFetch = now;
+
+    let records = [];
+    try {
+        const resp = await fetch('/api/correlations');
+        if (resp.ok) {
+            const data = await resp.json();
+            records = data.correlations || [];
+        }
+    } catch (_) { /* correlations API unavailable */ }
+
+    const features = [];
+    const labelFeatures = [];
+    const units = TritiumStore.units;
+
+    for (const corr of records) {
+        const idA = corr.primary_id || corr.target_a;
+        const idB = corr.secondary_id || corr.target_b;
+        const unitA = units.get(idA);
+        const unitB = units.get(idB);
+        if (!unitA || !unitB) continue;
+        const posA = unitA.position;
+        const posB = unitB.position;
+        if (!posA || !posB) continue;
+        if (posA.x === undefined || posB.x === undefined) continue;
+
+        const llA = _gameToLngLat(posA.x || 0, posA.y || 0);
+        const llB = _gameToLngLat(posB.x || 0, posB.y || 0);
+        const conf = corr.confidence || corr.score || 0;
+        const opacity = Math.max(0.2, conf);
+
+        // Color: high confidence = cyan, low = yellow
+        const color = conf > 0.7 ? '#00f0ff' : conf > 0.4 ? '#fcee0a' : '#ff8c00';
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [llA, llB] },
+            properties: { color, opacity: parseFloat(opacity.toFixed(2)) },
+        });
+
+        // Label at midpoint
+        const midLng = (llA[0] + llB[0]) / 2;
+        const midLat = (llA[1] + llB[1]) / 2;
+        labelFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [midLng, midLat] },
+            properties: { label: `${Math.round(conf * 100)}%`, color },
+        });
+    }
+
+    const lineGeojson = { type: 'FeatureCollection', features };
+    const labelGeojson = { type: 'FeatureCollection', features: labelFeatures };
+
+    // Check for changes
+    const hash = features.map(f =>
+        f.geometry.coordinates[0][0].toFixed(5) + ',' + f.properties.opacity
+    ).join(';');
+
+    if (hash === _corrLineState.lastHash) return;
+    _corrLineState.lastHash = hash;
+
+    // Update or create correlation line layer
+    if (_state.map.getSource(CORR_LINES_SOURCE)) {
+        _state.map.getSource(CORR_LINES_SOURCE).setData(lineGeojson);
+    } else {
+        _state.map.addSource(CORR_LINES_SOURCE, { type: 'geojson', data: lineGeojson });
+        _state.map.addLayer({
+            id: CORR_LINES_LAYER,
+            type: 'line',
+            source: CORR_LINES_SOURCE,
+            paint: {
+                'line-color': ['get', 'color'],
+                'line-width': 1.5,
+                'line-opacity': ['get', 'opacity'],
+                'line-dasharray': [4, 4],
+            },
+        });
+    }
+
+    // Update or create correlation label layer
+    if (_state.map.getSource(CORR_LABELS_SOURCE)) {
+        _state.map.getSource(CORR_LABELS_SOURCE).setData(labelGeojson);
+    } else {
+        _state.map.addSource(CORR_LABELS_SOURCE, { type: 'geojson', data: labelGeojson });
+        _state.map.addLayer({
+            id: CORR_LABELS_LAYER,
+            type: 'symbol',
+            source: CORR_LABELS_SOURCE,
+            layout: {
+                'text-field': ['get', 'label'],
+                'text-size': 10,
+                'text-font': ['Open Sans Regular'],
+                'text-allow-overlap': true,
+            },
+            paint: {
+                'text-color': ['get', 'color'],
+                'text-halo-color': 'rgba(10, 10, 15, 0.9)',
+                'text-halo-width': 2,
+            },
+        });
+    }
+}
+
+/**
+ * Show correlation lines for a specific target on the map.
+ * Highlights lines involving this target more prominently.
+ * @param {Object} data - { targetId, correlatedIds: [{id, confidence}] }
+ */
+function _onShowCorrelationLines(data) {
+    if (!_state.map || !_state.initialized || !data || !data.targetId) return;
+
+    const units = TritiumStore.units;
+    const mainUnit = units.get(data.targetId);
+    if (!mainUnit || !mainUnit.position) return;
+
+    const mainLL = _gameToLngLat(mainUnit.position.x || 0, mainUnit.position.y || 0);
+    const features = [];
+    const correlatedIds = data.correlatedIds || [];
+
+    for (const corr of correlatedIds) {
+        const other = units.get(corr.id);
+        if (!other || !other.position) continue;
+        const otherLL = _gameToLngLat(other.position.x || 0, other.position.y || 0);
+        const conf = corr.confidence || 0;
+        const color = conf > 0.7 ? '#00f0ff' : conf > 0.4 ? '#fcee0a' : '#ff8c00';
+
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [mainLL, otherLL] },
+            properties: { color, opacity: Math.max(0.3, conf) },
+        });
+    }
+
+    if (features.length > 0) {
+        const geojson = { type: 'FeatureCollection', features };
+        if (_state.map.getSource(CORR_LINES_SOURCE)) {
+            _state.map.getSource(CORR_LINES_SOURCE).setData(geojson);
+        }
+    }
+}
+
 // ============================================================
 // Hostile Intel HUD (DOM overlay in bottom-left corner)
 // ============================================================
@@ -2822,6 +3891,19 @@ function _updateUnits() {
     const units = TritiumStore.units;
     const seenIds = new Set();
 
+    // Debug: log unit count once per second
+    if (slowTick && units.size > 0 && Object.keys(_state.unitMarkers).length === 0) {
+        console.warn(`[MAP-ML] ${units.size} units in store but 0 markers rendered — checking first unit...`);
+        units.forEach((u, id) => {
+            if (seenIds.size === 0) {
+                const pos = u.position || {};
+                console.warn(`[MAP-ML] First unit: ${id}, pos=(${pos.x}, ${pos.y}), lngLat=${JSON.stringify(_gameToLngLat(pos.x || 0, pos.y || 0))}`);
+            }
+            seenIds.add(id); // temporary to break after first
+        });
+        seenIds.clear(); // reset for actual loop below
+    }
+
     units.forEach((unit, id) => {
         seenIds.add(id);
         const pos = unit.position || {};
@@ -2838,11 +3920,12 @@ function _updateUnits() {
             _state.unitMarkers[id] = _createUnitMarker(id, unit, lngLat);
         }
 
-        // Visibility: respect global toggle and optional alliance filter
+        // Visibility: respect global toggle, alliance filter, and target filter overlay
         const el = _state.unitMarkers[id].getElement();
         const allianceOk = !_state.allianceFilter ||
             _state.allianceFilter.includes(unit.alliance || 'unknown');
-        el.style.display = (_state.showUnits && allianceOk) ? '' : 'none';
+        const filterOk = !window.matchesTargetFilter || window.matchesTargetFilter(unit);
+        el.style.display = (_state.showUnits && allianceOk && filterOk) ? '' : 'none';
 
         // Fog of war: dim invisible hostiles, show radio ghosts
         if (unit.alliance === 'hostile' && unit.visible === false && _state.showFog) {
@@ -2896,20 +3979,29 @@ function _updateUnits() {
     // Unit signals need per-tick update (expanding rings that fade)
     _updateUnitSignals();
 
-    // Slow-tick overlays: hostile objectives, crowd density, cover points, hostile intel
+    // Engagement lines — dashed lines between firing units and their targets
+    _updateEngagementLines();
+
+    // Combat status bar at bottom of map
+    if (slowTick) _updateCombatStatusBar();
+
+    // Slow-tick overlays: hostile objectives, crowd density, cover points, hostile intel, geofence zones
     if (slowTick) {
         _updateHostileObjectives();
         _updateCrowdDensity();
         _updateCoverPoints();
         _updateHostileIntel();
-    }
-}
+        _updateGeofenceZones();
+        _updateCorrelationLines();
 
-function _resolveModalType(unit) {
-    const type = unit.asset_type || unit.type || 'generic';
-    const alliance = unit.alliance || 'unknown';
-    const npcTypes = ['person', 'animal', 'vehicle'];
-    return (npcTypes.includes(type) && alliance === 'neutral') ? 'npc' : type;
+        // Prune stale recentlyFired entries (>5s old)
+        const pruneThreshold = performance.now() - 5000;
+        for (const uid of Object.keys(_state.recentlyFired)) {
+            if (_state.recentlyFired[uid].time < pruneThreshold) {
+                delete _state.recentlyFired[uid];
+            }
+        }
+    }
 }
 
 function _resolveModalType(unit) {
@@ -2951,9 +4043,51 @@ function _createUnitMarker(id, unit, lngLat) {
         .setLngLat(lngLat)
         .addTo(_state.map);
 
-    // Hover effect
-    outer.addEventListener('mouseenter', () => outer.classList.add('unit-marker-hovered'));
-    outer.addEventListener('mouseleave', () => outer.classList.remove('unit-marker-hovered'));
+    // Hover effect + tooltip
+    const tooltip = document.createElement('div');
+    tooltip.className = 'unit-tooltip';
+    tooltip.style.cssText = 'position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);' +
+        'background:rgba(10,10,20,0.95);border:1px solid var(--cyan);border-radius:3px;padding:4px 8px;' +
+        'font-size:0.55rem;white-space:nowrap;pointer-events:none;display:none;z-index:100;' +
+        'font-family:var(--font-mono);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,0.5);';
+    outer.appendChild(tooltip);
+
+    outer.addEventListener('mouseenter', () => {
+        outer.classList.add('unit-marker-hovered');
+        // Raise z-index so hovered marker stays above overlapping neighbors
+        const markerContainer = outer.closest('.maplibregl-marker');
+        if (markerContainer) markerContainer.style.zIndex = '50';
+        const u = TritiumStore.units.get(id);
+        if (u) {
+            const hpPct = u.maxHealth ? Math.round((u.health / u.maxHealth) * 100) : '?';
+            const hpColor = hpPct > 60 ? 'var(--green)' : hpPct > 30 ? 'var(--amber)' : 'var(--magenta)';
+            const fsm = u.fsmState ? ` <span style="color:var(--text-ghost)">${_esc(u.fsmState)}</span>` : '';
+            const kills = u.kills ? ` <span style="color:var(--amber)">${u.kills} kills</span>` : '';
+            const ammo = (u.ammoCount != null && u.ammoMax) ? ` <span style="color:#aaa">${u.ammoCount}/${u.ammoMax}</span>` : '';
+            // Robot-specific tooltip extras: battery, speed, current task
+            const uType = (u.type || '').toLowerCase();
+            const isRobot = uType.includes('rover') || uType.includes('drone') || uType.includes('scout') || uType.includes('robot');
+            let robotInfo = '';
+            if (isRobot) {
+                const bat = u.battery != null ? Math.round(u.battery) + '%' : '--';
+                const spd = u.speed != null ? u.speed.toFixed(1) + ' m/s' : '';
+                robotInfo = `<div style="color:var(--cyan);font-size:0.5rem">BAT: ${bat}${spd ? '  SPD: ' + spd : ''}</div>`;
+            }
+            tooltip.innerHTML = `<div style="color:${ALLIANCE_COLORS[u.alliance] || 'var(--cyan)'};font-weight:bold">${_esc(u.name || id)}</div>` +
+                `<div>${_esc(u.type || '?')}${fsm}</div>` +
+                `<div>HP: <span style="color:${hpColor}">${hpPct}%</span>${kills}${ammo}</div>` +
+                robotInfo;
+            tooltip.style.display = 'block';
+        }
+    });
+    outer.addEventListener('mouseleave', () => {
+        outer.classList.remove('unit-marker-hovered');
+        // Restore default z-index unless this marker is selected
+        const markerContainer = outer.closest('.maplibregl-marker');
+        const isSelected = _state.selectedUnitId === id || TritiumStore.get('map.selectedUnitId') === id;
+        if (markerContainer && !isSelected) markerContainer.style.zIndex = '';
+        tooltip.style.display = 'none';
+    });
 
     // Click handler for selection + open inspector
     outer.addEventListener('click', (e) => {
@@ -3076,7 +4210,12 @@ function _applyMarkerStyle(el, unit) {
     // Position is handled by setLngLat() so it's not included here.
     const moraleState = _getMoraleState(unit.morale);
     const unitSource = unit.source || 'sim';
-    const styleHash = `${alliance}|${type}|${hpRatio.toFixed(2)}|${dead}|${selected}|${has3D}|${modelsVisible}|${_state.showLabels}|${_state.showHealthBars}|${_state.showSelectionFx}|${moraleState}|${unitSource}|${unit.name || ''}`;
+    const fsmState = (unit.fsmState || unit.fsm_state || '').toLowerCase();
+    const firedEntry = _state.recentlyFired[unit.id];
+    const inCombat = firedEntry && (performance.now() - firedEntry.time) < 3000;
+    const firedTime = firedEntry ? Math.round(firedEntry.time / 100) : 0;  // 100ms granularity for re-fire detection
+    const gamePhaseCurrent = (typeof TritiumStore !== 'undefined') ? (TritiumStore.get('game.phase') || 'idle') : 'idle';
+    const styleHash = `${alliance}|${type}|${hpRatio.toFixed(2)}|${dead}|${selected}|${has3D}|${modelsVisible}|${_state.showLabels}|${_state.showHealthBars}|${_state.showSelectionFx}|${moraleState}|${unitSource}|${unit.name || ''}|${inCombat}|${firedTime}|${gamePhaseCurrent}`;
     if (el._lastStyleHash === styleHash) return;
     el._lastStyleHash = styleHash;
 
@@ -3086,8 +4225,8 @@ function _applyMarkerStyle(el, unit) {
         css.id = 'tritium-marker-css';
         css.textContent = [
             '@keyframes hostile-pulse {',
-            '  0%, 100% { box-shadow: 0 0 6px #ff2a6d66; }',
-            '  50% { box-shadow: 0 0 16px #ff2a6d, 0 0 30px #ff2a6d44; }',
+            '  0%, 100% { box-shadow: 0 0 8px #ff2a6d88; }',
+            '  50% { box-shadow: 0 0 20px #ff2a6d, 0 0 40px #ff2a6d66; }',
             '}',
             '',
             '/* Morale state animations */',
@@ -3117,6 +4256,18 @@ function _applyMarkerStyle(el, unit) {
             '  transform: scale(1.1);',
             '}',
             '',
+            '/* Combat firing indicator */',
+            '@keyframes combat-fire-pulse {',
+            '  0%, 100% { box-shadow: 0 0 8px var(--fire-color), 0 0 16px var(--fire-color); transform: scale(1); }',
+            '  50% { box-shadow: 0 0 16px var(--fire-color), 0 0 32px var(--fire-color), 0 0 48px var(--fire-color); transform: scale(1.15); }',
+            '}',
+            '.unit-combat-ring {',
+            '  position: absolute; inset: -8px; border-radius: 50%;',
+            '  border: 2px solid var(--fire-color);',
+            '  pointer-events: none;',
+            '  animation: combat-fire-pulse 0.6s ease-in-out infinite;',
+            '}',
+            '',
             '/* Morale badge positioning */',
             '.morale-badge {',
             '  position: absolute;',
@@ -3132,6 +4283,15 @@ function _applyMarkerStyle(el, unit) {
             '  pointer-events: none;',
             '  z-index: 5;',
             '  text-shadow: 0 0 3px currentColor;',
+            '}',
+            '',
+            '/* YOLO camera detection ring — dashed orange border */',
+            '@keyframes yolo-ring-pulse {',
+            '  0%, 100% { opacity: 0.6; box-shadow: 0 0 4px #ffa50044; }',
+            '  50% { opacity: 1.0; box-shadow: 0 0 10px #ffa50088, 0 0 20px #ffa50033; }',
+            '}',
+            '.unit-yolo-ring {',
+            '  animation: yolo-ring-pulse 2s ease-in-out infinite;',
             '}',
         ].join('\n');
         document.head.appendChild(css);
@@ -3217,29 +4377,80 @@ function _applyMarkerStyle(el, unit) {
         if (oldName) oldName.remove();
 
     } else {
-        // ----- 2D mode: classic circle icon with health bar -----
-        const size = alliance === 'hostile' ? 28 : 32;
+        // ----- 2D mode: NATO APP-6 style symbology -----
+        // hostile = red diamond (rotated 45deg), friendly = blue/green circle, unknown = yellow square
+        // robots (rover/drone/scout) = larger hexagonal marker for visual distinction
+        const isRobotType = type.includes('rover') || type.includes('drone') || type.includes('scout') || type.includes('robot');
+        const combatActive = (typeof TritiumStore !== 'undefined') && (TritiumStore.get('game.phase') === 'active' || TritiumStore.get('game.phase') === 'countdown');
+        const hostileSize = combatActive ? 28 : 22;
+        const size = isRobotType ? 30 : (alliance === 'hostile' ? hostileSize : 26);
         const pulse = (_state.showSelectionFx && alliance === 'hostile' && !dead) ? 'animation: hostile-pulse 1.5s ease-in-out infinite;' : '';
         const selGlow = selected && _state.showSelectionFx;
+
+        // NATO shape: hostile=diamond, friendly=circle, unknown/neutral=square, robot=hexagon
+        let borderRadius, markerTransform, clipPath;
+        clipPath = '';
+        if (isRobotType) {
+            // Hexagonal marker: use clip-path on a pseudo-element approach
+            // Since clip-path clips borders too, use rounded hex (12-sided approximation)
+            borderRadius = '4px';
+            markerTransform = '';
+            clipPath = 'clip-path: polygon(50% 0%, 85% 10%, 100% 35%, 100% 65%, 85% 90%, 50% 100%, 15% 90%, 0% 65%, 0% 35%, 15% 10%);';
+        } else if (alliance === 'hostile') {
+            borderRadius = '3px';
+            markerTransform = 'rotate(45deg)';
+        } else if (alliance === 'friendly') {
+            borderRadius = '50%';
+            markerTransform = '';
+        } else {
+            // unknown / neutral = square
+            borderRadius = '3px';
+            markerTransform = '';
+        }
+        if (selGlow) markerTransform = (markerTransform ? markerTransform + ' ' : '') + 'scale(1.3)';
+
         el.style.cssText = `
             width: ${size}px; height: ${size}px;
-            border-radius: ${alliance === 'hostile' ? '4px' : '50%'};
-            background: ${dead ? '#33333366' : `radial-gradient(circle, ${color}55, ${color}22)`};
-            border: 2px solid ${color};
+            border-radius: ${isRobotType ? '0' : borderRadius};
+            ${clipPath}
+            background: ${dead ? '#33333366' : (isRobotType ? `linear-gradient(135deg, ${color}99, ${color}22 50%, ${color}99)` : `radial-gradient(circle, ${color}55, ${color}22)`)};
+            ${isRobotType ? '' : `border: 1.5px solid ${color};`}
             display: flex; align-items: center; justify-content: center;
             font-family: 'JetBrains Mono', monospace;
-            font-size: ${alliance === 'hostile' ? '12px' : '13px'}; font-weight: bold;
+            font-size: ${isRobotType ? '13px' : (alliance === 'hostile' ? '10px' : '11px')}; font-weight: bold;
             color: ${color};
             cursor: pointer;
             opacity: ${opacity};
             transition: transform 0.15s, box-shadow 0.15s;
-            box-shadow: 0 0 ${selGlow ? '15' : '6'}px ${color}${selGlow ? '' : '44'};
-            ${selGlow ? 'transform: scale(1.4);' : ''}
+            box-shadow: 0 0 ${selGlow ? (isRobotType ? '20' : '14') : (isRobotType ? '12' : '5')}px ${color}${selGlow ? '' : (isRobotType ? '88' : '44')};
+            ${markerTransform ? `transform: ${markerTransform};` : ''}
             ${pulse}
             position: relative;
-            text-shadow: 0 0 4px ${color};
+            text-shadow: 0 0 ${isRobotType ? '6' : '4'}px ${color};
+            ${isRobotType ? `filter: drop-shadow(0 0 3px ${color});` : ''}
         `;
-        el.textContent = icon;
+        // For diamond (hostile), counter-rotate the icon letter so it stays upright
+        if (alliance === 'hostile') {
+            el.innerHTML = `<span style="display:inline-block;transform:rotate(-45deg)">${icon}</span>`;
+        } else {
+            el.textContent = icon;
+        }
+
+        // YOLO/camera-detected targets: orange outline ring to distinguish
+        // from simulation or BLE-detected targets (Loop 8 camera detection viz)
+        let yoloRing = el.querySelector('.unit-yolo-ring');
+        if (unitSource === 'yolo' && !dead) {
+            if (!yoloRing) {
+                yoloRing = document.createElement('div');
+                yoloRing.className = 'unit-yolo-ring';
+                yoloRing.style.cssText = 'position:absolute;inset:-4px;border-radius:50%;' +
+                    'border:2px dashed #ffa500;pointer-events:none;opacity:0.8;' +
+                    'box-shadow:0 0 6px #ffa50066,inset 0 0 4px #ffa50033;';
+                el.appendChild(yoloRing);
+            }
+        } else if (yoloRing) {
+            yoloRing.remove();
+        }
 
         // Remove 3D-mode elements if switching
         const old3dName = el.querySelector('.unit-name-3d');
@@ -3265,6 +4476,63 @@ function _applyMarkerStyle(el, unit) {
             damageGlow.remove();
         }
 
+        // Combat firing indicator — pulsing ring when unit is actively engaging
+        let combatRing = el.querySelector('.unit-combat-ring');
+        if (inCombat && !dead) {
+            if (!combatRing) {
+                combatRing = document.createElement('div');
+                combatRing.className = 'unit-combat-ring';
+                el.appendChild(combatRing);
+            }
+            const fireColor = alliance === 'hostile' ? '#ff2a6d' : '#ffa500';
+            combatRing.style.setProperty('--fire-color', fireColor);
+            combatRing.style.borderRadius = alliance === 'friendly' ? '50%' : '7px';
+        } else if (combatRing) {
+            combatRing.remove();
+        }
+
+        // Weapon cooldown arc — SVG circle that sweeps from 0→360° as weapon recharges
+        let cdArc = el.querySelector('.unit-cd-arc');
+        const weaponCooldown = unit.weapon_cooldown || unit.weaponCooldown || 0;
+        if (inCombat && !dead && weaponCooldown > 0 && alliance !== 'hostile') {
+            const arcSize = size + 16;
+            const arcR = (arcSize - 4) / 2;  // radius inside the SVG
+            const circumference = 2 * Math.PI * arcR;
+            if (!cdArc) {
+                cdArc = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                cdArc.setAttribute('class', 'unit-cd-arc');
+                cdArc.style.cssText = `position:absolute; pointer-events:none; z-index:3;`;
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('class', 'cd-arc-circle');
+                circle.setAttribute('fill', 'none');
+                circle.setAttribute('stroke-linecap', 'round');
+                cdArc.appendChild(circle);
+                el.appendChild(cdArc);
+            }
+            cdArc.setAttribute('width', arcSize);
+            cdArc.setAttribute('height', arcSize);
+            cdArc.style.top = `${-(arcSize - size) / 2}px`;
+            cdArc.style.left = `${-(arcSize - size) / 2}px`;
+            const circle = cdArc.querySelector('.cd-arc-circle');
+            circle.setAttribute('cx', arcSize / 2);
+            circle.setAttribute('cy', arcSize / 2);
+            circle.setAttribute('r', arcR);
+            circle.setAttribute('stroke', '#05ffa1');
+            circle.setAttribute('stroke-width', '2.5');
+            circle.setAttribute('stroke-dasharray', circumference);
+            // Animate: offset goes from circumference (empty) to 0 (full)
+            circle.style.strokeDashoffset = circumference;
+            circle.style.transition = 'none';
+            circle.style.transform = 'rotate(-90deg)';
+            circle.style.transformOrigin = '50% 50%';
+            // Force reflow then animate
+            void circle.offsetWidth;
+            circle.style.transition = `stroke-dashoffset ${weaponCooldown}s linear`;
+            circle.style.strokeDashoffset = '0';
+        } else if (cdArc) {
+            cdArc.remove();
+        }
+
         // Operator control indicator — pulsing cyan ring
         let ctrlRing = el.querySelector('.unit-ctrl-ring');
         if (controlled) {
@@ -3280,6 +4548,25 @@ function _applyMarkerStyle(el, unit) {
             ctrlRing.remove();
         }
 
+        // Eliminated X overlay
+        let elimX = el.querySelector('.unit-elim-x');
+        if (dead) {
+            if (!elimX) {
+                elimX = document.createElement('div');
+                elimX.className = 'unit-elim-x';
+                elimX.textContent = '\u2716';
+                elimX.style.cssText = [
+                    'position:absolute; inset:0;',
+                    'display:flex; align-items:center; justify-content:center;',
+                    'font-size:24px; color:#ff2a6d; pointer-events:none;',
+                    'text-shadow:0 0 6px #ff2a6d, 0 0 12px #000;',
+                ].join('');
+                el.appendChild(elimX);
+            }
+        } else if (elimX) {
+            elimX.remove();
+        }
+
         // Health bar below marker (respects showHealthBars toggle)
         let healthBar = el.querySelector('.unit-hp-bar');
         if (_state.showHealthBars) {
@@ -3287,8 +4574,9 @@ function _applyMarkerStyle(el, unit) {
                 healthBar = document.createElement('div');
                 healthBar.className = 'unit-hp-bar';
                 healthBar.style.cssText = `
-                    position: absolute; bottom: -4px; left: 1px; right: 1px; height: 2px;
-                    background: #333; border-radius: 1px; overflow: hidden;
+                    position: absolute; bottom: -5px; left: 0px; right: 0px; height: 3px;
+                    background: #222; border-radius: 2px; overflow: hidden;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
                 `;
                 const fill = document.createElement('div');
                 fill.className = 'unit-hp-fill';
@@ -4126,7 +5414,12 @@ async function _loadGeoLayers() {
 async function _loadGeoLayer(layerMeta) {
     const { id, name, type: geomType, color, endpoint } = layerMeta;
     try {
-        const resp = await fetch(endpoint);
+        // Append geo center coordinates if the endpoint requires them
+        const sep = endpoint.includes('?') ? '&' : '?';
+        const url = _state.geoCenter
+            ? `${endpoint}${sep}lat=${_state.geoCenter.lat}&lng=${_state.geoCenter.lng}`
+            : endpoint;
+        const resp = await fetch(url);
         if (!resp.ok) return;
         const geojson = await resp.json();
         if (!geojson.features || geojson.features.length === 0) return;
@@ -4200,6 +5493,26 @@ async function _loadGeoLayer(layerMeta) {
 
         _state.geoLayerIds.push(layerId);
         console.log(`[MAP-ML] Layer: ${name} (${geojson.features.length} features)`);
+
+        // Tooltip on hover for GIS features
+        _state.map.on('mouseenter', layerId, () => {
+            _state.map.getCanvas().style.cursor = 'pointer';
+        });
+        _state.map.on('mouseleave', layerId, () => {
+            _state.map.getCanvas().style.cursor = '';
+        });
+        _state.map.on('click', layerId, (e) => {
+            const props = e.features?.[0]?.properties || {};
+            const lines = [`<strong>${name}</strong>`];
+            for (const [k, v] of Object.entries(props)) {
+                if (k.startsWith('_') || k === 'id') continue;
+                lines.push(`<span style="color:var(--text-ghost)">${k}:</span> ${v}`);
+            }
+            new maplibregl.Popup({ closeButton: true, maxWidth: '260px' })
+                .setLngLat(e.lngLat)
+                .setHTML(`<div style="font-family:var(--font-mono);font-size:0.65rem;line-height:1.5;color:var(--text)">${lines.join('<br>')}</div>`)
+                .addTo(_state.map);
+        });
 
     } catch (e) {
         console.warn(`[MAP-ML] Layer ${id} failed:`, e.message);
@@ -4299,6 +5612,17 @@ function _onWaveStart(data) {
     const wave = data.wave || data.wave_number || '?';
     const name = data.wave_name || '';
     const hostiles = data.hostile_count || '?';
+    const direction = data.spawn_direction || 'random';
+
+    // Track wave direction for directional threat arrows
+    _state._waveDirection = direction;
+    // Clear between-wave countdown
+    _state._nextWaveCountdown = 0;
+    _state._nextWaveCountdownStart = 0;
+    _state._nextWaveDirection = null;
+
+    // Show directional threat indicators on map edges
+    _showDirectionalThreatArrows(direction);
 
     _showMapBanner(
         'WAVE ' + wave,
@@ -4307,6 +5631,7 @@ function _onWaveStart(data) {
         3500
     );
     _triggerScreenFlash('#ff2a6d', 200);
+    _triggerScanLine('#ff2a6d');
 }
 
 function _onWaveComplete(data) {
@@ -4320,6 +5645,27 @@ function _onWaveComplete(data) {
         3000
     );
 
+    // Clear current wave direction arrows
+    _state._waveDirection = null;
+    _removeDirectionalThreatArrows();
+
+    // Start countdown to next wave if info available
+    const delay = data.next_wave_delay || 5;
+    if (data.next_wave_name || data.next_hostile_count) {
+        _state._nextWaveCountdown = delay;
+        _state._nextWaveCountdownStart = performance.now();
+        _state._nextWaveName = data.next_wave_name || '';
+        _state._nextHostileCount = data.next_hostile_count || 0;
+        _state._nextWaveDirection = data.next_spawn_direction || 'random';
+
+        // Show preview direction arrows for next wave after banner clears
+        setTimeout(() => {
+            if (_state._nextWaveDirection) {
+                _showDirectionalThreatArrows(_state._nextWaveDirection, true);
+            }
+        }, 3200);
+    }
+
     // Fetch and render combat zone heatmap after wave completes
     _fetchAndRenderHeatmap();
 }
@@ -4332,17 +5678,41 @@ function _onGameStateChange(data) {
     } else if (data.state === 'active') {
         // Start polling hostile objectives during active game
         _startHostileObjectivePoll();
+        _showBattleVignette(true);
+        if (!_state.battleStartTime) _state.battleStartTime = performance.now();
     } else if (data.state === 'victory') {
-        _showMapBanner('VICTORY', 'All waves cleared', '#05ffa1', 5000);
-        _triggerScreenFlash('#05ffa1', 400);
+        _showMapBanner('VICTORY', 'All waves cleared', '#05ffa1', 8000);
+        _triggerScreenFlash('#05ffa1', 600);
+        _showGameOverOverlay('victory', data);
         _stopHostileObjectivePoll();
+        _showBattleVignette(false);
+        _removeDirectionalThreatArrows();
     } else if (data.state === 'defeat') {
-        _showMapBanner('DEFEAT', 'Perimeter breached', '#ff2a6d', 5000);
-        _triggerScreenFlash('#ff2a6d', 400);
+        _showMapBanner('DEFEAT', 'Perimeter breached', '#ff2a6d', 8000);
+        _triggerScreenFlash('#ff2a6d', 600);
         _triggerScreenShake(500, 8);
+        _showGameOverOverlay('defeat', data);
         _stopHostileObjectivePoll();
+        _showBattleVignette(false);
+        _removeDirectionalThreatArrows();
+    } else if (data.state === 'setup') {
+        // Reset after a game — clear game-over overlay but keep effects initialized
+        _removeGameOverOverlay();
+        _showBattleVignette(false);
+        _removeDirectionalThreatArrows();
+        _state.battleStartTime = 0;
+        _state._waveDirection = null;
+        _state._nextWaveCountdown = 0;
+        _state._nextWaveCountdownStart = 0;
     } else if (data.state === 'idle') {
         _stopHostileObjectivePoll();
+        _showBattleVignette(false);
+        _removeDirectionalThreatArrows();
+        _removeGameOverOverlay();
+        _state.battleStartTime = 0;
+        _state._waveDirection = null;
+        _state._nextWaveCountdown = 0;
+        _state._nextWaveCountdownStart = 0;
         _clearHazardZones();
         _clearHostileObjectives();
         _clearCrowdDensity();
@@ -4379,12 +5749,12 @@ function _showMapBanner(title, subtitle, color, durationMs) {
         'letter-spacing:4px; text-transform:uppercase; color:' + color + ';',
         'text-shadow: 0 0 15px ' + color + ', 0 0 30px ' + color + '66, 0 2px 6px #000;',
         'animation: fx-streak-pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-        '">' + _escFx(title) + '</div>',
+        '">' + _esc(title) + '</div>',
         '<div style="',
         'font-family:JetBrains Mono,monospace; font-size:14px;',
         'color:#aaa; letter-spacing:2px; margin-top:6px;',
         'animation: fx-streak-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-        '">' + _escFx(subtitle) + '</div>',
+        '">' + _esc(subtitle) + '</div>',
     ].join('');
 
     clearTimeout(banner._hideTimer);
@@ -4442,48 +5812,48 @@ function _startCountdownOverlay(seconds) {
 const _WEAPON_VFX = {
     nerf_missile_launcher: {
         color: 0xff2a6d, glowColor: 0xff6644,
-        headR: 6, glowR: 14, duration: 700, flashR: 12,
+        headR: 10, glowR: 25, duration: 700, flashR: 18,
         trail: true, smoke: true, screenShake: true,
     },
     nerf_tank_cannon: {
         color: 0xffcc00, glowColor: 0xff8800,
-        headR: 5, glowR: 12, duration: 550, flashR: 10,
+        headR: 9, glowR: 22, duration: 550, flashR: 16,
         trail: true, smoke: false, screenShake: true,
     },
     nerf_heavy_turret: {
         color: 0x00f0ff, glowColor: 0x0088ff,
-        headR: 5, glowR: 11, duration: 450, flashR: 10,
+        headR: 8, glowR: 20, duration: 450, flashR: 14,
         trail: true, smoke: false, screenShake: false, twin: true,
     },
     nerf_turret_gun: {
         color: 0x05ffa1, glowColor: 0x00cc88,
-        headR: 4, glowR: 10, duration: 500, flashR: 8,
+        headR: 7, glowR: 18, duration: 500, flashR: 12,
         trail: true, smoke: false, screenShake: false,
     },
     nerf_cannon: {
         color: 0xffa500, glowColor: 0xff8800,
-        headR: 4, glowR: 10, duration: 500, flashR: 8,
+        headR: 7, glowR: 18, duration: 500, flashR: 12,
         trail: true, smoke: false, screenShake: false,
     },
     nerf_apc_mg: {
         color: 0xffa500, glowColor: 0xff6600,
-        headR: 2.5, glowR: 7, duration: 350, flashR: 6,
-        trail: false, smoke: false, screenShake: false,
+        headR: 5, glowR: 14, duration: 350, flashR: 10,
+        trail: true, smoke: false, screenShake: false,
     },
     nerf_dart_gun: {
         color: 0x00f0ff, glowColor: 0x0088ff,
-        headR: 2.5, glowR: 6, duration: 400, flashR: 5,
-        trail: false, smoke: false, screenShake: false,
+        headR: 5, glowR: 13, duration: 400, flashR: 9,
+        trail: true, smoke: false, screenShake: false,
     },
     nerf_scout_gun: {
         color: 0x00ccff, glowColor: 0x0066cc,
-        headR: 2, glowR: 5, duration: 350, flashR: 4,
+        headR: 4, glowR: 11, duration: 350, flashR: 8,
         trail: false, smoke: false, screenShake: false,
     },
     nerf_pistol: {
         color: 0xff2a6d, glowColor: 0xcc0044,
-        headR: 2.5, glowR: 6, duration: 450, flashR: 5,
-        trail: false, smoke: false, screenShake: false,
+        headR: 5, glowR: 13, duration: 450, flashR: 9,
+        trail: true, smoke: false, screenShake: false,
     },
 };
 
@@ -4499,6 +5869,14 @@ function _getWeaponVFX(projectileType) {
 // ------ Projectile tracer (source → target) ------
 
 function _onCombatProjectile(data) {
+    // Track recently-fired units for combat ring indicator + engagement lines
+    if (data.source_id) {
+        _state.recentlyFired[data.source_id] = {
+            time: performance.now(),
+            targetId: data.target_id || null,
+        };
+    }
+
     if (!_state.threeScene || !_state.map) return;
     if (!_state.showTracers) return;
 
@@ -4555,7 +5933,7 @@ function _onCombatProjectile(data) {
         const headGeo = new THREE.SphereGeometry(ms * vfx.headR, 6, 6);
         const headMat = new THREE.MeshBasicMaterial({
             color: vfx.color, transparent: true, opacity: 0.95,
-            depthWrite: false, blending: THREE.NormalBlending,
+            depthWrite: false, blending: THREE.AdditiveBlending,
         });
         const head = new THREE.Mesh(headGeo, headMat);
         head.position.copy(oSrc);
@@ -4563,8 +5941,8 @@ function _onCombatProjectile(data) {
         // Outer glow
         const glowGeo = new THREE.SphereGeometry(ms * vfx.glowR, 6, 6);
         const glowMat = new THREE.MeshBasicMaterial({
-            color: vfx.glowColor, transparent: true, opacity: 0.4,
-            depthWrite: false, blending: THREE.NormalBlending,
+            color: vfx.glowColor, transparent: true, opacity: 0.6,
+            depthWrite: false, blending: THREE.AdditiveBlending,
         });
         const glow = new THREE.Mesh(glowGeo, glowMat);
         glow.position.copy(oSrc);
@@ -4666,8 +6044,10 @@ function _onCombatHit(data) {
     // DOM hit flash
     _spawnDomFlash(px || 0, py || 0, vfx.color, 350);
 
-    // DOM flash at the hit location provides positioned feedback;
-    // skip the full-screen overlay to avoid distracting edge artifacts.
+    // Brief vignette pulse when a friendly takes heavy damage
+    if (hitUnit && hitUnit.alliance === 'friendly' && dmg >= 20) {
+        _pulseVignetteDamage();
+    }
 }
 
 // ------ Elimination explosion ------
@@ -4703,9 +6083,9 @@ function _onCombatElimination(data) {
         );
         const ringMat = new THREE.MeshBasicMaterial({
             color: methodVfx.color,
-            transparent: true, opacity: 0.7,
+            transparent: true, opacity: 0.8,
             side: THREE.DoubleSide, depthWrite: false,
-            blending: THREE.NormalBlending,
+            blending: THREE.AdditiveBlending,
         });
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.position.set(mc.x, mc.y, mc.z || 0);
@@ -4715,9 +6095,9 @@ function _onCombatElimination(data) {
             ms * rStart * 0.5, ms * rStart * 0.9, 32
         );
         const ring2Mat = new THREE.MeshBasicMaterial({
-            color: 0xffa500, transparent: true, opacity: 0.5,
+            color: 0xffa500, transparent: true, opacity: 0.6,
             side: THREE.DoubleSide, depthWrite: false,
-            blending: THREE.NormalBlending,
+            blending: THREE.AdditiveBlending,
         });
         const ring2 = new THREE.Mesh(ring2Geo, ring2Mat);
         ring2.position.set(mc.x, mc.y, mc.z || 0);
@@ -4727,9 +6107,9 @@ function _onCombatElimination(data) {
         const coreMat = new THREE.MeshBasicMaterial({
             color: 0xffffff,
             transparent: true,
-            opacity: 0.9,
+            opacity: 0.95,
             depthWrite: false,
-            blending: THREE.NormalBlending,
+            blending: THREE.AdditiveBlending,
         });
         const core = new THREE.Mesh(coreGeo, coreMat);
         core.position.set(mc.x, mc.y, (mc.z || 0) + ms * 2);
@@ -4785,6 +6165,9 @@ function _onCombatElimination(data) {
     // Floating "ELIMINATED" text rising from the explosion
     _spawnFloatingText(pos.x || 0, pos.y || 0, 'ELIMINATED', '#ff2a6d', 2000);
 
+    // Score popup slightly offset
+    _spawnFloatingText(pos.x || 0, (pos.y || 0) + 5, '+100', '#fcee0a', 1500);
+
     // Kill feed entry with weapon method
     const methodLabel = _weaponDisplayName(method);
     _addKillFeedEntry(killerName, targetName, methodLabel);
@@ -4815,6 +6198,9 @@ function _onCombatStreak(data) {
     // Big center streak banner
     _showStreakBanner(streakName, color, 3000);
 
+    // Scan line sweep
+    _triggerScanLine(color);
+
     // Screen shake (bigger for higher streaks)
     _triggerScreenShake(400, 4 + streak);
 }
@@ -4844,7 +6230,7 @@ function _showStreakBanner(text, color, durationMs) {
         'color:' + color + ';',
         'text-shadow: 0 0 20px ' + color + ', 0 0 40px ' + color + '88, 0 0 80px ' + color + '44, 0 4px 8px #000;',
         'animation: fx-streak-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;',
-    ].join('') + '">' + _escFx(text) + '</div>';
+    ].join('') + '">' + _esc(text) + '</div>';
 
     // Inject streak pop animation if not present
     if (!document.getElementById('tritium-fx-streak-css')) {
@@ -4874,9 +6260,9 @@ function _spawnFlash(mc, ms, color, radiusMeters, durationMs) {
     const mat = new THREE.MeshBasicMaterial({
         color: color,
         transparent: true,
-        opacity: 0.8,
+        opacity: 0.9,
         depthWrite: false,
-        blending: THREE.NormalBlending,
+        blending: THREE.AdditiveBlending,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(mc.x, mc.y, mc.z || 0);
@@ -4903,9 +6289,9 @@ function _spawnParticleBurst(mc, ms, color, count, durationMs) {
         const mat = new THREE.MeshBasicMaterial({
             color: color,
             transparent: true,
-            opacity: 0.8,
+            opacity: 0.85,
             depthWrite: false,
-            blending: THREE.NormalBlending,
+            blending: THREE.AdditiveBlending,
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(mc.x, mc.y, mc.z || 0);
@@ -5057,10 +6443,10 @@ function _spawnDomFlash(gx, gy, color, durationMs) {
     // Outer glow ring
     const outer = document.createElement('div');
     outer.style.cssText = [
-        'width:80px; height:80px; border-radius:50%;',
+        'width:120px; height:120px; border-radius:50%;',
         'pointer-events:none; position:relative;',
-        'background:radial-gradient(circle, ' + hexColor + 'cc, ' + hexColor + '44 40%, transparent 70%);',
-        'box-shadow: 0 0 30px ' + hexColor + ', 0 0 60px ' + hexColor + '66;',
+        'background:radial-gradient(circle, ' + hexColor + 'ee, ' + hexColor + '66 35%, transparent 70%);',
+        'box-shadow: 0 0 40px ' + hexColor + ', 0 0 80px ' + hexColor + '88;',
         'animation: fx-hit-pulse ' + durationMs + 'ms ease-out forwards;',
     ].join('');
 
@@ -5068,7 +6454,7 @@ function _spawnDomFlash(gx, gy, color, durationMs) {
     const inner = document.createElement('div');
     inner.style.cssText = [
         'position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);',
-        'width:30px; height:30px; border-radius:50%;',
+        'width:50px; height:50px; border-radius:50%;',
         'background:radial-gradient(circle, #ffffff, ' + hexColor + ' 60%, transparent);',
         'animation: fx-hit-pulse ' + (durationMs * 0.6) + 'ms ease-out forwards;',
     ].join('');
@@ -5076,7 +6462,7 @@ function _spawnDomFlash(gx, gy, color, durationMs) {
 
     // Clip wrapper to prevent spill
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'width:160px; height:160px; overflow:hidden;'
+    wrap.style.cssText = 'width:240px; height:240px; overflow:hidden;'
         + ' border-radius:50%; pointer-events:none;'
         + ' display:flex; align-items:center; justify-content:center;';
     wrap.appendChild(outer);
@@ -5095,7 +6481,7 @@ function _spawnDomFlash(gx, gy, color, durationMs) {
 function _spawnDomExplosion(gx, gy, durationMs) {
     if (!_state.map || !_state.showExplosions) return;
     const lngLat = _gameToLngLat(gx, gy);
-    const CLIP = 200; // max visual diameter in px
+    const CLIP = 300; // max visual diameter in px
 
     // Helper: wrap an animated element in a clipping circle so expanding
     // CSS animations don't spill across the entire viewport.
@@ -5112,10 +6498,10 @@ function _spawnDomExplosion(gx, gy, durationMs) {
     // Layer 1: Expanding magenta ring
     const ring = document.createElement('div');
     ring.style.cssText = [
-        'width:30px; height:30px; border-radius:50%;',
+        'width:50px; height:50px; border-radius:50%;',
         'pointer-events:none;',
-        'border: 4px solid #ff2a6d;',
-        'box-shadow: 0 0 30px #ff2a6d, 0 0 60px #ff2a6d88, inset 0 0 20px #ff2a6d44;',
+        'border: 5px solid #ff2a6d;',
+        'box-shadow: 0 0 40px #ff2a6d, 0 0 80px #ff2a6daa, inset 0 0 30px #ff2a6d66;',
         'animation: fx-explode ' + durationMs + 'ms ease-out forwards;',
     ].join('');
     const ringMarker = _clippedMarker(ring);
@@ -5123,10 +6509,10 @@ function _spawnDomExplosion(gx, gy, durationMs) {
     // Layer 2: Orange secondary ring (slightly delayed via slower animation)
     const ring2 = document.createElement('div');
     ring2.style.cssText = [
-        'width:20px; height:20px; border-radius:50%;',
+        'width:35px; height:35px; border-radius:50%;',
         'pointer-events:none;',
-        'border: 3px solid #ffa500;',
-        'box-shadow: 0 0 20px #ffa500, 0 0 40px #ffa50066;',
+        'border: 4px solid #ffa500;',
+        'box-shadow: 0 0 30px #ffa500, 0 0 60px #ffa50088;',
         'animation: fx-explode ' + (durationMs * 1.2) + 'ms ease-out forwards;',
     ].join('');
     const ring2Marker = _clippedMarker(ring2);
@@ -5134,10 +6520,10 @@ function _spawnDomExplosion(gx, gy, durationMs) {
     // Layer 3: Bright white core flash (fast)
     const core = document.createElement('div');
     core.style.cssText = [
-        'width:80px; height:80px; border-radius:50%;',
+        'width:120px; height:120px; border-radius:50%;',
         'pointer-events:none;',
-        'background:radial-gradient(circle, #ffffff, #ffcc00 30%, #ff2a6d 60%, transparent 80%);',
-        'box-shadow: 0 0 40px #ffffff88, 0 0 80px #ff2a6d44;',
+        'background:radial-gradient(circle, #ffffff, #ffcc00 25%, #ff2a6d 55%, transparent 75%);',
+        'box-shadow: 0 0 60px #ffffffaa, 0 0 120px #ff2a6d66;',
         'animation: fx-flash ' + (durationMs * 0.35) + 'ms ease-out forwards;',
     ].join('');
     const coreMarker = _clippedMarker(core);
@@ -5145,9 +6531,9 @@ function _spawnDomExplosion(gx, gy, durationMs) {
     // Layer 4: Shockwave ring (thin, fast, wide)
     const shock = document.createElement('div');
     shock.style.cssText = [
-        'width:10px; height:10px; border-radius:50%;',
+        'width:15px; height:15px; border-radius:50%;',
         'pointer-events:none;',
-        'border: 2px solid #ffffff88;',
+        'border: 2px solid #ffffffaa;',
         'animation: fx-shockwave ' + (durationMs * 0.7) + 'ms ease-out forwards;',
     ].join('');
     const shockMarker = _clippedMarker(shock);
@@ -5172,10 +6558,10 @@ function _spawnFloatingText(gx, gy, text, color, durationMs) {
     el.style.cssText = [
         'pointer-events:none; white-space:nowrap;',
         'font-family:"JetBrains Mono",monospace;',
-        'font-size:16px; font-weight:bold; letter-spacing:2px;',
+        'font-size:20px; font-weight:bold; letter-spacing:2px;',
         'color:' + color + '; text-transform:uppercase;',
-        'text-shadow: 0 0 8px ' + color + ', 0 0 16px ' + color + '66, 0 2px 4px #000;',
-        'max-width:200px; overflow:hidden; text-overflow:ellipsis;',
+        'text-shadow: 0 0 12px ' + color + ', 0 0 24px ' + color + '88, 0 2px 6px #000;',
+        'max-width:250px; overflow:hidden; text-overflow:ellipsis;',
         'animation: fx-float-text ' + durationMs + 'ms ease-out forwards;',
     ].join('');
     el.textContent = text;
@@ -5199,6 +6585,420 @@ function _triggerScreenShake(durationMs, intensity) {
     container.style.setProperty('--shake-intensity', intensity + 'px');
     container.style.animation = 'fx-screen-shake ' + durationMs + 'ms ease-out';
     setTimeout(() => { container.style.animation = ''; }, durationMs);
+}
+
+/**
+ * Render wave progress dots: filled for completed, pulsing for current, empty for future.
+ */
+function _waveProgressDots(currentWave, totalWaves) {
+    const dots = [];
+    for (let i = 1; i <= totalWaves; i++) {
+        if (i < currentWave) {
+            // Completed wave — solid cyan
+            dots.push('<span style="width:6px;height:6px;border-radius:50%;background:#00f0ff;display:inline-block"></span>');
+        } else if (i === currentWave) {
+            // Current wave — pulsing
+            dots.push('<span style="width:8px;height:8px;border-radius:50%;background:#00f0ff;display:inline-block;box-shadow:0 0 6px #00f0ff;animation:hostile-pulse 1s infinite"></span>');
+        } else {
+            // Future wave — dim outline
+            dots.push('<span style="width:6px;height:6px;border-radius:50%;border:1px solid #333;display:inline-block"></span>');
+        }
+    }
+    return dots.join('');
+}
+
+/**
+ * Update the on-map combat status bar during active battle.
+ * Shows: wave, hostiles alive, friendly health, threat level.
+ */
+function _updateCombatStatusBar() {
+    const container = _state.container;
+    if (!container) return;
+
+    const gameState = TritiumStore.get('game.phase');
+    if (gameState !== 'active' && gameState !== 'countdown' && gameState !== 'wave_complete') {
+        const bar = container.querySelector('.fx-combat-status');
+        if (bar) bar.style.display = 'none';
+        return;
+    }
+    // Auto-detect active battle if we missed the state change event (late-joining browser)
+    if (gameState === 'active' && !_state.battleStartTime) {
+        _state.battleStartTime = performance.now();
+        _showBattleVignette(true);
+        // Restore directional arrows from store if we missed the wave_start event
+        const storedDir = TritiumStore.get('game.waveDirection');
+        if (storedDir && storedDir !== 'random' && !_state._waveDirection) {
+            _state._waveDirection = storedDir;
+            _showDirectionalThreatArrows(storedDir);
+        }
+    }
+
+    let bar = container.querySelector('.fx-combat-status');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'fx-combat-status';
+        bar.style.cssText = [
+            'position:absolute; bottom:12px; left:50%; transform:translateX(-50%);',
+            'z-index:100; pointer-events:none;',
+            'display:flex; align-items:center; gap:16px;',
+            'background:rgba(6,6,9,0.85); border:1px solid rgba(0,240,255,0.25);',
+            'border-radius:4px; padding:6px 16px;',
+            'font-family:"JetBrains Mono",monospace; font-size:12px;',
+            'box-shadow: 0 4px 12px rgba(0,0,0,0.4), inset 0 0 20px rgba(0,240,255,0.03);',
+        ].join('');
+        container.appendChild(bar);
+    }
+    bar.style.display = 'flex';
+
+    // Count hostiles alive and friendly health
+    let hostilesAlive = 0;
+    let friendlyTotal = 0;
+    let friendlyHealth = 0;
+    let friendlyMaxHealth = 0;
+
+    TritiumStore.units.forEach((u) => {
+        if (u.status === 'eliminated' || u.status === 'destroyed') return;
+        if (u.alliance === 'hostile') hostilesAlive++;
+        if (u.alliance === 'friendly' && u.isCombatant) {
+            friendlyTotal++;
+            friendlyHealth += u.health || 0;
+            friendlyMaxHealth += u.maxHealth || 100;
+        }
+    });
+
+    const healthPct = friendlyMaxHealth > 0 ? Math.round((friendlyHealth / friendlyMaxHealth) * 100) : 100;
+    const healthColor = healthPct > 60 ? '#05ffa1' : healthPct > 30 ? '#fcee0a' : '#ff2a6d';
+
+    const wave = TritiumStore.get('game.wave') || '?';
+    const totalWaves = TritiumStore.get('game.totalWaves') || 10;
+
+    // Elapsed battle timer
+    let timerStr = '0:00';
+    if (_state.battleStartTime) {
+        const elapsed = Math.floor((performance.now() - _state.battleStartTime) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        timerStr = mins + ':' + String(secs).padStart(2, '0');
+    }
+
+    // Pulse the border when hostiles are present
+    if (hostilesAlive > 0) {
+        bar.style.borderColor = 'rgba(255,42,109,0.5)';
+        bar.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4), 0 0 15px rgba(255,42,109,0.15), inset 0 0 20px rgba(255,42,109,0.05)';
+    } else {
+        bar.style.borderColor = 'rgba(5,255,161,0.3)';
+        bar.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4), inset 0 0 20px rgba(0,240,255,0.03)';
+    }
+
+    // Between-wave countdown
+    let countdownHtml = '';
+    if (_state._nextWaveCountdownStart > 0 && hostilesAlive === 0) {
+        const elapsed = (performance.now() - _state._nextWaveCountdownStart) / 1000;
+        const remaining = Math.max(0, _state._nextWaveCountdown - elapsed);
+        if (remaining > 0) {
+            const nextName = _state._nextWaveName || 'NEXT';
+            countdownHtml = [
+                '<span style="color:#333">|</span>',
+                '<span style="color:#fcee0a;letter-spacing:1px;animation:wave-countdown-pulse 1s ease-in-out infinite">NEXT WAVE</span>',
+                '<span style="color:#fcee0a;font-weight:bold;font-size:14px">' + Math.ceil(remaining) + 's</span>',
+            ].join(' ');
+        }
+    }
+
+    bar.innerHTML = [
+        '<span style="color:#ff2a6d;font-weight:bold;letter-spacing:1px">',
+        hostilesAlive > 0 ? '\u26A0' : '\u2714',
+        '</span>',
+        '<span style="color:' + (hostilesAlive > 0 ? '#ff2a6d' : '#666') + ';letter-spacing:1px">' + (hostilesAlive > 0 ? 'THREAT' : 'CLEAR') + '</span>',
+        '<span style="color:#ff2a6d;font-weight:bold;font-size:14px">' + (hostilesAlive > 0 ? hostilesAlive : '') + '</span>',
+        '<span style="color:#333">|</span>',
+        '<span style="color:#aaa;letter-spacing:1px">DEFENDERS</span>',
+        '<span style="color:' + healthColor + ';font-weight:bold;font-size:14px">' + friendlyTotal + '</span>',
+        '<span style="color:' + healthColor + ';font-size:10px">' + healthPct + '%</span>',
+        '<span style="color:#333">|</span>',
+        '<span style="color:#aaa;letter-spacing:1px">WAVE</span>',
+        '<span style="color:#00f0ff;font-weight:bold;font-size:14px">' + wave + '/' + totalWaves + '</span>',
+        '<span style="display:inline-flex;gap:3px;align-items:center">' + _waveProgressDots(wave, totalWaves) + '</span>',
+        '<span style="color:#333">|</span>',
+        '<span style="color:#fcee0a;font-weight:bold;font-size:13px">' + (TritiumStore.get('game.score') || 0).toLocaleString() + '</span>',
+        '<span style="color:#333">|</span>',
+        '<span style="color:#555;font-size:11px;letter-spacing:1px">' + timerStr + '</span>',
+        countdownHtml,
+    ].join(' ');
+}
+
+/**
+ * Show/hide a subtle vignette border during active battle.
+ * Darkens edges to focus attention on the tactical area.
+ */
+function _showBattleVignette(show) {
+    const container = _state.container;
+    if (!container) return;
+    let vig = container.querySelector('.fx-battle-vignette');
+    if (show) {
+        if (!vig) {
+            vig = document.createElement('div');
+            vig.className = 'fx-battle-vignette';
+            vig.style.cssText = [
+                'position:absolute; inset:0; pointer-events:none; z-index:90;',
+                'background:radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.5) 100%);',
+                'border: 2px solid rgba(255,42,109,0.25);',
+                'box-shadow: inset 0 0 60px rgba(255,42,109,0.08), inset 0 0 120px rgba(0,0,0,0.3);',
+                'transition: opacity 1s ease-in;',
+                'opacity:0;',
+            ].join('');
+            container.appendChild(vig);
+        }
+        // Fade in
+        requestAnimationFrame(() => { vig.style.opacity = '1'; });
+    } else if (vig) {
+        vig.style.opacity = '0';
+        setTimeout(() => vig.remove(), 1000);
+    }
+}
+
+// ------ Scan line effect ------
+
+function _triggerScanLine(color) {
+    const container = _state.container;
+    if (!container || !_state.showScreenFx) return;
+    const line = document.createElement('div');
+    line.style.cssText = [
+        'position:absolute; left:0; right:0; top:0; height:3px;',
+        'z-index:160; pointer-events:none;',
+        'background:linear-gradient(90deg, transparent 0%, ' + color + ' 20%, ' + color + ' 80%, transparent 100%);',
+        'box-shadow: 0 0 20px ' + color + ', 0 0 40px ' + color + '66;',
+        'animation: fx-scan-line 0.8s ease-in-out forwards;',
+    ].join('');
+    container.appendChild(line);
+    setTimeout(() => line.remove(), 850);
+}
+
+// ------ Damage vignette pulse ------
+
+function _pulseVignetteDamage() {
+    const container = _state.container;
+    if (!container) return;
+    let pulse = container.querySelector('.fx-damage-pulse');
+    if (pulse) return; // Already pulsing
+    pulse = document.createElement('div');
+    pulse.className = 'fx-damage-pulse';
+    pulse.style.cssText = [
+        'position:absolute; inset:0; pointer-events:none; z-index:91;',
+        'box-shadow: inset 0 0 80px rgba(255,42,109,0.25), inset 0 0 160px rgba(255,0,0,0.1);',
+        'animation: fx-vignette-flash 0.4s ease-out forwards;',
+    ].join('');
+    container.appendChild(pulse);
+    setTimeout(() => pulse.remove(), 450);
+}
+
+// ------ Directional threat indicators ------
+
+/**
+ * Direction-to-CSS-position map: where to place threat arrows on screen edges.
+ * Each direction maps to an array of { position, rotation } entries.
+ */
+const _DIR_POSITIONS = {
+    north:   [{ css: 'top:8px;left:50%;transform:translateX(-50%) rotate(180deg)', label: 'N' }],
+    south:   [{ css: 'bottom:50px;left:50%;transform:translateX(-50%) rotate(0deg)', label: 'S' }],
+    east:    [{ css: 'top:50%;right:8px;transform:translateY(-50%) rotate(270deg)', label: 'E' }],
+    west:    [{ css: 'top:50%;left:8px;transform:translateY(-50%) rotate(90deg)', label: 'W' }],
+    pincer:  [
+        { css: 'top:50%;right:8px;transform:translateY(-50%) rotate(270deg)', label: 'E' },
+        { css: 'top:50%;left:8px;transform:translateY(-50%) rotate(90deg)', label: 'W' },
+    ],
+    surround: [
+        { css: 'top:8px;left:50%;transform:translateX(-50%) rotate(180deg)', label: 'N' },
+        { css: 'bottom:50px;left:50%;transform:translateX(-50%) rotate(0deg)', label: 'S' },
+        { css: 'top:50%;right:8px;transform:translateY(-50%) rotate(270deg)', label: 'E' },
+        { css: 'top:50%;left:8px;transform:translateY(-50%) rotate(90deg)', label: 'W' },
+    ],
+};
+
+function _showDirectionalThreatArrows(direction, preview) {
+    _removeDirectionalThreatArrows();
+    const container = _state.container;
+    if (!container || !direction || direction === 'random') return;
+
+    const positions = _DIR_POSITIONS[direction];
+    if (!positions) return;
+
+    const color = preview ? 'rgba(255,42,109,0.4)' : 'rgba(255,42,109,0.8)';
+    const glowColor = preview ? 'rgba(255,42,109,0.15)' : 'rgba(255,42,109,0.3)';
+    const animName = preview ? 'threat-arrow-pulse-preview' : 'threat-arrow-pulse';
+
+    positions.forEach((pos) => {
+        const arrow = document.createElement('div');
+        arrow.className = 'fx-threat-arrow';
+        arrow.style.cssText = [
+            'position:absolute;', pos.css, ';',
+            'z-index:120; pointer-events:none;',
+            'width:0; height:0;',
+            'border-left:20px solid transparent; border-right:20px solid transparent;',
+            'border-top:30px solid ' + color + ';',
+            'filter:drop-shadow(0 0 12px ' + glowColor + ');',
+            'animation:' + animName + ' 1s ease-in-out infinite;',
+        ].join('');
+        container.appendChild(arrow);
+
+        // Label below/beside arrow
+        const label = document.createElement('div');
+        label.className = 'fx-threat-arrow';
+        label.style.cssText = [
+            'position:absolute;', pos.css, ';',
+            'z-index:119; pointer-events:none;',
+            'font-family:"JetBrains Mono",monospace; font-size:10px;',
+            'color:' + color + '; letter-spacing:2px; font-weight:bold;',
+            'margin-top:34px;',
+        ].join('');
+        label.textContent = 'THREAT ' + pos.label;
+        container.appendChild(label);
+    });
+}
+
+function _removeDirectionalThreatArrows() {
+    const container = _state.container;
+    if (!container) return;
+    container.querySelectorAll('.fx-threat-arrow').forEach(el => el.remove());
+}
+
+// ------ Game-over overlay ------
+
+function _showGameOverOverlay(result, data) {
+    _removeGameOverOverlay();
+    const container = _state.container;
+    if (!container) return;
+
+    const isVictory = result === 'victory';
+    const color = isVictory ? '#05ffa1' : '#ff2a6d';
+    const bgColor = isVictory ? 'rgba(5,255,161,0.03)' : 'rgba(255,42,109,0.03)';
+    const borderColor = isVictory ? 'rgba(5,255,161,0.3)' : 'rgba(255,42,109,0.3)';
+
+    const score = data.score || data.final_score || TritiumStore.get('game.score') || 0;
+    const wave = data.wave || TritiumStore.get('game.wave') || '?';
+    const eliminations = data.total_eliminations || TritiumStore.get('game.eliminations') || 0;
+
+    // Battle duration
+    let durationStr = '';
+    if (_state.battleStartTime) {
+        const elapsed = Math.floor((performance.now() - _state.battleStartTime) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        durationStr = mins + ':' + String(secs).padStart(2, '0');
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fx-game-over-overlay';
+    overlay.style.cssText = [
+        'position:absolute; inset:0; pointer-events:none; z-index:200;',
+        'display:flex; flex-direction:column; align-items:center; justify-content:center;',
+        'background:radial-gradient(ellipse at center, ' + bgColor + ' 0%, rgba(0,0,0,0.6) 100%);',
+        'opacity:0; transition:opacity 1.5s ease-in;',
+    ].join('');
+
+    overlay.innerHTML = [
+        '<div style="text-align:center;animation:fx-streak-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards">',
+        // Main result
+        '<div style="font-family:Inter,sans-serif;font-weight:900;font-size:56px;letter-spacing:8px;',
+        'color:' + color + ';text-shadow:0 0 30px ' + color + ',0 0 60px ' + color + '44,0 4px 12px #000;',
+        'text-transform:uppercase">' + (isVictory ? 'VICTORY' : 'DEFEAT') + '</div>',
+        // Subtitle
+        '<div style="font-family:\'JetBrains Mono\',monospace;font-size:14px;color:#aaa;',
+        'letter-spacing:3px;margin-top:8px">' + (isVictory ? 'ALL WAVES CLEARED' : 'PERIMETER BREACHED') + '</div>',
+        // Divider
+        '<div style="width:200px;height:1px;background:linear-gradient(90deg,transparent,' + color + ',transparent);',
+        'margin:20px auto"></div>',
+        // Stats grid
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 32px;margin-top:8px">',
+        _gameOverStat('SCORE', score.toLocaleString(), color),
+        _gameOverStat('WAVES', wave, '#00f0ff'),
+        _gameOverStat('ELIMINATIONS', eliminations, '#fcee0a'),
+        _gameOverStat('TIME', durationStr || '--', '#aaa'),
+        '</div>',
+        // MVP slot (populated async)
+        '<div class="fx-mvp-slot" style="text-align:center;margin-top:16px;min-height:40px"></div>',
+        // PLAY AGAIN button
+        '<div style="margin-top:24px">',
+        '<button class="fx-play-again-btn" style="',
+        'pointer-events:auto;cursor:pointer;',
+        'font-family:Inter,sans-serif;font-weight:700;font-size:16px;letter-spacing:3px;',
+        'color:' + color + ';background:transparent;',
+        'border:2px solid ' + color + ';border-radius:4px;',
+        'padding:10px 32px;text-transform:uppercase;',
+        'text-shadow:0 0 8px ' + color + '44;',
+        'box-shadow:0 0 12px ' + color + '33,inset 0 0 12px ' + color + '11;',
+        'transition:all 0.2s;',
+        '">PLAY AGAIN</button>',
+        '</div>',
+        '</div>',
+    ].join('');
+
+    container.appendChild(overlay);
+    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+    // Fetch MVP data and display it
+    fetch('/api/game/stats/mvp')
+        .then(r => r.json())
+        .then(d => {
+            if (d.status === 'ready' && d.mvp) {
+                const mvpEl = overlay.querySelector('.fx-mvp-slot');
+                if (mvpEl) {
+                    const m = d.mvp;
+                    mvpEl.innerHTML = '<span style="color:#666;font-size:10px;letter-spacing:2px">MVP</span>'
+                        + '<br><span style="color:#fcee0a;font-weight:700;font-size:16px;text-shadow:0 0 8px #fcee0a44">'
+                        + _esc(m.name || m.unit_name || 'Unknown') + '</span>'
+                        + '<br><span style="color:#aaa;font-size:11px">'
+                        + (m.kills || 0) + ' kills'
+                        + (m.accuracy ? ' / ' + Math.round(m.accuracy * 100) + '% acc' : '')
+                        + '</span>';
+                }
+            }
+        })
+        .catch(() => {});
+
+    // PLAY AGAIN button handler
+    const playAgainBtn = overlay.querySelector('.fx-play-again-btn');
+    if (playAgainBtn) {
+        playAgainBtn.addEventListener('mouseenter', () => {
+            playAgainBtn.style.background = color + '22';
+            playAgainBtn.style.boxShadow = '0 0 20px ' + color + '66, inset 0 0 20px ' + color + '22';
+        });
+        playAgainBtn.addEventListener('mouseleave', () => {
+            playAgainBtn.style.background = 'transparent';
+            playAgainBtn.style.boxShadow = '0 0 12px ' + color + '33, inset 0 0 12px ' + color + '11';
+        });
+        playAgainBtn.addEventListener('click', () => {
+            _removeGameOverOverlay();
+            if (window._mapActions) {
+                window._mapActions.resetGame();
+                setTimeout(() => window._mapActions.beginWar(), 500);
+            }
+        });
+    }
+
+    // Auto-dismiss after 30s (longer to allow PLAY AGAIN click)
+    overlay._dismissTimer = setTimeout(() => _removeGameOverOverlay(), 30000);
+}
+
+function _gameOverStat(label, value, color) {
+    return [
+        '<div style="text-align:center">',
+        '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:#666;letter-spacing:2px">' + label + '</div>',
+        '<div style="font-family:Inter,sans-serif;font-weight:700;font-size:22px;color:' + color + ';',
+        'text-shadow:0 0 8px ' + color + '44">' + value + '</div>',
+        '</div>',
+    ].join('');
+}
+
+function _removeGameOverOverlay() {
+    const container = _state.container;
+    if (!container) return;
+    const overlay = container.querySelector('.fx-game-over-overlay');
+    if (overlay) {
+        clearTimeout(overlay._dismissTimer);
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.remove(), 1000);
+    }
 }
 
 /**
@@ -5246,19 +7046,20 @@ function _addKillFeedEntry(killerName, targetName, weaponLabel) {
 
     const entry = document.createElement('div');
     entry.style.cssText = [
-        'background:rgba(6,6,9,0.85); border:1px solid #ff2a6d44;',
-        'border-left:3px solid #ff2a6d; padding:4px 10px;',
-        'font-family:"JetBrains Mono",monospace; font-size:11px;',
+        'background:rgba(6,6,9,0.9); border:1px solid #ff2a6d66;',
+        'border-left:4px solid #ff2a6d; padding:6px 12px;',
+        'font-family:"JetBrains Mono",monospace; font-size:13px;',
         'color:#eee; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+        'box-shadow: 0 2px 8px rgba(0,0,0,0.4), inset 0 0 20px rgba(255,42,109,0.05);',
         'animation: fx-killfeed-in 0.3s ease-out;',
     ].join('');
     const weaponTag = weaponLabel
-        ? ' <span style="color:#fcee0a88;font-size:9px;letter-spacing:1px">[' + _escFx(weaponLabel) + ']</span> '
+        ? ' <span style="color:#fcee0a;font-size:10px;letter-spacing:1px">[' + _esc(weaponLabel) + ']</span> '
         : ' ';
-    entry.innerHTML = '<span style="color:#05ffa1">' + _escFx(killerName) + '</span>'
+    entry.innerHTML = '<span style="color:#05ffa1">' + _esc(killerName) + '</span>'
         + weaponTag
         + '<span style="color:#ff2a6d66">//</span> '
-        + '<span style="color:#ff2a6d">' + _escFx(targetName) + '</span>';
+        + '<span style="color:#ff2a6d">' + _esc(targetName) + '</span>';
 
     feed.prepend(entry);
 
@@ -5272,11 +7073,6 @@ function _addKillFeedEntry(killerName, targetName, weaponLabel) {
         entry.style.animation = 'fx-killfeed-out 0.5s ease-in forwards';
         setTimeout(() => entry.remove(), 500);
     }, 8000);
-}
-
-function _escFx(text) {
-    if (!text) return '';
-    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function _weaponDisplayName(weaponType) {
@@ -5345,6 +7141,22 @@ function _injectFxCss() {
         '  0% { opacity: 1; transform: scale(1); }',
         '  50% { opacity: 0.8; transform: scale(1.5); }',
         '  100% { opacity: 0; transform: scale(0.5); }',
+        '}',
+        '@keyframes threat-arrow-pulse {',
+        '  0%, 100% { opacity: 0.6; filter: drop-shadow(0 0 12px rgba(255,42,109,0.3)); }',
+        '  50% { opacity: 1; filter: drop-shadow(0 0 24px rgba(255,42,109,0.6)); }',
+        '}',
+        '@keyframes threat-arrow-pulse-preview {',
+        '  0%, 100% { opacity: 0.2; }',
+        '  50% { opacity: 0.5; }',
+        '}',
+        '@keyframes wave-countdown-pulse {',
+        '  0%, 100% { opacity: 0.7; }',
+        '  50% { opacity: 1; }',
+        '}',
+        '@keyframes fx-scan-line {',
+        '  0% { top: 0; opacity: 1; }',
+        '  100% { top: 100%; opacity: 0.3; }',
         '}',
     ].join('\n');
     document.head.appendChild(style);
@@ -5427,9 +7239,129 @@ function _createLayerHud() {
         'border:1px solid rgba(0,240,255,0.2);',
         'text-transform:uppercase; letter-spacing:1px;',
         'white-space:nowrap;',
+        _state.showLayerHud ? '' : 'display:none;',
     ].join('');
     _state.container.appendChild(_state.layerHud);
     _updateLayerHud();
+}
+
+// ============================================================
+// Compact Map Legend (bottom-left, always visible)
+// ============================================================
+
+function _createMapLegend() {
+    if (document.getElementById('map-legend')) return;
+    const legend = document.createElement('div');
+    legend.id = 'map-legend';
+    legend.title = 'Map Legend — click to expand/collapse';
+    legend.style.cssText = [
+        'position:absolute; bottom:28px; left:8px; z-index:10;',
+        'font-family:"JetBrains Mono",monospace; font-size:9px;',
+        'background:rgba(6,6,9,0.85); border:1px solid rgba(0,240,255,0.15);',
+        'border-radius:4px; padding:0; cursor:pointer;',
+        'pointer-events:auto; max-width:180px;',
+        'backdrop-filter:blur(4px);',
+    ].join('');
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:4px 8px; color:#00f0ff; font-weight:bold; letter-spacing:0.5px; font-size:8px;';
+    header.textContent = 'LEGEND';
+    legend.appendChild(header);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:0 8px 6px; display:block;';
+
+    const entries = [
+        { color: '#05ffa1', shape: 'circle', label: 'Friendly' },
+        { color: '#ff2a6d', shape: 'square', label: 'Hostile' },
+        { color: '#00a0ff', shape: 'circle', label: 'Neutral' },
+        { color: '#fcee0a', shape: 'circle', label: 'Unknown' },
+        { type: 'sep' },
+        { color: '#05ffa1', shape: 'dashed', label: 'Patrol Route' },
+        { color: '#ff2a6d', shape: 'dashed', label: 'Hostile Objective' },
+        { color: '#00f0ff', shape: 'line', label: 'Building Outline' },
+    ];
+
+    for (const e of entries) {
+        if (e.type === 'sep') {
+            const sep = document.createElement('div');
+            sep.style.cssText = 'border-top:1px solid rgba(0,240,255,0.08); margin:3px 0;';
+            body.appendChild(sep);
+            continue;
+        }
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:5px; padding:1px 0; color:#8a9aaa;';
+        const icon = document.createElement('span');
+        if (e.shape === 'circle') {
+            icon.style.cssText = `width:7px; height:7px; border-radius:50%; background:${e.color}; flex-shrink:0;`;
+        } else if (e.shape === 'square') {
+            icon.style.cssText = `width:7px; height:7px; border-radius:1px; background:${e.color}; flex-shrink:0;`;
+        } else if (e.shape === 'dashed') {
+            icon.style.cssText = `width:14px; height:0; border-top:2px dashed ${e.color}; flex-shrink:0;`;
+        } else if (e.shape === 'line') {
+            icon.style.cssText = `width:14px; height:0; border-top:1.5px solid ${e.color}; flex-shrink:0;`;
+        }
+        const lbl = document.createElement('span');
+        lbl.textContent = e.label;
+        row.appendChild(icon);
+        row.appendChild(lbl);
+        body.appendChild(row);
+    }
+
+    legend.appendChild(body);
+
+    // Collapse toggle
+    let collapsed = false;
+    header.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        collapsed = !collapsed;
+        body.style.display = collapsed ? 'none' : 'block';
+        header.textContent = collapsed ? 'LEGEND +' : 'LEGEND';
+    });
+
+    _state.container.appendChild(legend);
+}
+
+// ============================================================
+// Patrol Route Drawing Toolbar Button
+// ============================================================
+
+function _createPatrolDrawButton() {
+    if (document.getElementById('patrol-draw-btn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'patrol-draw-btn';
+    btn.title = 'Draw Patrol Route (click to place waypoints on map)';
+    btn.style.cssText = [
+        'position:absolute; bottom:110px; left:12px; z-index:10;',
+        'width:36px; height:36px; border-radius:6px;',
+        'background:rgba(6,6,9,0.85); border:1px solid rgba(5,255,161,0.3);',
+        'color:#05ffa1; cursor:pointer; pointer-events:auto;',
+        'display:flex; align-items:center; justify-content:center;',
+        'font-family:"JetBrains Mono",monospace; font-size:14px;',
+        'backdrop-filter:blur(4px); transition:all 0.15s;',
+    ].join('');
+    // Use a simple path/route icon (Unicode)
+    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#05ffa1" stroke-width="1.5">
+        <circle cx="3" cy="3" r="2"/>
+        <circle cx="15" cy="7" r="2"/>
+        <circle cx="9" cy="15" r="2"/>
+        <line x1="5" y1="3" x2="13" y2="7"/>
+        <line x1="15" y1="9" x2="11" y2="15"/>
+    </svg>`;
+
+    btn.addEventListener('mouseenter', () => {
+        btn.style.borderColor = '#05ffa1';
+        btn.style.boxShadow = '0 0 8px rgba(5,255,161,0.4)';
+    });
+    btn.addEventListener('mouseleave', () => {
+        btn.style.borderColor = 'rgba(5,255,161,0.3)';
+        btn.style.boxShadow = 'none';
+    });
+    btn.addEventListener('click', () => {
+        EventBus.emit('patrol:drawRoute', { unitId: null });
+    });
+
+    _state.container.appendChild(btn);
 }
 
 // ============================================================
@@ -5492,6 +7424,7 @@ function _updateLayerHud() {
     if (_state.showSwarmHull) layers.push('SWARM');
     if (_state.showSquadHulls) layers.push('SQUAD');
     if (_state.showHazardZones) layers.push('HAZARD');
+    if (_state.showGeofenceZones) layers.push('GEOFENCE');
     if (_state.showHostileObjectives) layers.push('HOBJ');
     if (_state.showCrowdDensity) layers.push('CROWD');
     if (_state.showCoverPoints) layers.push('COVER');
@@ -5523,6 +7456,9 @@ function _updateLayerHud() {
 
     // Persist layer prefs on every toggle
     _saveLayerPrefs();
+
+    // Notify Layers panel of state change
+    EventBus.emit('map:layers-changed');
 }
 
 // ============================================================
@@ -5647,6 +7583,7 @@ export function setMapMode(mode) {
                 grid: false,
                 waterways: true,
                 parks: true,
+                geoLayers: true,
             });
             if (_state.map) {
                 _state.map.easeTo({ pitch: 0, duration: 500 });
@@ -5665,6 +7602,7 @@ export function setMapMode(mode) {
                 grid: true,
                 waterways: true,
                 parks: true,
+                geoLayers: false,
             });
             if (_state.map) {
                 _state.map.easeTo({ pitch: 45, duration: 500 });
@@ -5681,6 +7619,7 @@ export function setMapMode(mode) {
                 grid: true,
                 waterways: false,
                 parks: false,
+                geoLayers: false,
             });
             if (_state.map) {
                 _state.map.easeTo({ pitch: 0, duration: 500 });
@@ -5718,10 +7657,16 @@ function _onSelectionChanged(unitId) {
         }
     }
 
-    // Re-render all markers to update selection highlight
+    // Re-render all markers to update selection highlight + z-index
     for (const [id, marker] of Object.entries(_state.unitMarkers)) {
         const unit = TritiumStore.units.get(id);
         if (unit) _updateMarkerElement(marker, unit);
+        // Raise selected marker above overlapping neighbors
+        const el = marker.getElement();
+        const container = el ? el.closest('.maplibregl-marker') : null;
+        if (container) {
+            container.style.zIndex = (id === unitId) ? '50' : '';
+        }
     }
     // Update weapon range circle for new selection (or clear if deselected)
     _updateWeaponRange();
@@ -5754,6 +7699,767 @@ function _onPatrolModeEnter(data) {
     _state.patrolWaypoints = [];
     if (_state.container) _state.container.style.cursor = 'crosshair';
     console.log(`[MAP-ML] Patrol mode: click map to set patrol points for ${data.id}`);
+}
+
+// ============================================================
+// Patrol Route Drawing Tool (multi-waypoint with live preview)
+// ============================================================
+
+const PATROL_DRAW_SOURCE = 'patrol-draw-source';
+const PATROL_DRAW_LINE   = 'patrol-draw-line';
+const PATROL_DRAW_RUBBER = 'patrol-draw-rubber';
+const PATROL_DRAW_DOTS   = 'patrol-draw-dots';
+
+// ============================================================
+// Geofence Polygon Drawing Mode (MapLibre)
+// ============================================================
+
+const GEOFENCE_DRAW_SOURCE = 'geofence-draw-source';
+const GEOFENCE_DRAW_LINE   = 'geofence-draw-line';
+const GEOFENCE_DRAW_FILL   = 'geofence-draw-fill';
+
+function _onGeofenceDrawStart() {
+    if (_state.geofenceDrawMode) _geofenceDrawCleanup();
+
+    _state.geofenceDrawMode = true;
+    _state.geofenceDrawVertices = [];
+    _state.geofenceDrawMarkers = [];
+    _state.geofenceDrawMouseLngLat = null;
+
+    if (_state.container) _state.container.style.cursor = 'crosshair';
+    if (_state.map) _state.map.doubleClickZoom.disable();
+
+    // Init GeoJSON source/layers for preview
+    _initGeofenceDrawLayers();
+
+    EventBus.emit('toast:show', {
+        message: 'Click to place vertices. Double-click or Enter to finish. Escape to cancel.',
+        type: 'info',
+    });
+    console.log('[MAP-ML] Geofence draw mode started');
+}
+
+function _geofenceDrawAddVertex(gamePos, lngLat) {
+    const idx = _state.geofenceDrawVertices.length + 1;
+    _state.geofenceDrawVertices.push([gamePos.x, gamePos.y]);
+
+    // Place numbered DOM marker
+    const el = document.createElement('div');
+    el.className = 'geofence-draw-vertex-marker';
+    el.style.cssText = `
+        width: 20px; height: 20px;
+        border-radius: 50%;
+        background: #00f0ff;
+        border: 2px solid #003344;
+        color: #0a0a0f;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        box-shadow: 0 0 8px rgba(0, 240, 255, 0.6);
+    `;
+    el.textContent = String(idx);
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(lngLat)
+        .addTo(_state.map);
+    _state.geofenceDrawMarkers.push(marker);
+
+    _updateGeofenceDrawPreview();
+}
+
+function _updateGeofenceDrawPreview() {
+    if (!_state.map || !_state.map.getSource(GEOFENCE_DRAW_SOURCE)) return;
+
+    const verts = _state.geofenceDrawVertices;
+    const coords = verts.map(v => _gameToLngLat(v[0], v[1]));
+
+    // Build polygon outline (close the ring if 3+ vertices)
+    const lineCoords = [...coords];
+    if (_state.geofenceDrawMouseLngLat && coords.length > 0) {
+        lineCoords.push(_state.geofenceDrawMouseLngLat);
+    }
+    // Close back to first vertex for polygon preview
+    if (lineCoords.length >= 3) {
+        lineCoords.push(lineCoords[0]);
+    }
+
+    const features = [];
+    if (lineCoords.length >= 2) {
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: lineCoords },
+            properties: {},
+        });
+    }
+    // Show semi-transparent fill for 3+ vertices
+    if (lineCoords.length >= 4) { // 3 vertices + closing = 4 coords
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [lineCoords] },
+            properties: {},
+        });
+    }
+
+    _state.map.getSource(GEOFENCE_DRAW_SOURCE).setData({
+        type: 'FeatureCollection',
+        features,
+    });
+}
+
+function _initGeofenceDrawLayers() {
+    if (!_state.map) return;
+
+    if (!_state.map.getSource(GEOFENCE_DRAW_SOURCE)) {
+        _state.map.addSource(GEOFENCE_DRAW_SOURCE, {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+        });
+        _state.map.addLayer({
+            id: GEOFENCE_DRAW_FILL,
+            type: 'fill',
+            source: GEOFENCE_DRAW_SOURCE,
+            filter: ['==', '$type', 'Polygon'],
+            paint: {
+                'fill-color': 'rgba(0, 240, 255, 0.15)',
+                'fill-opacity': 1,
+            },
+        });
+        _state.map.addLayer({
+            id: GEOFENCE_DRAW_LINE,
+            type: 'line',
+            source: GEOFENCE_DRAW_SOURCE,
+            filter: ['==', '$type', 'LineString'],
+            paint: {
+                'line-color': '#00f0ff',
+                'line-width': 2,
+                'line-dasharray': [4, 3],
+            },
+        });
+    }
+}
+
+function _geofenceDrawFinish() {
+    const verts = _state.geofenceDrawVertices;
+    _state.geofenceDrawMode = false;
+    _state.geofenceDrawMouseLngLat = null;
+
+    if (_state.container) _state.container.style.cursor = '';
+    if (_state.map) _state.map.doubleClickZoom.enable();
+
+    _geofenceDrawCleanup();
+
+    if (verts.length >= 3) {
+        // Show the prompt dialog from map.js's _showGeofencePrompt equivalent
+        _showGeofencePromptML(verts);
+    } else {
+        EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a geofence zone', type: 'alert' });
+        EventBus.emit('geofence:drawEnd', {});
+    }
+}
+
+function _geofenceDrawCancel() {
+    _state.geofenceDrawMode = false;
+    _state.geofenceDrawMouseLngLat = null;
+
+    if (_state.container) _state.container.style.cursor = '';
+    if (_state.map) _state.map.doubleClickZoom.enable();
+
+    _geofenceDrawCleanup();
+
+    EventBus.emit('toast:show', { message: 'Geofence drawing cancelled', type: 'info' });
+    EventBus.emit('geofence:drawEnd', {});
+    console.log('[MAP-ML] Geofence draw cancelled');
+}
+
+function _geofenceDrawCleanup() {
+    // Remove vertex markers
+    for (const m of _state.geofenceDrawMarkers) m.remove();
+    _state.geofenceDrawMarkers = [];
+    _state.geofenceDrawVertices = [];
+
+    // Clear preview layers
+    try {
+        if (_state.map) {
+            if (_state.map.getLayer(GEOFENCE_DRAW_LINE)) _state.map.removeLayer(GEOFENCE_DRAW_LINE);
+            if (_state.map.getLayer(GEOFENCE_DRAW_FILL)) _state.map.removeLayer(GEOFENCE_DRAW_FILL);
+            if (_state.map.getSource(GEOFENCE_DRAW_SOURCE)) _state.map.removeSource(GEOFENCE_DRAW_SOURCE);
+        }
+    } catch (_) {}
+}
+
+/**
+ * Show a cyberpunk-styled prompt for geofence zone name and type (MapLibre version).
+ */
+function _showGeofencePromptML(polygon) {
+    const existing = document.getElementById('geofence-prompt-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'geofence-prompt-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+    overlay.innerHTML = `
+        <div style="background:#12121a;border:1px solid #00f0ff;border-radius:8px;padding:16px 20px;min-width:280px;max-width:360px;box-shadow:0 0 30px rgba(0,240,255,0.2)">
+            <div style="color:#00f0ff;font-size:0.65rem;font-weight:bold;margin-bottom:10px;text-transform:uppercase;letter-spacing:2px">New Geofence Zone</div>
+            <input id="geofence-prompt-name" type="text" placeholder="e.g. Perimeter Alpha"
+                   style="width:100%;box-sizing:border-box;background:#0a0a0f;border:1px solid #333;color:#e0e0e0;padding:6px 8px;border-radius:4px;margin-bottom:10px;font-size:0.55rem">
+            <div style="display:flex;gap:6px;margin-bottom:12px">
+                <button class="geofence-type-btn" data-type="monitored"
+                        style="flex:1;padding:5px;border:1px solid #00f0ff;background:rgba(0,240,255,0.1);color:#00f0ff;border-radius:4px;cursor:pointer;font-size:0.45rem;font-weight:bold">MONITORED</button>
+                <button class="geofence-type-btn" data-type="restricted"
+                        style="flex:1;padding:5px;border:1px solid #ff2a6d;background:transparent;color:#ff2a6d;border-radius:4px;cursor:pointer;font-size:0.45rem;font-weight:bold">RESTRICTED</button>
+                <button class="geofence-type-btn" data-type="safe"
+                        style="flex:1;padding:5px;border:1px solid #05ffa1;background:transparent;color:#05ffa1;border-radius:4px;cursor:pointer;font-size:0.45rem;font-weight:bold">SAFE</button>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button id="geofence-prompt-cancel" style="padding:5px 12px;background:transparent;border:1px solid #555;color:#aaa;border-radius:4px;cursor:pointer;font-size:0.45rem">CANCEL</button>
+                <button id="geofence-prompt-save" style="padding:5px 12px;background:#00f0ff;border:none;color:#0a0a0f;border-radius:4px;cursor:pointer;font-weight:bold;font-size:0.45rem">SAVE ZONE</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const nameInput = overlay.querySelector('#geofence-prompt-name');
+    const typeBtns = overlay.querySelectorAll('.geofence-type-btn');
+    const saveBtn = overlay.querySelector('#geofence-prompt-save');
+    const cancelBtn = overlay.querySelector('#geofence-prompt-cancel');
+    let selectedType = 'monitored';
+
+    nameInput.focus();
+
+    typeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            selectedType = btn.dataset.type;
+            typeBtns.forEach(b => b.style.background = 'transparent');
+            const colorMap = { monitored: 'rgba(0,240,255,0.1)', restricted: 'rgba(255,42,109,0.1)', safe: 'rgba(5,255,161,0.1)' };
+            btn.style.background = colorMap[selectedType] || 'transparent';
+        });
+    });
+
+    saveBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim() || `Zone ${Date.now() % 10000}`;
+        overlay.remove();
+        // Save zone directly to backend API (geofence panel may not be open)
+        try {
+            const resp = await fetch('/api/geofence/zones', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    polygon,
+                    zone_type: selectedType,
+                    alert_on_enter: true,
+                    alert_on_exit: true,
+                }),
+            });
+            if (resp.ok) {
+                EventBus.emit('toast:show', { message: `Zone "${name}" created`, type: 'info' });
+            } else {
+                EventBus.emit('toast:show', { message: 'Failed to create zone', type: 'alert' });
+            }
+        } catch (_) {
+            EventBus.emit('toast:show', { message: 'Failed to create zone', type: 'alert' });
+        }
+        // Still emit event so geofence panel refreshes if open
+        EventBus.emit('geofence:zoneDrawn', { polygon, zone_type: selectedType, name });
+        EventBus.emit('geofence:drawEnd', {});
+        // Trigger re-fetch to show the new zone on map
+        setTimeout(() => {
+            _state._lastGeofenceFetch = 0;
+            _updateGeofenceZones();
+        }, 500);
+    });
+
+    cancelBtn.addEventListener('click', () => {
+        overlay.remove();
+        EventBus.emit('geofence:drawEnd', {});
+    });
+
+    nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveBtn.click();
+        if (e.key === 'Escape') cancelBtn.click();
+    });
+}
+
+/**
+ * Enter patrol route drawing mode.
+ * Emitted by patrol panel "DRAW ROUTE" button or toolbar button.
+ */
+function _onPatrolDrawRouteStart(data) {
+    // Cancel any existing draw mode
+    if (_state.patrolDrawMode) _patrolDrawCleanup();
+
+    _state.patrolDrawMode = true;
+    _state.patrolDrawUnitId = data?.unitId || null;
+    _state.patrolDrawWaypoints = [];
+    _state.patrolDrawMarkers = [];
+    _state.patrolDrawMouseLngLat = null;
+
+    if (_state.container) _state.container.style.cursor = 'crosshair';
+
+    // Disable map double-click zoom during drawing
+    if (_state.map) _state.map.doubleClickZoom.disable();
+
+    // Create the drawing preview GeoJSON source and layers
+    _initPatrolDrawLayers();
+
+    // Show HUD
+    _showPatrolDrawHud();
+
+    const unit = _state.patrolDrawUnitId || 'unassigned';
+    EventBus.emit('toast:show', {
+        message: `Drawing patrol route${unit !== 'unassigned' ? ' for ' + unit : ''}. Click to place waypoints. Double-click or Enter to finish. Escape to cancel.`,
+        type: 'info',
+    });
+    console.log(`[MAP-ML] Patrol draw mode started for: ${unit}`);
+}
+
+/**
+ * Add a waypoint during patrol draw mode.
+ */
+function _patrolDrawAddWaypoint(gamePos, lngLat) {
+    const idx = _state.patrolDrawWaypoints.length + 1;
+    _state.patrolDrawWaypoints.push({ x: gamePos.x, y: gamePos.y });
+
+    // Add a numbered DOM marker at the waypoint position
+    const el = document.createElement('div');
+    el.className = 'patrol-draw-wp-marker';
+    el.style.cssText = `
+        width: 24px; height: 24px;
+        border-radius: 50%;
+        background: #05ffa1;
+        border: 2px solid #003322;
+        color: #0a0a0f;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        box-shadow: 0 0 8px rgba(5, 255, 161, 0.6);
+    `;
+    el.textContent = String(idx);
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(lngLat)
+        .addTo(_state.map);
+
+    _state.patrolDrawMarkers.push(marker);
+
+    // Update preview line GeoJSON
+    _updatePatrolDrawPreview();
+
+    // Update HUD
+    _updatePatrolDrawHud();
+}
+
+/**
+ * Build GeoJSON for the patrol draw preview (placed waypoints + rubber-band to cursor).
+ */
+function _buildPatrolDrawGeoJSON() {
+    const features = [];
+    const wps = _state.patrolDrawWaypoints;
+
+    if (wps.length >= 2) {
+        // Solid line through placed waypoints
+        const coords = wps.map(w => _gameToLngLat(w.x, w.y));
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: { kind: 'placed' },
+        });
+    }
+
+    // Rubber-band line from last waypoint to mouse cursor
+    if (wps.length >= 1 && _state.patrolDrawMouseLngLat) {
+        const lastWp = wps[wps.length - 1];
+        const lastLL = _gameToLngLat(lastWp.x, lastWp.y);
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [lastLL, _state.patrolDrawMouseLngLat] },
+            properties: { kind: 'rubber' },
+        });
+    }
+
+    // Point features at each waypoint (for circle layer)
+    for (let i = 0; i < wps.length; i++) {
+        features.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: _gameToLngLat(wps[i].x, wps[i].y) },
+            properties: { index: i },
+        });
+    }
+
+    return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Initialize MapLibre source and layers for patrol draw preview.
+ */
+function _initPatrolDrawLayers() {
+    if (!_state.map) return;
+
+    // Clean up any leftover layers from a previous draw
+    _removePatrolDrawLayers();
+
+    _state.map.addSource(PATROL_DRAW_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+    });
+
+    // Dashed line for placed waypoints
+    _state.map.addLayer({
+        id: PATROL_DRAW_LINE,
+        type: 'line',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['all', ['==', '$type', 'LineString'], ['==', ['get', 'kind'], 'placed']],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': '#05ffa1',
+            'line-width': 3,
+            'line-opacity': 0.85,
+            'line-dasharray': [4, 3],
+        },
+    });
+
+    // Rubber-band line (thinner, more transparent)
+    _state.map.addLayer({
+        id: PATROL_DRAW_RUBBER,
+        type: 'line',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['all', ['==', '$type', 'LineString'], ['==', ['get', 'kind'], 'rubber']],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': '#05ffa1',
+            'line-width': 2,
+            'line-opacity': 0.4,
+            'line-dasharray': [2, 4],
+        },
+    });
+
+    // Glow dots at each waypoint
+    _state.map.addLayer({
+        id: PATROL_DRAW_DOTS,
+        type: 'circle',
+        source: PATROL_DRAW_SOURCE,
+        filter: ['==', '$type', 'Point'],
+        paint: {
+            'circle-radius': 6,
+            'circle-color': '#05ffa1',
+            'circle-opacity': 0.9,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#003322',
+        },
+    });
+}
+
+/**
+ * Remove patrol draw preview layers and source.
+ */
+function _removePatrolDrawLayers() {
+    if (!_state.map) return;
+    try {
+        if (_state.map.getLayer(PATROL_DRAW_DOTS)) _state.map.removeLayer(PATROL_DRAW_DOTS);
+        if (_state.map.getLayer(PATROL_DRAW_RUBBER)) _state.map.removeLayer(PATROL_DRAW_RUBBER);
+        if (_state.map.getLayer(PATROL_DRAW_LINE)) _state.map.removeLayer(PATROL_DRAW_LINE);
+        if (_state.map.getSource(PATROL_DRAW_SOURCE)) _state.map.removeSource(PATROL_DRAW_SOURCE);
+    } catch (_e) { /* layers may not exist */ }
+}
+
+/**
+ * Update the GeoJSON data for patrol draw preview.
+ */
+function _updatePatrolDrawPreview() {
+    if (!_state.map || !_state.map.getSource(PATROL_DRAW_SOURCE)) return;
+    const geojson = _buildPatrolDrawGeoJSON();
+    _state.map.getSource(PATROL_DRAW_SOURCE).setData(geojson);
+}
+
+/**
+ * Show the patrol drawing HUD (top-center status bar).
+ */
+function _showPatrolDrawHud() {
+    if (_state.patrolDrawHudEl) _state.patrolDrawHudEl.remove();
+    const hud = document.createElement('div');
+    hud.id = 'patrol-draw-hud';
+    hud.style.cssText = `
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100;
+        background: rgba(10, 10, 15, 0.9);
+        border: 1px solid #05ffa1;
+        border-radius: 6px;
+        padding: 8px 18px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: #05ffa1;
+        pointer-events: none;
+        text-align: center;
+        box-shadow: 0 0 12px rgba(5, 255, 161, 0.3);
+    `;
+    hud.innerHTML = 'PATROL ROUTE: 0 waypoints placed &mdash; click to add &mdash; double-click/Enter to finish &mdash; Escape to cancel';
+    const container = _state.container || document.getElementById('map-container');
+    if (container) container.appendChild(hud);
+    _state.patrolDrawHudEl = hud;
+}
+
+/**
+ * Update the patrol drawing HUD with current waypoint count.
+ */
+function _updatePatrolDrawHud() {
+    if (!_state.patrolDrawHudEl) return;
+    const n = _state.patrolDrawWaypoints.length;
+    const unit = _state.patrolDrawUnitId || 'unassigned';
+    _state.patrolDrawHudEl.innerHTML =
+        `PATROL ROUTE for <span style="color:#00f0ff">${unit}</span>: ` +
+        `<span style="color:#fcee0a">${n}</span> waypoint${n !== 1 ? 's' : ''} placed &mdash; ` +
+        (n < 2 ? 'click to add (need 2+)' : 'double-click/Enter to finish') +
+        ' &mdash; Escape to cancel';
+}
+
+/**
+ * Finish patrol route drawing: prompt for name and POST to API.
+ */
+function _patrolDrawFinish() {
+    if (!_state.patrolDrawMode) return;
+    const wps = _state.patrolDrawWaypoints.slice();
+    const unitId = _state.patrolDrawUnitId;
+
+    if (wps.length < 2) {
+        EventBus.emit('toast:show', { message: 'Need at least 2 waypoints for a patrol route', type: 'alert' });
+        return;
+    }
+
+    // Clean up drawing state and visuals
+    _patrolDrawCleanup();
+
+    // Show a name prompt modal
+    _showPatrolRouteNamePrompt(wps, unitId);
+}
+
+/**
+ * Show a modal dialog prompting for route name, loop preference, and speed.
+ */
+function _showPatrolRouteNamePrompt(waypoints, unitId) {
+    const overlay = document.createElement('div');
+    overlay.id = 'patrol-route-prompt-overlay';
+    overlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 9999;
+        background: rgba(0,0,0,0.6);
+        display: flex; align-items: center; justify-content: center;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: #0e0e14;
+        border: 1px solid #05ffa1;
+        border-radius: 8px;
+        padding: 24px;
+        width: 360px;
+        font-family: "JetBrains Mono", monospace;
+        color: #e0e0e0;
+        box-shadow: 0 0 30px rgba(5, 255, 161, 0.2);
+    `;
+
+    const defaultName = unitId ? `Patrol-${unitId}` : `Patrol-${Date.now().toString(36)}`;
+
+    modal.innerHTML = `
+        <div style="color:#05ffa1; font-size:14px; font-weight:bold; margin-bottom:16px;">SAVE PATROL ROUTE</div>
+        <div style="margin-bottom:12px;">
+            <label style="font-size:11px; color:#888;">ROUTE NAME</label><br>
+            <input id="patrol-route-name" type="text" value="${defaultName}" style="
+                width:100%; box-sizing:border-box; padding:6px 10px; margin-top:4px;
+                background:#1a1a2e; border:1px solid #333; border-radius:4px;
+                color:#e0e0e0; font-family:inherit; font-size:12px;
+            ">
+        </div>
+        <div style="margin-bottom:12px; display:flex; gap:16px;">
+            <label style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px;">
+                <input id="patrol-route-loop" type="checkbox" checked> LOOP
+            </label>
+            <div style="flex:1;">
+                <label style="font-size:11px; color:#888;">SPEED</label><br>
+                <input id="patrol-route-speed" type="number" value="1.0" min="0.1" max="20" step="0.1" style="
+                    width:80px; padding:4px 8px; margin-top:4px;
+                    background:#1a1a2e; border:1px solid #333; border-radius:4px;
+                    color:#e0e0e0; font-family:inherit; font-size:12px;
+                ">
+            </div>
+        </div>
+        <div style="font-size:11px; color:#888; margin-bottom:16px;">
+            ${waypoints.length} waypoints${unitId ? ' for <span style="color:#00f0ff">' + unitId + '</span>' : ''}
+        </div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button id="patrol-route-cancel-btn" style="
+                padding:6px 16px; background:#1a1a2e; border:1px solid #555;
+                border-radius:4px; color:#aaa; cursor:pointer; font-family:inherit; font-size:11px;
+            ">CANCEL</button>
+            <button id="patrol-route-save-btn" style="
+                padding:6px 16px; background:#05ffa1; border:none;
+                border-radius:4px; color:#0a0a0f; cursor:pointer; font-family:inherit; font-size:11px; font-weight:bold;
+            ">SAVE ROUTE</button>
+        </div>
+    `;
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Focus the name input
+    const nameInput = document.getElementById('patrol-route-name');
+    if (nameInput) { nameInput.focus(); nameInput.select(); }
+
+    function close() { overlay.remove(); }
+
+    function save() {
+        const name = (document.getElementById('patrol-route-name')?.value || defaultName).trim();
+        const loop = document.getElementById('patrol-route-loop')?.checked ?? true;
+        const speed = parseFloat(document.getElementById('patrol-route-speed')?.value) || 1.0;
+        close();
+
+        // POST to patrol routes API
+        const wpsArray = waypoints.map(w => [w.x, w.y]);
+        fetch('/api/patrols/routes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, waypoints: wpsArray, loop, speed }),
+        }).then(resp => {
+            if (!resp.ok) throw new Error('API error');
+            return resp.json();
+        }).then(route => {
+            EventBus.emit('toast:show', {
+                message: `Patrol route "${name}" saved (${waypoints.length} waypoints)`,
+                type: 'info',
+            });
+            console.log('[MAP-ML] Patrol route created:', route);
+
+            // If a unit was specified, assign it to the route
+            if (unitId && route.route_id) {
+                fetch('/api/patrols/assign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ route_id: route.route_id, asset_id: unitId }),
+                }).then(r => {
+                    if (r.ok) {
+                        EventBus.emit('toast:show', {
+                            message: `${unitId} assigned to patrol "${name}"`,
+                            type: 'info',
+                        });
+                    }
+                }).catch(() => {});
+
+                // Also send the patrol command via Amy for simulation engine
+                const wpsJson = JSON.stringify(wpsArray);
+                fetch('/api/amy/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'patrol', params: [unitId, wpsJson] }),
+                }).catch(() => {});
+            }
+        }).catch(err => {
+            console.error('[MAP-ML] Failed to create patrol route:', err);
+            EventBus.emit('toast:show', { message: 'Failed to save patrol route', type: 'alert' });
+        });
+    }
+
+    document.getElementById('patrol-route-cancel-btn')?.addEventListener('click', close);
+    document.getElementById('patrol-route-save-btn')?.addEventListener('click', save);
+
+    // Enter in name input saves, Escape closes
+    function onKey(e) {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    }
+    overlay.addEventListener('keydown', onKey);
+}
+
+/**
+ * Cancel patrol route drawing and clean up.
+ */
+function _patrolDrawCancel() {
+    if (!_state.patrolDrawMode) return;
+    _patrolDrawCleanup();
+    EventBus.emit('toast:show', { message: 'Patrol route drawing cancelled', type: 'info' });
+}
+
+/**
+ * Clean up all patrol draw state, markers, layers, and HUD.
+ */
+function _patrolDrawCleanup() {
+    _state.patrolDrawMode = false;
+    _state.patrolDrawUnitId = null;
+    _state.patrolDrawWaypoints = [];
+    _state.patrolDrawMouseLngLat = null;
+
+    // Remove numbered markers
+    for (const m of _state.patrolDrawMarkers) {
+        m.remove();
+    }
+    _state.patrolDrawMarkers = [];
+
+    // Remove preview layers
+    _removePatrolDrawLayers();
+
+    // Remove HUD
+    if (_state.patrolDrawHudEl) {
+        _state.patrolDrawHudEl.remove();
+        _state.patrolDrawHudEl = null;
+    }
+
+    // Restore cursor
+    if (_state.container) _state.container.style.cursor = '';
+
+    // Re-enable double-click zoom
+    if (_state.map) _state.map.doubleClickZoom.enable();
+}
+
+/**
+ * Handle double-click on map: finish patrol draw if active.
+ */
+function _onMapDblClick(e) {
+    if (_state.geofenceDrawMode && _state.geofenceDrawVertices.length >= 3) {
+        e.preventDefault();
+        _geofenceDrawFinish();
+        return;
+    }
+    if (_state.patrolDrawMode && _state.patrolDrawWaypoints.length >= 2) {
+        e.preventDefault();
+        _patrolDrawFinish();
+        return;
+    }
+}
+
+/**
+ * Handle map:drawFinish event (Enter key) in MapLibre context.
+ */
+function _onDrawFinishML() {
+    if (_state.geofenceDrawMode) {
+        _geofenceDrawFinish();
+        return;
+    }
+    if (_state.patrolDrawMode) {
+        _patrolDrawFinish();
+    }
+}
+
+/**
+ * Handle map:drawCancel event (Escape key) in MapLibre context.
+ */
+function _onDrawCancelML() {
+    if (_state.geofenceDrawMode) {
+        _geofenceDrawCancel();
+        return;
+    }
+    if (_state.patrolDrawMode) {
+        _patrolDrawCancel();
+    }
 }
 
 /**
@@ -5847,14 +8553,12 @@ function _onMapClick(e) {
         return;
     }
 
-    // Patrol mode: add waypoint for patrol route
+    // Patrol mode (legacy 2-click): add waypoint for patrol route
     if (_state.patrolMode && _state.patrolUnitId) {
         const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
         if (!_state.patrolWaypoints) _state.patrolWaypoints = [];
         _state.patrolWaypoints.push({ x: game.x, y: game.y });
-        // Show transient marker at waypoint
         _onDropWaypoint({ x: game.x, y: game.y, unitId: _state.patrolUnitId });
-        // After 2+ points, send patrol via Amy command (no control lock needed)
         if (_state.patrolWaypoints.length >= 2) {
             const wpsJson = JSON.stringify(_state.patrolWaypoints.map(w => [w.x, w.y]));
             fetch('/api/amy/command', {
@@ -5875,6 +8579,20 @@ function _onMapClick(e) {
             _state.patrolWaypoints = [];
             if (_state.container) _state.container.style.cursor = '';
         }
+        return;
+    }
+
+    // Geofence draw mode: add vertex to polygon
+    if (_state.geofenceDrawMode) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        _geofenceDrawAddVertex(game, [e.lngLat.lng, e.lngLat.lat]);
+        return;
+    }
+
+    // Patrol draw mode: add waypoint to multi-point route drawing
+    if (_state.patrolDrawMode) {
+        const game = _lngLatToGame(e.lngLat.lng, e.lngLat.lat);
+        _patrolDrawAddWaypoint(game, [e.lngLat.lng, e.lngLat.lat]);
         return;
     }
 
@@ -6170,9 +8888,36 @@ export function toggleTilt() {
 
 export function toggleMesh() {
     _state.showMesh = !_state.showMesh;
+    // Sync with meshState global if available
+    if (typeof meshState !== 'undefined') {
+        meshState.visible = _state.showMesh;
+    }
     // Mesh overlay is drawn on the canvas overlay, not a MapLibre layer,
     // so just toggle the state flag and the render loop will pick it up.
     console.log(`[MAP-ML] Mesh network ${_state.showMesh ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshNodes() {
+    _state.showMeshNodes = !_state.showMeshNodes;
+    if (typeof meshState !== 'undefined') meshState.showNodes = _state.showMeshNodes;
+    console.log(`[MAP-ML] Mesh nodes ${_state.showMeshNodes ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshLinks() {
+    _state.showMeshLinks = !_state.showMeshLinks;
+    if (typeof meshState !== 'undefined') meshState.showLinks = _state.showMeshLinks;
+    console.log(`[MAP-ML] Mesh links ${_state.showMeshLinks ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshCoverage() {
+    _state.showMeshCoverage = !_state.showMeshCoverage;
+    if (typeof meshState !== 'undefined') meshState.showCoverage = _state.showMeshCoverage;
+    console.log(`[MAP-ML] Mesh coverage ${_state.showMeshCoverage ? 'ON' : 'OFF'}`);
+}
+
+export function togglePredictionCones() {
+    _state.showPredictionCones = !_state.showPredictionCones;
+    console.log(`[MAP-ML] Prediction cones ${_state.showPredictionCones ? 'ON' : 'OFF'}`);
 }
 
 export function togglePatrolRoutes() {
@@ -6188,6 +8933,21 @@ export function togglePatrolRoutes() {
     }
     _updateLayerHud();
     console.log(`[MAP-ML] Patrol Routes ${_state.showPatrolRoutes ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle GIS data layers (traffic signals, water towers, power lines, etc.)
+ */
+export function toggleGeoLayers() {
+    _state.showGeoLayers = !_state.showGeoLayers;
+    const vis = _state.showGeoLayers ? 'visible' : 'none';
+    for (const id of _state.geoLayerIds) {
+        if (_state.map && _state.map.getLayer(id)) {
+            try { _state.map.setLayoutProperty(id, 'visibility', vis); } catch (e) {}
+        }
+    }
+    _updateLayerHud();
+    console.log(`[MAP-ML] GIS Layers ${_state.showGeoLayers ? 'ON' : 'OFF'}`);
 }
 
 /**
@@ -6212,9 +8972,11 @@ export function toggleAllLayers() {
     const defaultOnKeys = [
         'showSatellite', 'showRoads', 'showBuildings', 'showWaterways', 'showParks',
         'showUnits', 'showLabels', 'showMesh', 'showPatrolRoutes',
+        'showHealthBars', 'showSelectionFx', 'showWeaponRange',
+        'showSquadHulls', 'showSwarmHull', 'showHostileObjectives', 'showHostileIntel',
+        'showHazardZones', 'showUnitSignals', 'showCrowdDensity', 'showThoughts',
         'showTracers', 'showExplosions', 'showParticles', 'showHitFlashes', 'showFloatingText',
         'showKillFeed', 'showScreenFx', 'showBanners', 'showLayerHud',
-        'showHealthBars', 'showSelectionFx',
     ];
     const onCount = defaultOnKeys.filter(k => _state[k]).length;
     const target = onCount <= defaultOnKeys.length / 2;
@@ -6225,7 +8987,10 @@ export function toggleAllLayers() {
     // Set the FX/overlay/decoration flags that setLayers doesn't cover
     const fxKeys = [
         'showGrid', 'showMesh', 'showPatrolRoutes',
-        'showHealthBars', 'showSelectionFx',
+        'showHealthBars', 'showSelectionFx', 'showWeaponRange',
+        'showSquadHulls', 'showSwarmHull', 'showHostileObjectives', 'showHostileIntel',
+        'showCoverPoints', 'showHazardZones', 'showUnitSignals', 'showCrowdDensity',
+        'showThoughts',
         'showTracers', 'showExplosions', 'showParticles', 'showHitFlashes', 'showFloatingText',
         'showKillFeed', 'showScreenFx', 'showBanners', 'showLayerHud',
         'showFog', 'showTerrain',
@@ -6369,6 +9134,13 @@ export function toggleHazardZones() {
     console.log(`[MAP-ML] Hazard Zones ${_state.showHazardZones ? 'ON' : 'OFF'}`);
 }
 
+export function toggleGeofenceZones() {
+    _state.showGeofenceZones = !_state.showGeofenceZones;
+    if (!_state.showGeofenceZones) _clearGeofenceZones();
+    _updateLayerHud();
+    console.log(`[MAP-ML] Geofence Zones ${_state.showGeofenceZones ? 'ON' : 'OFF'}`);
+}
+
 export function toggleHostileObjectives() {
     _state.showHostileObjectives = !_state.showHostileObjectives;
     if (!_state.showHostileObjectives) _clearHostileObjectives();
@@ -6414,6 +9186,156 @@ export function toggleAutoFollow() {
     }
 }
 
+export function toggleCoverageOverlap() {
+    _state.showCoverageOverlap = !_state.showCoverageOverlap;
+    if (_state.showCoverageOverlap) {
+        _fetchAndRenderCoverage();
+    } else {
+        _removeCoverageLayer();
+    }
+    console.log(`[MAP-ML] Coverage Overlap ${_state.showCoverageOverlap ? 'ON' : 'OFF'}`);
+}
+
+// Coverage overlap rendering
+const COVERAGE_SOURCE = 'coverage-overlap-src';
+const COVERAGE_FILL_1 = 'coverage-overlap-fill-1';
+const COVERAGE_FILL_2 = 'coverage-overlap-fill-2';
+const COVERAGE_FILL_3 = 'coverage-overlap-fill-3';
+
+async function _fetchAndRenderCoverage() {
+    if (!_state.map) return;
+
+    try {
+        const resp = await fetch('/api/fleet/coverage');
+        const data = await resp.ok ? resp.json() : { coverage: [] };
+        const coverage = (await data).coverage || data.coverage || [];
+
+        // Build GeoJSON circles from sensor positions
+        // Each sensor gets a coverage radius circle; overlaps are computed via layering
+        const features = [];
+        const sensorPositions = [];
+
+        for (const sensor of coverage) {
+            const lng = sensor.longitude || sensor.lng;
+            const lat = sensor.latitude || sensor.lat;
+            const radius = sensor.range_m || sensor.radius || 50;
+            if (lng === undefined || lat === undefined) continue;
+            sensorPositions.push({ lng, lat, radius, id: sensor.device_id || sensor.id });
+
+            // Create a circle polygon (36 vertices)
+            const circle = _createCirclePolygon(lng, lat, radius, 36);
+            features.push({
+                type: 'Feature',
+                properties: { sensor_count: 1, sensor_id: sensor.device_id || sensor.id },
+                geometry: { type: 'Polygon', coordinates: [circle] },
+            });
+        }
+
+        // If no sensors have positions, generate grid-based coverage from unit positions
+        if (features.length === 0) {
+            // Fallback: use unit positions from store as sensor locations
+            TritiumStore.units.forEach((u, id) => {
+                const type = (u.asset_type || u.type || '').toLowerCase();
+                if (type.includes('sensor') || type.includes('camera') || type === 'ble_device' || type === 'mesh_radio') {
+                    const pos = u.position;
+                    if (pos && pos.x !== undefined) {
+                        const lngLat = _gameToLngLat(pos.x, pos.y);
+                        const radius = type.includes('camera') ? 30 : type === 'mesh_radio' ? 100 : 50;
+                        const circle = _createCirclePolygon(lngLat[0], lngLat[1], radius, 36);
+                        features.push({
+                            type: 'Feature',
+                            properties: { sensor_count: 1 },
+                            geometry: { type: 'Polygon', coordinates: [circle] },
+                        });
+                    }
+                }
+            });
+        }
+
+        const geojson = { type: 'FeatureCollection', features };
+
+        // Remove old layers
+        _removeCoverageLayer();
+
+        // Add source and layers
+        _state.map.addSource(COVERAGE_SOURCE, { type: 'geojson', data: geojson });
+
+        // Single-coverage layer (subtle green)
+        _state.map.addLayer({
+            id: COVERAGE_FILL_1,
+            type: 'fill',
+            source: COVERAGE_SOURCE,
+            paint: {
+                'fill-color': '#05ffa1',
+                'fill-opacity': 0.06,
+            },
+        });
+
+        // For overlap detection, we add the same data again with different opacity
+        // MapLibre renders overlapping polygons with additive opacity
+        _state.map.addLayer({
+            id: COVERAGE_FILL_2,
+            type: 'fill',
+            source: COVERAGE_SOURCE,
+            paint: {
+                'fill-color': '#00f0ff',
+                'fill-opacity': 0.05,
+            },
+        });
+
+        // Outline for each sensor coverage area
+        _state.map.addLayer({
+            id: COVERAGE_FILL_3,
+            type: 'line',
+            source: COVERAGE_SOURCE,
+            paint: {
+                'line-color': '#05ffa1',
+                'line-opacity': 0.25,
+                'line-width': 1,
+                'line-dasharray': [4, 4],
+            },
+        });
+
+    } catch (e) {
+        console.warn('[MAP-ML] Coverage fetch failed:', e);
+        // Render fallback with unit positions
+    }
+}
+
+function _removeCoverageLayer() {
+    if (!_state.map) return;
+    for (const layerId of [COVERAGE_FILL_1, COVERAGE_FILL_2, COVERAGE_FILL_3]) {
+        if (_state.map.getLayer(layerId)) {
+            try { _state.map.removeLayer(layerId); } catch (e) {}
+        }
+    }
+    if (_state.map.getSource(COVERAGE_SOURCE)) {
+        try { _state.map.removeSource(COVERAGE_SOURCE); } catch (e) {}
+    }
+}
+
+function _createCirclePolygon(lng, lat, radiusMeters, numVertices) {
+    const coords = [];
+    const earthRadius = 6371000;
+    const angularDist = radiusMeters / earthRadius;
+    const latRad = lat * Math.PI / 180;
+    const lngRad = lng * Math.PI / 180;
+
+    for (let i = 0; i <= numVertices; i++) {
+        const bearing = (2 * Math.PI * i) / numVertices;
+        const vertLat = Math.asin(
+            Math.sin(latRad) * Math.cos(angularDist) +
+            Math.cos(latRad) * Math.sin(angularDist) * Math.cos(bearing)
+        );
+        const vertLng = lngRad + Math.atan2(
+            Math.sin(bearing) * Math.sin(angularDist) * Math.cos(latRad),
+            Math.cos(angularDist) - Math.sin(latRad) * Math.sin(vertLat)
+        );
+        coords.push([vertLng * 180 / Math.PI, vertLat * 180 / Math.PI]);
+    }
+    return coords;
+}
+
 export function centerOnAction() {
     let sumLng = 0, sumLat = 0, count = 0;
     TritiumStore.units.forEach(u => {
@@ -6432,6 +9354,328 @@ export function centerOnAction() {
             duration: 1000,
         });
     }
+}
+
+// ── Camera Markers ─────────────────────────────────────────────────────
+// Shows camera icons on the tactical map for cameras that have lat/lng.
+
+const CAMERA_SOURCE_ID = 'tritium-camera-markers';
+const CAMERA_FOV_SOURCE_ID = 'tritium-camera-fov';
+const CAMERA_LAYER_CIRCLE = 'tritium-camera-circle';
+const CAMERA_LAYER_GLOW = 'tritium-camera-glow';
+const CAMERA_LAYER_LABEL = 'tritium-camera-label';
+const CAMERA_LAYER_ICON = 'tritium-camera-icon';
+const CAMERA_LAYER_FOV = 'tritium-camera-fov-fill';
+const CAMERA_LAYER_FOV_LINE = 'tritium-camera-fov-line';
+
+/**
+ * Build a GeoJSON polygon for a camera FOV cone (sector shape).
+ * heading: degrees clockwise from north, fovAngle: total FOV in degrees,
+ * rangeMeterss: how far the cone extends from the camera.
+ */
+function _buildFovConePolygon(lng, lat, heading, fovAngle, rangeMeters) {
+    const steps = 24;
+    const halfFov = fovAngle / 2;
+    const startBearing = heading - halfFov;
+    const endBearing = heading + halfFov;
+    const coords = [[lng, lat]]; // start at camera position
+
+    for (let i = 0; i <= steps; i++) {
+        const bearing = startBearing + (endBearing - startBearing) * (i / steps);
+        const bearingRad = (bearing * Math.PI) / 180;
+        // Approximate: 1 degree lat ~ 111320m, 1 degree lng ~ 111320 * cos(lat)
+        const latRad = (lat * Math.PI) / 180;
+        const dLat = (rangeMeters * Math.cos(bearingRad)) / 111320;
+        const dLng = (rangeMeters * Math.sin(bearingRad)) / (111320 * Math.cos(latRad));
+        coords.push([lng + dLng, lat + dLat]);
+    }
+    coords.push([lng, lat]); // close the polygon
+    return coords;
+}
+
+/**
+ * Fetch cameras from the REST API and emit cameras:changed so the map
+ * renders camera markers.  Called on map load and when demo starts.
+ */
+let _cameraGeoSynced = false;
+
+async function _fetchCamerasForMap() {
+    try {
+        const resp = await fetch('/api/camera-feeds/');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const cameras = Array.isArray(data) ? data : (data.cameras || data.feeds || []);
+        if (cameras.length > 0) {
+            console.log(`[MAP-ML] Fetched ${cameras.length} camera(s) for map markers`);
+            _onCamerasChanged({ cameras });
+
+            // When cameras first appear (e.g. demo mode started after page load),
+            // re-fetch geo reference in case demo mode updated it, then fly there.
+            if (!_cameraGeoSynced && _state.map) {
+                _cameraGeoSynced = true;
+                try {
+                    const geoResp = await fetch('/api/geo/reference');
+                    if (geoResp.ok) {
+                        const geoData = await geoResp.json();
+                        if (geoData.initialized && geoData.lat && geoData.lng) {
+                            const curCenter = _state.map.getCenter();
+                            const dist = Math.abs(curCenter.lat - geoData.lat) + Math.abs(curCenter.lng - geoData.lng);
+                            // Only fly if geo reference is significantly different from current center
+                            if (dist > 0.01) {
+                                console.log(`[MAP-ML] Geo reference changed, flying to ${geoData.lat.toFixed(4)}, ${geoData.lng.toFixed(4)}`);
+                                _state.geoCenter = { lat: geoData.lat, lng: geoData.lng };
+                                _state.map.flyTo({ center: [geoData.lng, geoData.lat], zoom: 17, duration: 1500 });
+                            }
+                        }
+                    }
+                } catch (_) { /* non-fatal */ }
+            }
+        }
+    } catch (err) {
+        console.warn('[MAP-ML] Camera marker fetch/render failed:', err.message || err);
+    }
+}
+
+function _onCamerasChanged(data) {
+    if (!_state.map || !data || !data.cameras) return;
+    // Ensure the map style is ready to accept sources/layers.
+    // isStyleLoaded() can stay false forever if tiles fail to load,
+    // so we check getStyle() which returns the style object once parsed.
+    // If no style exists yet, defer with a retry.
+    try {
+        const style = _state.map.getStyle();
+        if (!style || !style.sources) {
+            console.log('[MAP-ML] Style not ready yet, deferring camera markers (retry in 2s)');
+            setTimeout(() => _onCamerasChanged(data), 2000);
+            return;
+        }
+    } catch (e) {
+        console.log('[MAP-ML] Style not ready yet, deferring camera markers (retry in 2s)');
+        setTimeout(() => _onCamerasChanged(data), 2000);
+        return;
+    }
+    const cameras = data.cameras.filter(c => c.lat != null && c.lng != null);
+    if (cameras.length === 0) return;
+    const geojson = {
+        type: 'FeatureCollection',
+        features: cameras.map(c => ({
+            type: 'Feature',
+            properties: {
+                id: c.id || c.source_id || '',
+                name: c.name || c.id || 'Camera',
+                status: c.status || 'offline',
+            },
+            geometry: {
+                type: 'Point',
+                coordinates: [c.lng, c.lat],
+            },
+        })),
+    };
+
+    // Build FOV cone polygons for cameras that have heading info
+    const fovFeatures = cameras.map(c => {
+        const heading = c.heading != null ? c.heading : 0;
+        const fovAngle = c.fov_angle || c.coverage_cone_angle || 60; // default 60 deg
+        const rangeM = c.fov_range || c.coverage_radius_meters || 30; // default 30m
+        const coords = _buildFovConePolygon(c.lng, c.lat, heading, fovAngle, rangeM);
+        return {
+            type: 'Feature',
+            properties: {
+                id: c.id || c.source_id || '',
+                status: c.status || 'offline',
+            },
+            geometry: {
+                type: 'Polygon',
+                coordinates: [coords],
+            },
+        };
+    });
+    const fovGeojson = { type: 'FeatureCollection', features: fovFeatures };
+
+    try {
+        if (_state.map.getSource(CAMERA_SOURCE_ID)) {
+            _state.map.getSource(CAMERA_SOURCE_ID).setData(geojson);
+        } else {
+            _state.map.addSource(CAMERA_SOURCE_ID, { type: 'geojson', data: geojson });
+
+            // Camera outer glow ring — makes cameras visible at all zoom levels
+            _state.map.addLayer({
+                id: CAMERA_LAYER_GLOW,
+                type: 'circle',
+                source: CAMERA_SOURCE_ID,
+                paint: {
+                    'circle-radius': 18,
+                    'circle-color': 'transparent',
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#00f0ff',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'circle-stroke-opacity': 0.5,
+                },
+            });
+
+            // Camera circle marker — larger, distinctive from targets
+            _state.map.addLayer({
+                id: CAMERA_LAYER_CIRCLE,
+                type: 'circle',
+                source: CAMERA_SOURCE_ID,
+                paint: {
+                    'circle-radius': 12,
+                    'circle-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#05ffa1',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': '#00f0ff',
+                    'circle-opacity': 0.9,
+                },
+            });
+
+            // Camera icon letter "C" — always visible, overlaps allowed
+            _state.map.addLayer({
+                id: CAMERA_LAYER_ICON,
+                type: 'symbol',
+                source: CAMERA_SOURCE_ID,
+                layout: {
+                    'text-field': 'C',
+                    'text-size': 14,
+                    'text-font': ['Open Sans Semibold'],
+                    'text-allow-overlap': true,
+                    'text-ignore-placement': true,
+                },
+                paint: {
+                    'text-color': '#0a0a0f',
+                },
+            });
+
+            // Camera label — name below the marker
+            _state.map.addLayer({
+                id: CAMERA_LAYER_LABEL,
+                type: 'symbol',
+                source: CAMERA_SOURCE_ID,
+                layout: {
+                    'text-field': ['get', 'name'],
+                    'text-size': 12,
+                    'text-offset': [0, 2.0],
+                    'text-anchor': 'top',
+                    'text-font': ['Open Sans Semibold'],
+                    'text-allow-overlap': true,
+                    'text-ignore-placement': true,
+                },
+                paint: {
+                    'text-color': '#00f0ff',
+                    'text-halo-color': '#0a0a0f',
+                    'text-halo-width': 2,
+                },
+            });
+
+            // Click to fly and open camera panel
+            _state.map.on('click', CAMERA_LAYER_CIRCLE, (e) => {
+                if (e.features && e.features.length > 0) {
+                    const props = e.features[0].properties;
+                    const coords = e.features[0].geometry.coordinates;
+                    _state.map.flyTo({ center: coords, zoom: 19, duration: 600 });
+                    // Open the camera-feeds panel and focus on this camera
+                    EventBus.emit('panel:request-open', { id: 'camera-feeds' });
+                    setTimeout(() => {
+                        EventBus.emit('camera:selected', { id: props.id, name: props.name });
+                    }, 200);
+                }
+            });
+
+            // Pointer cursor on hover
+            _state.map.on('mouseenter', CAMERA_LAYER_CIRCLE, () => {
+                _state.map.getCanvas().style.cursor = 'pointer';
+            });
+            _state.map.on('mouseleave', CAMERA_LAYER_CIRCLE, () => {
+                _state.map.getCanvas().style.cursor = '';
+            });
+        }
+
+        // FOV cone layer
+        if (_state.map.getSource(CAMERA_FOV_SOURCE_ID)) {
+            _state.map.getSource(CAMERA_FOV_SOURCE_ID).setData(fovGeojson);
+        } else {
+            _state.map.addSource(CAMERA_FOV_SOURCE_ID, { type: 'geojson', data: fovGeojson });
+
+            // Semi-transparent fill for FOV cone
+            _state.map.addLayer({
+                id: CAMERA_LAYER_FOV,
+                type: 'fill',
+                source: CAMERA_FOV_SOURCE_ID,
+                paint: {
+                    'fill-color': [
+                        'match', ['get', 'status'],
+                        'streaming', 'rgba(0, 240, 255, 0.10)',
+                        'connecting', 'rgba(252, 238, 10, 0.10)',
+                        'rgba(255, 42, 109, 0.08)',
+                    ],
+                    'fill-opacity': 0.8,
+                },
+            }, CAMERA_LAYER_GLOW); // insert below the glow layer
+
+            // Outline for FOV cone
+            _state.map.addLayer({
+                id: CAMERA_LAYER_FOV_LINE,
+                type: 'line',
+                source: CAMERA_FOV_SOURCE_ID,
+                paint: {
+                    'line-color': [
+                        'match', ['get', 'status'],
+                        'streaming', '#00f0ff',
+                        'connecting', '#fcee0a',
+                        '#ff2a6d',
+                    ],
+                    'line-width': 1.5,
+                    'line-opacity': 0.6,
+                    'line-dasharray': [4, 3],
+                },
+            }, CAMERA_LAYER_GLOW); // insert below the glow layer
+        }
+    } catch (err) {
+        console.warn('[MAP-ML] Camera marker layer error:', err.message || err);
+        return;
+    }
+    console.log(`[MAP-ML] Camera markers rendered: ${cameras.length} marker(s), ${fovFeatures.length} FOV cone(s)`);
+}
+
+// ── Camera Click-to-Place ───────────────────────────────────────────────
+// When the camera-feeds panel requests a map location pick, register a
+// one-shot click handler that captures the lngLat and sends it back.
+
+function _onCameraPickLocation(data) {
+    if (!_state.map || !data || !data.active) return;
+
+    // Visual feedback: change cursor to crosshair
+    _state.map.getCanvas().style.cursor = 'crosshair';
+
+    function onMapClick(e) {
+        // Remove the one-shot handler
+        _state.map.off('click', onMapClick);
+        _state.map.getCanvas().style.cursor = '';
+
+        // Send coordinates back to the camera panel
+        EventBus.emit('camera:location-picked', {
+            lat: e.lngLat.lat,
+            lng: e.lngLat.lng,
+        });
+    }
+
+    // Register one-shot click handler
+    _state.map.on('click', onMapClick);
+
+    // Auto-cancel after 30 seconds if no click
+    setTimeout(() => {
+        _state.map.off('click', onMapClick);
+        if (_state.map.getCanvas().style.cursor === 'crosshair') {
+            _state.map.getCanvas().style.cursor = '';
+        }
+    }, 30000);
 }
 
 export function resetCamera() {
@@ -6473,6 +9717,11 @@ export function getMapState() {
         showWaterways: _state.showWaterways,
         showParks: _state.showParks,
         showMesh: _state.showMesh,
+        showMeshNodes: _state.showMeshNodes,
+        showMeshLinks: _state.showMeshLinks,
+        showMeshCoverage: _state.showMeshCoverage,
+        showPredictionCones: _state.showPredictionCones,
+        showCoverageOverlap: _state.showCoverageOverlap,
         showPatrolRoutes: _state.showPatrolRoutes,
         showThoughts: _state.showThoughts,
         showTracers: _state.showTracers,
@@ -6491,6 +9740,7 @@ export function getMapState() {
         showSwarmHull: _state.showSwarmHull,
         showSquadHulls: _state.showSquadHulls,
         showHazardZones: _state.showHazardZones,
+        showGeofenceZones: _state.showGeofenceZones,
         showHostileObjectives: _state.showHostileObjectives,
         showCrowdDensity: _state.showCrowdDensity,
         showCoverPoints: _state.showCoverPoints,

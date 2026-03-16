@@ -109,6 +109,11 @@ _WAVE_ADVANCE_DELAY = 5.0  # seconds
 # Countdown duration before wave 1
 _COUNTDOWN_DURATION = 5.0  # seconds
 
+# Stalemate timeout: if no hostiles are eliminated for this many seconds
+# during an active wave, remaining hostiles are forcibly eliminated.
+# Prevents infinite stalemates when hostiles wander out of weapon range.
+_STALEMATE_TIMEOUT = 60.0  # seconds
+
 
 class GameMode:
     """Game state machine + wave controller + scoring."""
@@ -147,6 +152,7 @@ class GameMode:
         self._wave_complete_time: float = 0.0
         self._wave_hostile_ids: set[str] = set()
         self._spawn_thread: threading.Thread | None = None
+        self._last_elimination_time: float = 0.0  # for stalemate detection
 
         # Scenario support (optional — None means use default WAVE_CONFIGS)
         self._scenario: object | None = None
@@ -227,6 +233,7 @@ class GameMode:
         # All hostile eliminations score points
         self.total_eliminations += 1
         self.score += 100  # points per elimination
+        self._last_elimination_time = time.time()
         # Wave hostiles also count toward wave completion
         if target_id in self._wave_hostile_ids:
             self.wave_eliminations += 1
@@ -293,6 +300,7 @@ class GameMode:
             "infinite": self.infinite,
             "game_mode_type": self.game_mode_type,
             "difficulty_multiplier": self.difficulty.get_multiplier(),
+            "spawn_direction": wave_config.spawn_direction if wave_config else "random",
         }
         if self.game_mode_type == "civil_unrest":
             state["de_escalation_score"] = self.de_escalation_score
@@ -309,7 +317,12 @@ class GameMode:
     # -- State tick handlers ----------------------------------------------------
 
     def _tick_countdown(self, dt: float) -> None:
+        prev_secs = math.ceil(self._countdown_remaining)
         self._countdown_remaining -= dt
+        curr_secs = math.ceil(self._countdown_remaining) if self._countdown_remaining > 0 else 0
+        # Publish state on each whole-second tick so announcer + frontend get countdown
+        if curr_secs != prev_secs and curr_secs > 0:
+            self._publish_state_change()
         if self._countdown_remaining <= 0:
             self._countdown_remaining = 0
             self.state = "active"
@@ -333,6 +346,16 @@ class GameMode:
             ))
             self._publish_state_change()
             return
+
+        # Stalemate detection: if no elimination for _STALEMATE_TIMEOUT seconds
+        # and there are hostiles alive, force-eliminate remaining hostiles.
+        # This prevents infinite games when hostiles wander out of weapon range.
+        if (self._last_elimination_time > 0
+                and (time.time() - self._last_elimination_time) >= _STALEMATE_TIMEOUT
+                and not self._is_spawning()):
+            stale_alive = self._count_wave_hostiles_alive()
+            if stale_alive > 0:
+                self._force_eliminate_wave_hostiles()
 
         # Check wave complete: all wave hostiles eliminated or escaped.
         # If spawn thread hasn't registered any hostiles yet, wait for it
@@ -441,6 +464,7 @@ class GameMode:
         """Spawn hostiles for this wave in a background thread (staggered)."""
         self.wave_eliminations = 0
         self._wave_start_time = time.time()
+        self._last_elimination_time = time.time()  # reset stalemate clock
         self._wave_hostile_ids.clear()
 
         # Wave 3+ adds environmental pressure via random hazard spawning.
@@ -489,6 +513,7 @@ class GameMode:
             "wave_number": wave_num,
             "wave_name": config.name,
             "hostile_count": config.count,
+            "spawn_direction": config.spawn_direction,
         })
         # Notify stats tracker of wave start
         if hasattr(self._engine, 'stats_tracker'):
@@ -607,6 +632,25 @@ class GameMode:
                 count += 1
         return count
 
+    def _force_eliminate_wave_hostiles(self) -> None:
+        """Force-eliminate remaining wave hostiles to break a stalemate."""
+        for t in self._engine.get_targets():
+            if t.target_id in self._wave_hostile_ids and t.status == "active":
+                t.status = "eliminated"
+                t.health = 0
+                self.total_eliminations += 1
+                self.wave_eliminations += 1
+                self._event_bus.publish("target_eliminated", {
+                    "target_id": t.target_id,
+                    "target_name": t.name,
+                    "interceptor_name": "Stalemate Timeout",
+                    "killer_name": "Stalemate Timeout",
+                    "method": "timeout",
+                    "position": {"x": t.position[0], "y": t.position[1]},
+                })
+        self._last_elimination_time = time.time()
+        self._publish_state_change()
+
     def _on_wave_complete(self) -> None:
         """Handle wave completion: scoring, events, state transition."""
         elapsed = time.time() - self._wave_start_time
@@ -637,13 +681,28 @@ class GameMode:
         self._wave_complete_time = time.time()
 
         config = self._current_wave_config()
-        self._event_bus.publish("wave_complete", {
+        wave_complete_data = {
             "wave_number": self.wave,
             "wave_name": config.name if config else "",
             "time_elapsed": round(elapsed, 1),
             "eliminations": self.wave_eliminations,
             "score_bonus": wave_bonus + time_bonus,
-        })
+            "next_wave_delay": _WAVE_ADVANCE_DELAY,
+        }
+        # Preview next wave info for frontend countdown/direction arrows
+        next_wave_num = self.wave + 1
+        total = len(self._scenario_waves) if self._scenario_waves else len(WAVE_CONFIGS)
+        if next_wave_num <= total or self.infinite:
+            # Peek at next config
+            saved_wave = self.wave
+            self.wave = next_wave_num
+            next_config = self._current_wave_config()
+            self.wave = saved_wave
+            if next_config:
+                wave_complete_data["next_wave_name"] = next_config.name
+                wave_complete_data["next_hostile_count"] = next_config.count
+                wave_complete_data["next_spawn_direction"] = next_config.spawn_direction
+        self._event_bus.publish("wave_complete", wave_complete_data)
         # Notify stats tracker of wave completion with score earned this wave
         if hasattr(self._engine, 'stats_tracker'):
             self._engine.stats_tracker.on_wave_complete(wave_bonus + time_bonus)

@@ -237,14 +237,14 @@ const sandbox = {
 const ctx = vm.createContext(sandbox);
 
 // Load events.js (EventBus)
-const eventsCode = fs.readFileSync(__dirname + '/../../frontend/js/command/events.js', 'utf8');
+const eventsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/events.js', 'utf8');
 const eventsPlain = eventsCode
     .replace(/^export\s+/gm, '')
     .replace(/^import\s+.*$/gm, '');
 vm.runInContext(eventsPlain, ctx);
 
 // Load menu-bar.js
-const menuBarCode = fs.readFileSync(__dirname + '/../../frontend/js/command/menu-bar.js', 'utf8');
+const menuBarCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/menu-bar.js', 'utf8');
 const menuBarPlain = menuBarCode
     .replace(/^export\s+function\s+/gm, 'function ')
     .replace(/^export\s+/gm, '')
@@ -306,14 +306,15 @@ function makeMockLayoutManager() {
 
 function makeMockMapActions() {
     const state = {
-        showSatellite: false, showRoads: false, showBuildings: true,
-        showWaterways: false, showParks: false, showGrid: false,
-        showUnits: true, showModels3d: false, showLabels: true, showMesh: true, showThoughts: true, showFog: false,
-        showTerrain: false, tiltMode: 'flat',
+        showSatellite: true, showRoads: true, showBuildings: true,
+        showWaterways: true, showParks: true, showGrid: true,
+        showUnits: true, showModels3d: true, showLabels: true, showMesh: true, showThoughts: true, showFog: true,
+        showPredictionCones: true, showTerrain: true, tiltMode: 'tilted',
         showTracers: true, showExplosions: true, showParticles: true,
         showHitFlashes: true, showFloatingText: true,
         showKillFeed: true, showScreenFx: true, showBanners: true,
         showLayerHud: true, showHealthBars: true, showSelectionFx: true,
+        showGeoLayers: true, showPatrolRoutes: true, showWeaponRange: true, showHeatmap: false,
     };
     const calls = [];
     return {
@@ -330,6 +331,7 @@ function makeMockMapActions() {
         toggleMesh() { state.showMesh = !state.showMesh; calls.push('toggleMesh'); },
         toggleThoughts() { state.showThoughts = !state.showThoughts; calls.push('toggleThoughts'); },
         toggleFog() { state.showFog = !state.showFog; calls.push('toggleFog'); },
+        togglePredictionCones() { state.showPredictionCones = !state.showPredictionCones; calls.push('togglePredictionCones'); },
         toggleTerrain() { state.showTerrain = !state.showTerrain; calls.push('toggleTerrain'); },
         toggleTilt() { state.tiltMode = state.tiltMode === 'flat' ? 'tilted' : 'flat'; calls.push('toggleTilt'); },
         toggleTracers() { state.showTracers = !state.showTracers; calls.push('toggleTracers'); },
@@ -343,6 +345,10 @@ function makeMockMapActions() {
         toggleLayerHud() { state.showLayerHud = !state.showLayerHud; calls.push('toggleLayerHud'); },
         toggleHealthBars() { state.showHealthBars = !state.showHealthBars; calls.push('toggleHealthBars'); },
         toggleSelectionFx() { state.showSelectionFx = !state.showSelectionFx; calls.push('toggleSelectionFx'); },
+        toggleGeoLayers() { state.showGeoLayers = !state.showGeoLayers; calls.push('toggleGeoLayers'); },
+        togglePatrolRoutes() { state.showPatrolRoutes = !state.showPatrolRoutes; calls.push('togglePatrolRoutes'); },
+        toggleWeaponRange() { state.showWeaponRange = !state.showWeaponRange; calls.push('toggleWeaponRange'); },
+        toggleHeatmap() { state.showHeatmap = !state.showHeatmap; calls.push('toggleHeatmap'); },
         toggleAllLayers() { calls.push('toggleAllLayers'); },
         centerOnAction() { calls.push('centerOnAction'); },
         resetCamera() { calls.push('resetCamera'); },
@@ -619,8 +625,8 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    // 10 panel buttons + 1 save input = 11 children
-    assert(right.children.length === 11, 'right has 11 children (10 panel buttons + save input), got ' + right.children.length);
+    // 1 search input + 10 panel buttons + 1 save input = 12 children
+    assert(right.children.length === 12, 'right has 12 children (search + 10 panel buttons + save input), got ' + right.children.length);
 })();
 
 (function testPanelButtonLabels() {
@@ -633,9 +639,10 @@ console.log('\n--- Quick-access panel buttons ---');
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
     // _shortLabel takes first word of title and uppercases it
+    // children[0] is the search input, panel buttons start at index 1
     const expected = ['AMY', 'UNITS', 'ALERTS', 'GAME', 'MESH', 'CAMERA', 'INTEL', 'TAK', 'RECORDINGS', 'ZONES'];
     for (let i = 0; i < expected.length; i++) {
-        const btn = right.children[i];
+        const btn = right.children[i + 1];
         assert(btn.textContent === expected[i],
             'panel button ' + i + ' text is "' + expected[i] + '", got "' + btn.textContent + '"');
     }
@@ -650,8 +657,9 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
+    // children[0] is search input, panel buttons start at index 1
     for (let i = 0; i < defaultPanels.length; i++) {
-        const btn = right.children[i];
+        const btn = right.children[i + 1];
         assert(btn.className === 'command-bar-btn', 'panel button ' + i + ' has className command-bar-btn');
     }
 })();
@@ -665,9 +673,10 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
+    // children[0] is search input, panel buttons start at index 1
     const expectedIds = ['amy', 'units', 'alerts', 'game', 'mesh', 'cameras', 'search', 'tak', 'videos', 'zones'];
     for (let i = 0; i < expectedIds.length; i++) {
-        const btn = right.children[i];
+        const btn = right.children[i + 1];
         assert(btn.dataset.panel === expectedIds[i],
             'panel button ' + i + ' data-panel is "' + expectedIds[i] + '", got "' + btn.dataset.panel + '"');
     }
@@ -683,14 +692,15 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    // amy (index 0) is open
-    assert(right.children[0]._classList.has('active'), 'AMY button has active class (panel is open)');
-    // units (index 1) is closed
-    assert(!right.children[1]._classList.has('active'), 'UNITS button does NOT have active class (panel is closed)');
-    // alerts (index 2) is open
-    assert(right.children[2]._classList.has('active'), 'ALERTS button has active class (panel is open)');
-    // game (index 3) is closed
-    assert(!right.children[3]._classList.has('active'), 'GAME button does NOT have active class (panel is closed)');
+    // children[0] is search input, panel buttons start at index 1
+    // amy (index 1) is open
+    assert(right.children[1]._classList.has('active'), 'AMY button has active class (panel is open)');
+    // units (index 2) is closed
+    assert(!right.children[2]._classList.has('active'), 'UNITS button does NOT have active class (panel is closed)');
+    // alerts (index 3) is open
+    assert(right.children[3]._classList.has('active'), 'ALERTS button has active class (panel is open)');
+    // game (index 4) is closed
+    assert(!right.children[4]._classList.has('active'), 'GAME button does NOT have active class (panel is closed)');
 })();
 
 (function testPanelButtonTitle() {
@@ -702,9 +712,9 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    // Amy should have key "1"
-    assert(right.children[0].title.includes('1'), 'AMY button title includes shortcut key "1"');
-    assert(right.children[0].title.includes('AMY COMMANDER'), 'AMY button title includes panel title');
+    // Amy should have key "1" (children[0] is search input, buttons start at 1)
+    assert(right.children[1].title.includes('1'), 'AMY button title includes shortcut key "1"');
+    assert(right.children[1].title.includes('AMY COMMANDER'), 'AMY button title includes panel title');
 })();
 
 (function testPanelButtonClickTogglesPanel() {
@@ -716,7 +726,7 @@ console.log('\n--- Quick-access panel buttons ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const unitsBtn = right.children[1]; // units, initially closed
+    const unitsBtn = right.children[2]; // units, initially closed (index 0 is search)
     assert(!pm._openState['units'], 'units is initially closed');
     unitsBtn.click();
     assert(pm._openState['units'], 'clicking UNITS button toggles panel open');
@@ -737,7 +747,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10]; // last child
+    const saveInput = right.children[11]; // last child
     assert(saveInput.className === 'command-bar-save-input', 'save input has correct className');
 })();
 
@@ -750,7 +760,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     assert(saveInput.hidden === true, 'save input starts hidden');
 })();
 
@@ -763,7 +773,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     assert(saveInput.type === 'text', 'save input type is "text"');
 })();
 
@@ -776,7 +786,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     assert(saveInput.placeholder === 'Layout name...', 'save input has correct placeholder');
 })();
 
@@ -789,7 +799,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     assert(saveInput.maxLength === 24, 'save input maxLength is 24');
 })();
 
@@ -802,7 +812,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     saveInput.hidden = false;
     saveInput.value = 'test-layout';
     // Simulate Enter keydown
@@ -824,7 +834,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     saveInput.hidden = false;
     const handlers = saveInput._eventListeners['keydown'];
     if (handlers && handlers.length > 0) {
@@ -842,7 +852,7 @@ console.log('\n--- Save input ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     saveInput.hidden = false;
     saveInput.value = '   '; // whitespace only
     const handlers = saveInput._eventListeners['keydown'];
@@ -867,7 +877,7 @@ console.log('\n--- focusSaveInput ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const saveInput = right.children[10];
+    const saveInput = right.children[11];
     saveInput.value = 'old-value';
 
     ctx._bar = bar;
@@ -994,7 +1004,7 @@ console.log('\n--- EventBus panel sync ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const unitsBtn = right.children[1]; // units, initially closed
+    const unitsBtn = right.children[2]; // units, initially closed (index 0 is search)
     assert(!unitsBtn._classList.has('active'), 'UNITS button starts without active');
 
     // Emit panel:opened
@@ -1011,7 +1021,7 @@ console.log('\n--- EventBus panel sync ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    const amyBtn = right.children[0]; // amy, initially open
+    const amyBtn = right.children[1]; // amy, initially open (index 0 is search)
     assert(amyBtn._classList.has('active'), 'AMY button starts with active');
 
     // Emit panel:closed
@@ -1034,8 +1044,8 @@ console.log('\n--- EventBus panel sync ---');
     pm._openState['units'] = true;
 
     vm.runInContext('EventBus.emit("layout:changed")', ctx);
-    assert(!right.children[0]._classList.has('active'), 'layout:changed syncs AMY button to closed');
-    assert(right.children[1]._classList.has('active'), 'layout:changed syncs UNITS button to open');
+    assert(!right.children[1]._classList.has('active'), 'layout:changed syncs AMY button to closed');
+    assert(right.children[2]._classList.has('active'), 'layout:changed syncs UNITS button to open');
 })();
 
 (function testPanelOpenedIgnoresUnknownId() {
@@ -1134,18 +1144,25 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // VIEW menu: 10 panel items + separator + Show All + Hide All + separator + Fullscreen = 15
-    assert(viewDropdown.children.length === 15,
-        'VIEW dropdown has 15 items (10 panels + sep + show all + hide all + sep + fullscreen), got ' + viewDropdown.children.length);
+    // VIEW menu: 6 category headers + 10 panel items + separator + Show All + Hide All + separator + Fullscreen = 21
+    assert(viewDropdown.children.length === 21,
+        'VIEW dropdown has 21 items (6 headers + 10 panels + sep + show all + hide all + sep + fullscreen), got ' + viewDropdown.children.length);
 
-    // First item (AMY COMMANDER) should be checkable with check indicator
-    const amyItem = viewDropdown.children[0];
-    assert(amyItem.className === 'menu-item', 'AMY COMMANDER item is a menu-item');
-    // Check indicator is first child
-    const check = amyItem.children[0];
-    assert(check.className === 'menu-item-check', 'first child is menu-item-check');
-    // AMY is open, so check should have bullet
-    assert(check.textContent === '\u2022', 'check indicator shows bullet for open panel');
+    // First item is a category header (Tactical), find first panel item (menu-item)
+    const firstHeader = viewDropdown.children[0];
+    assert(firstHeader.className === 'menu-category-header', 'first child is a category header, got "' + firstHeader.className + '"');
+    // Find AMY panel item -- it is under "AI & Comms" category
+    const menuItems = Array.from(viewDropdown.children).filter(c => c.className === 'menu-item');
+    assert(menuItems.length === 13, '13 menu-items (10 panels + Show All + Hide All + Fullscreen), got ' + menuItems.length);
+    // AMY should be checkable with check indicator (it is open)
+    const amyItem = menuItems.find(item => {
+        const label = item.children[1];
+        return label && label.textContent === 'AMY COMMANDER';
+    });
+    assert(amyItem, 'AMY COMMANDER item found in VIEW menu');
+    const check = amyItem ? amyItem.children[0] : null;
+    assert(check && check.className === 'menu-item-check', 'first child is menu-item-check');
+    assert(check && check.textContent === '\u2022', 'check indicator shows bullet for open panel');
 })();
 
 (function testViewMenuUncheckedItem() {
@@ -1161,10 +1178,15 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // UNITS (index 1) is closed
-    const unitsItem = viewDropdown.children[1];
-    const check = unitsItem.children[0];
-    assert(check.textContent === '', 'check indicator is empty for closed panel');
+    // UNITS is closed — find it by label
+    const menuItems2 = Array.from(viewDropdown.children).filter(c => c.className === 'menu-item');
+    const unitsItem = menuItems2.find(item => {
+        const label = item.children[1];
+        return label && label.textContent === 'UNITS';
+    });
+    assert(unitsItem, 'UNITS item found in VIEW menu');
+    const check = unitsItem ? unitsItem.children[0] : null;
+    assert(check && check.textContent === '', 'check indicator is empty for closed panel');
 })();
 
 (function testViewMenuSeparator() {
@@ -1180,9 +1202,10 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // 11th item (index 10) should be a separator (after 10 panel items)
-    const sep = viewDropdown.children[10];
-    assert(sep.className === 'menu-separator', 'item at index 10 is a separator, got class "' + sep.className + '"');
+    // After all category headers and panel items, there should be a separator before Show All/Hide All
+    const allChildren = Array.from(viewDropdown.children);
+    const seps = allChildren.filter(c => c.className === 'menu-separator');
+    assert(seps.length >= 1, 'VIEW dropdown contains at least one separator, got ' + seps.length);
 })();
 
 (function testViewMenuShortcuts() {
@@ -1198,10 +1221,15 @@ console.log('\n--- Dropdown items structure ---');
     const viewDropdown = left.children[1].children[1];
 
     viewTrigger.click();
-    // AMY item (index 0) has shortcut '1'
-    const amyItem = viewDropdown.children[0];
+    // Find AMY item by label (first child is now a category header)
+    const allItems = Array.from(viewDropdown.children).filter(c => c.className === 'menu-item');
+    const amyShortcutItem = allItems.find(item => {
+        const label = item.children[1];
+        return label && label.textContent === 'AMY COMMANDER';
+    });
+    assert(amyShortcutItem, 'AMY COMMANDER item found for shortcut test');
     // Find shortcut span: check(0), label(1), spacer(2), shortcut(3)
-    const shortcut = amyItem.children[3];
+    const shortcut = amyShortcutItem ? amyShortcutItem.children[3] : null;
     assert(shortcut && shortcut.className === 'menu-item-shortcut', 'AMY item has shortcut span');
     assert(shortcut && shortcut.textContent === '1', 'AMY item shortcut is "1"');
 })();
@@ -1312,22 +1340,24 @@ console.log('\n--- Dropdown items structure ---');
     //           Tracers, Explosions, Particles, Hit Flashes, Floating Text, sep,
     //           Kill Feed, Screen FX, Banners, Layer HUD, sep,
     //           Health Bars, Selection FX, sep,
-    //           Fog, Terrain, 3D Mode, sep,
-    //           Center on Action, Reset Camera, Zoom In, Zoom Out = 37
-    assert(mapDropdown.children.length === 37,
-        'MAP dropdown has 37 items, got ' + mapDropdown.children.length);
+    //           Layer Browser, Toggle All, sep,
+    //           Satellite, Buildings, Roads, Grid, Unit Markers, GIS, sep,
+    //           Fog, Prediction Cones, Terrain, 3D Mode, sep,
+    //           Center, Reset, Zoom In, Zoom Out = 19
+    assert(mapDropdown.children.length === 19,
+        'MAP dropdown has 19 items, got ' + mapDropdown.children.length);
 
-    // First item: Toggle All (action, not checkable)
-    const toggleAllItem = mapDropdown.children[0];
-    const toggleAllLabel = toggleAllItem.children[1];
-    assert(toggleAllLabel.textContent === 'Toggle All', 'first MAP item is "Toggle All"');
+    // First item: Layer Browser... (action)
+    const layerBrowserItem = mapDropdown.children[0];
+    const layerBrowserLabel = layerBrowserItem.children[1];
+    assert(layerBrowserLabel.textContent === 'Layer Browser...', 'first MAP item is "Layer Browser..."');
 
-    // Third item (index 2): Satellite (checkable, checked=true)
-    const satItem = mapDropdown.children[2];
+    // Fourth item (index 3): Satellite (checkable)
+    const satItem = mapDropdown.children[3];
     const satCheck = satItem.children[0];
-    assert(satCheck.textContent === '', 'Satellite is unchecked (showSatellite=false)');
+    assert(satCheck.textContent === '\u2022', 'Satellite is checked (showSatellite=true)');
     const satLabel = satItem.children[1];
-    assert(satLabel.textContent === 'Satellite', 'third MAP item is "Satellite"');
+    assert(satLabel.textContent === 'Satellite', 'fourth MAP item is "Satellite"');
 })();
 
 (function testMapMenuSatelliteShortcut() {
@@ -1343,7 +1373,7 @@ console.log('\n--- Dropdown items structure ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    const satItem = mapDropdown.children[2]; // index 2 (after Toggle All + sep)
+    const satItem = mapDropdown.children[3]; // index 3 (after Layer Browser, Toggle All, sep)
     // check(0), label(1), spacer(2), shortcut(3)
     const shortcut = satItem.children[3];
     assert(shortcut.className === 'menu-item-shortcut', 'Satellite item has shortcut span');
@@ -1363,10 +1393,10 @@ console.log('\n--- Dropdown items structure ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    // Roads (index 3) is unchecked (showRoads=false)
-    const roadsItem = mapDropdown.children[3];
+    // Roads (index 5) is checked (showRoads=true)
+    const roadsItem = mapDropdown.children[5];
     const roadsCheck = roadsItem.children[0];
-    assert(roadsCheck.textContent === '', 'Roads check indicator is empty (unchecked)');
+    assert(roadsCheck.textContent === '\u2022', 'Roads check indicator shows bullet (checked)');
 })();
 
 (function testMapMenuSeparators() {
@@ -1382,14 +1412,10 @@ console.log('\n--- Dropdown items structure ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    // Separators at indices 1, 8, 14, 20, 25, 28, 32
-    assert(mapDropdown.children[1].className === 'menu-separator', 'MAP has separator at index 1 (after Toggle All)');
-    assert(mapDropdown.children[8].className === 'menu-separator', 'MAP has separator at index 8 (after base layers)');
-    assert(mapDropdown.children[14].className === 'menu-separator', 'MAP has separator at index 14 (after unit layers)');
-    assert(mapDropdown.children[20].className === 'menu-separator', 'MAP has separator at index 20 (after combat FX)');
-    assert(mapDropdown.children[25].className === 'menu-separator', 'MAP has separator at index 25 (after overlays)');
-    assert(mapDropdown.children[28].className === 'menu-separator', 'MAP has separator at index 28 (after unit decorations)');
-    assert(mapDropdown.children[32].className === 'menu-separator', 'MAP has separator at index 32 (after environment)');
+    // Separators at indices 2, 9, 13
+    assert(mapDropdown.children[2].className === 'menu-separator', 'MAP has separator at index 2 (after Toggle All)');
+    assert(mapDropdown.children[9].className === 'menu-separator', 'MAP has separator at index 9 (after quick toggles)');
+    assert(mapDropdown.children[14].className === 'menu-separator', 'MAP has separator at index 14 (after view)');
 })();
 
 (function testHelpMenuItems() {
@@ -1475,8 +1501,8 @@ console.log('\n--- Menu item actions ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click(); // Open MAP
-    // Click "Satellite" (checkable) — now at index 2 (after Toggle All + separator)
-    const satItem = mapDropdown.children[2];
+    // Click "Satellite" (checkable) — index 3 (after Layer Browser, Toggle All, separator)
+    const satItem = mapDropdown.children[3];
     satItem.click();
     // Checkable items do NOT close the menu
     assert(mapDropdown.hidden === false, 'clicking checkable item keeps dropdown open');
@@ -1495,15 +1521,15 @@ console.log('\n--- Menu item actions ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    const satItem = mapDropdown.children[2];
+    const satItem = mapDropdown.children[3];
     const satCheck = satItem.children[0];
-    assert(satCheck.textContent === '', 'Satellite starts unchecked');
+    assert(satCheck.textContent === '\u2022', 'Satellite starts checked');
 
-    // Click toggles satellite (was false, now true)
+    // Click toggles satellite (was true, now false)
     satItem.click();
     assert(ma._calls.includes('toggleSatellite'), 'clicking Satellite item calls toggleSatellite');
     // Check indicator should update
-    assert(satCheck.textContent === '\u2022', 'check indicator updates to bullet after checking');
+    assert(satCheck.textContent === '', 'check indicator updates to empty after unchecking');
 })();
 
 (function testClickingLayoutItemApplies() {
@@ -1680,8 +1706,8 @@ console.log('\n--- Edge cases ---');
     ctx.container = container; ctx.pm = pm; ctx.lm = lm; ctx.ma = ma;
     const bar = vm.runInContext('createMenuBar(container, pm, lm, ma)', ctx);
     const right = bar.children[1];
-    // Only the save input, no panel buttons
-    assert(right.children.length === 1, 'right side has only save input when no panels, got ' + right.children.length);
+    // Search input + save input, no panel buttons
+    assert(right.children.length === 2, 'right side has search input + save input when no panels, got ' + right.children.length);
 })();
 
 (function testLayoutManagerNoUserLayouts() {
@@ -1885,7 +1911,7 @@ console.log('\n--- GAME menu ---');
 
 (function test_getSelectedScenario_removed() {
     // getSelectedScenario was dead code (always returned null), now removed
-    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const src = fs.readFileSync('src/frontend/js/command/menu-bar.js', 'utf8');
     assert(!src.includes('getSelectedScenario'), 'getSelectedScenario dead code removed');
 })();
 
@@ -1976,12 +2002,12 @@ console.log('\n--- MAP menu — Toggle All button ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    const item = mapDropdown.children[0];
+    const item = mapDropdown.children[1];
     assert(item && item.className === 'menu-item',
-        'Toggle All is first item in MAP menu (index 0)');
+        'Toggle All is second item in MAP menu (index 1)');
     const label = item.children[1];
-    assert(label.textContent === 'Toggle All',
-        'First MAP item label is "Toggle All", got "' + label.textContent + '"');
+    assert(label.textContent === 'Toggle All Layers',
+        'Second MAP item label is "Toggle All Layers", got "' + label.textContent + '"');
 })();
 
 (function testToggleAllCallsAction() {
@@ -1998,9 +2024,9 @@ console.log('\n--- MAP menu — Toggle All button ---');
 
     mapTrigger.click();
     ma._calls.length = 0;
-    mapDropdown.children[0].click();
+    mapDropdown.children[1].click();
     assert(ma._calls.includes('toggleAllLayers'),
-        'Clicking Toggle All calls toggleAllLayers');
+        'Clicking Toggle All Layers calls toggleAllLayers');
 })();
 
 (function testToggleAllFollowedBySeparator() {
@@ -2016,30 +2042,28 @@ console.log('\n--- MAP menu — Toggle All button ---');
     const mapDropdown = left.children[3].children[1];
 
     mapTrigger.click();
-    const sep = mapDropdown.children[1];
+    const sep = mapDropdown.children[2];
     assert(sep && sep.className === 'menu-separator',
-        'Separator follows Toggle All at index 1');
+        'Separator follows Toggle All at index 2');
 })();
 
 // ============================================================
-// MAP menu — Combat FX layer toggles
+// MAP menu — Simplified quick toggles (FX moved to Layer Browser)
 // ============================================================
 
-console.log('\n--- MAP menu — Combat FX layer toggles ---');
+console.log('\n--- MAP menu — Quick toggle items ---');
 
-// Verify each new toggle item exists and calls the right action
+// Verify the simplified menu has the right quick toggles
 const _fxToggleTests = [
-    { label: 'Tracers', stateKey: 'showTracers', action: 'toggleTracers', index: 15 },
-    { label: 'Explosions', stateKey: 'showExplosions', action: 'toggleExplosions', index: 16 },
-    { label: 'Particles', stateKey: 'showParticles', action: 'toggleParticles', index: 17 },
-    { label: 'Hit Flashes', stateKey: 'showHitFlashes', action: 'toggleHitFlashes', index: 18 },
-    { label: 'Floating Text', stateKey: 'showFloatingText', action: 'toggleFloatingText', index: 19 },
-    { label: 'Kill Feed', stateKey: 'showKillFeed', action: 'toggleKillFeed', index: 21 },
-    { label: 'Screen FX', stateKey: 'showScreenFx', action: 'toggleScreenFx', index: 22 },
-    { label: 'Banners', stateKey: 'showBanners', action: 'toggleBanners', index: 23 },
-    { label: 'Layer HUD', stateKey: 'showLayerHud', action: 'toggleLayerHud', index: 24 },
-    { label: 'Health Bars', stateKey: 'showHealthBars', action: 'toggleHealthBars', index: 26 },
-    { label: 'Selection FX', stateKey: 'showSelectionFx', action: 'toggleSelectionFx', index: 27 },
+    { label: 'Satellite', stateKey: 'showSatellite', action: 'toggleSatellite', index: 3 },
+    { label: 'Buildings', stateKey: 'showBuildings', action: 'toggleBuildings', index: 4 },
+    { label: 'Roads', stateKey: 'showRoads', action: 'toggleRoads', index: 5 },
+    { label: 'Grid', stateKey: 'showGrid', action: 'toggleGrid', index: 6 },
+    { label: 'Unit Markers', stateKey: 'showUnits', action: 'toggleUnits', index: 7 },
+    { label: 'GIS Intelligence', stateKey: 'showGeoLayers', action: 'toggleGeoLayers', index: 8 },
+    { label: 'Fog of War', stateKey: 'showFog', action: 'toggleFog', index: 10 },
+    { label: 'Prediction Cones', stateKey: 'showPredictionCones', action: 'togglePredictionCones', index: 11 },
+    { label: 'Terrain', stateKey: 'showTerrain', action: 'toggleTerrain', index: 12 },
 ];
 
 for (const tt of _fxToggleTests) {
@@ -2130,7 +2154,7 @@ for (const tt of _fxToggleTests) {
 // ============================================================
 
 (function testGetSelectedScenarioRemoved() {
-    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const src = fs.readFileSync('src/frontend/js/command/menu-bar.js', 'utf8');
     const hasDeadFunction = src.includes('getSelectedScenario');
     assert(!hasDeadFunction, 'Dead getSelectedScenario() function removed from menu-bar.js');
 })();
@@ -2144,7 +2168,7 @@ console.log('\n--- Shortcut consistency ---');
 (function testNoResetCameraShortcutR() {
     // 'R' key is assigned to replay panel toggle in main.js keyboard handler.
     // MAP > Reset Camera must NOT claim 'R' shortcut — that's a lie.
-    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const src = fs.readFileSync('src/frontend/js/command/menu-bar.js', 'utf8');
     // Find Reset Camera line and check its shortcut
     const resetCameraLine = src.split('\n').find(l => l.includes("'Reset Camera'"));
     const hasR = resetCameraLine && /shortcut:\s*'R'/.test(resetCameraLine);
@@ -2153,7 +2177,7 @@ console.log('\n--- Shortcut consistency ---');
 
 (function testNoResetGameShortcutR() {
     // GAME > Reset Game must NOT claim 'R' shortcut
-    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const src = fs.readFileSync('src/frontend/js/command/menu-bar.js', 'utf8');
     const resetGameLine = src.split('\n').find(l => l.includes("'Reset Game'"));
     const hasR = resetGameLine && /shortcut:\s*'R'/.test(resetGameLine);
     assert(!hasR, 'Reset Game does not claim shortcut R');
@@ -2161,7 +2185,7 @@ console.log('\n--- Shortcut consistency ---');
 
 (function testNoDuplicateShortcutsAcrossMenus() {
     // Parse all shortcut labels from menu-bar.js source and verify no duplicates
-    const src = fs.readFileSync('frontend/js/command/menu-bar.js', 'utf8');
+    const src = fs.readFileSync('src/frontend/js/command/menu-bar.js', 'utf8');
     const shortcutRegex = /shortcut:\s*'([^']+)'/g;
     const shortcuts = [];
     let m;

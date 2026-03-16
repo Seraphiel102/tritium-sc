@@ -119,6 +119,52 @@ class TestPluginHealthEndpoint:
         assert data["test.bridge"] is True
 
 
+class TestPluginDiscoveryEndpoint:
+    """GET /api/plugins/discovery — boot-time discovery report."""
+
+    def test_discovery_report_with_data(self, client):
+        """Discovery report includes scan paths, found plugins, and status."""
+        # Set up a mock discovery report on app state
+        client.app.state.plugin_discovery_report = {
+            "scan_paths": ["/path/to/plugins"],
+            "files_scanned": ["edge_tracker_loader.py", "meshtastic_loader.py"],
+            "plugins_found": [
+                {"id": "tritium.edge-tracker", "name": "Edge Tracker", "version": "1.0.0"},
+                {"id": "tritium.meshtastic", "name": "Meshtastic", "version": "1.0.0"},
+            ],
+            "plugins_registered": [
+                {"id": "tritium.edge-tracker", "name": "Edge Tracker", "source": "directory"},
+            ],
+            "plugins_started": [
+                {"id": "tritium.edge-tracker", "name": "Edge Tracker", "version": "1.0.0"},
+            ],
+            "plugins_failed": [],
+            "plugins_skipped": [],
+        }
+
+        resp = client.get("/api/plugins/discovery")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["files_scanned"]) == 2
+        assert len(data["plugins_found"]) == 2
+        assert len(data["plugins_started"]) == 1
+        assert len(data["plugins_failed"]) == 0
+
+    def test_discovery_report_no_report(self):
+        """Returns informative message when no report available."""
+        from fastapi import FastAPI
+        from app.routers.plugins import router
+
+        app = FastAPI()
+        app.include_router(router)
+
+        tc = TestClient(app)
+        resp = tc.get("/api/plugins/discovery")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "no_report"
+
+
 class TestNoPluginManager:
     """Test graceful behavior when no plugin manager is available."""
 

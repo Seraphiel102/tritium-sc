@@ -1,10 +1,11 @@
 [project]
 name = "tritium-sc"
 version = "0.1.0"
-description = "Nerf battle management with AI Commander Amy"
+description = "Tritium Command Center — multi-sensor target tracking, identification, and tactical operating picture"
 requires-python = ">=3.12"
 dependencies = [
     "influxdb-client>=1.36.0",
+    "tritium-lib",  # Install from ../tritium-lib via: pip install -e ../tritium-lib
 ]
 
 [tool.setuptools.packages.find]

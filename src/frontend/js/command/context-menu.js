@@ -6,7 +6,7 @@
  *
  * Provides a context menu for the tactical map. Menu items change
  * depending on whether a unit is selected:
- *   - Unit selected: DISPATCH HERE, SUGGEST TO AMY, SET WAYPOINT, CANCEL
+ *   - Unit selected: INVESTIGATE, DISPATCH HERE, SUGGEST TO AMY, SET WAYPOINT, CANCEL
  *   - No unit: DROP MARKER, SUGGEST TO AMY: INVESTIGATE, CANCEL
  *
  * "Suggest to Amy" posts an operator suggestion to /api/amy/command.
@@ -19,6 +19,7 @@
  */
 
 import { EventBus } from './events.js';
+import { TritiumStore } from './store.js';
 
 // ============================================================
 // State
@@ -40,11 +41,26 @@ let _outsideHandler = null; // Click-outside dismiss handler
 function getMenuItems(selectedUnitId) {
     const items = [];
     if (selectedUnitId) {
+        items.push({ label: 'INVESTIGATE',     action: 'investigate_target',  icon: 'I' });
         items.push({ label: 'DISPATCH HERE',  action: 'dispatch',          icon: '>' });
         items.push({ label: 'SUGGEST TO AMY', action: 'suggest_dispatch',  icon: '?' });
         items.push({ label: 'SET WAYPOINT',   action: 'waypoint',          icon: '+' });
+        // Pin/unpin toggle
+        const pinned = TritiumStore.isTargetPinned(selectedUnitId);
+        items.push({
+            label: pinned ? 'UNPIN TARGET' : 'PIN TARGET',
+            action: pinned ? 'unpin' : 'pin',
+            icon: pinned ? '-' : '^',
+        });
     } else {
         items.push({ label: 'DROP MARKER',              action: 'marker',              icon: 'x' });
+        items.push({ label: 'DRAW GEOFENCE HERE',       action: 'geofence_here',       icon: '#' });
+        items.push({ label: 'ADD CAMERA HERE',           action: 'camera_here',         icon: 'C' });
+        items.push({ label: 'DISPATCH UNIT HERE',        action: 'dispatch_here',       icon: '>' });
+        items.push({ label: 'PLACE SENSOR HERE',        action: 'place_sensor',        icon: '=' });
+        items.push({ label: 'ADD PATROL WAYPOINT HERE', action: 'patrol_waypoint',     icon: '>' });
+        items.push({ label: 'MEASURE FROM HERE',        action: 'measure_start',       icon: '~' });
+        items.push({ label: 'CREATE BOOKMARK HERE',     action: 'bookmark_here',       icon: '*' });
         items.push({ label: 'SUGGEST TO AMY: INVESTIGATE', action: 'suggest_investigate', icon: '?' });
     }
     items.push({ label: 'CANCEL', action: 'cancel', icon: '-' });
@@ -177,6 +193,79 @@ function handleAction(action, gamePos, selectedUnitId) {
             });
             break;
 
+        case 'geofence_here':
+            EventBus.emit('geofence:createAtPoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Geofence zone started at click position', type: 'info' });
+            // Open geofence panel if available
+            EventBus.emit('panel:request-open', { id: 'geofence' });
+            break;
+
+        case 'camera_here':
+            EventBus.emit('panel:request-open', { id: 'camera-feeds' });
+            EventBus.emit('toast:show', { message: 'Open Camera Feeds panel to add a camera at this location', type: 'info' });
+            break;
+
+        case 'dispatch_here':
+            // Open unit inspector / assets panel and prompt dispatch
+            EventBus.emit('panel:request-open', { id: 'assets' });
+            EventBus.emit('map:dispatch-to', { x: gamePos.x, y: gamePos.y });
+            EventBus.emit('toast:show', { message: 'Select a unit from Assets panel to dispatch here', type: 'info' });
+            break;
+
+        case 'place_sensor':
+            EventBus.emit('asset:placeAtPoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+                type: 'sensor',
+            });
+            EventBus.emit('toast:show', { message: 'Sensor placement mode', type: 'info' });
+            EventBus.emit('panel:request-open', { id: 'assets' });
+            break;
+
+        case 'patrol_waypoint':
+            EventBus.emit('patrol:addWaypoint', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Patrol waypoint added', type: 'info' });
+            break;
+
+        case 'measure_start':
+            EventBus.emit('map:measureStart', {
+                x: gamePos.x,
+                y: gamePos.y,
+            });
+            EventBus.emit('toast:show', { message: 'Measurement started -- click to add points, Enter to finish', type: 'info' });
+            break;
+
+        case 'bookmark_here':
+            {
+                const name = prompt('Bookmark name:');
+                if (name) {
+                    fetch('/api/bookmarks', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name,
+                            x: gamePos.x,
+                            y: gamePos.y,
+                        }),
+                    }).then(resp => {
+                        if (resp.ok) {
+                            EventBus.emit('toast:show', { message: `Bookmark "${name}" created`, type: 'info' });
+                        } else {
+                            EventBus.emit('toast:show', { message: 'Bookmark save failed', type: 'alert' });
+                        }
+                    }).catch(() => {
+                        EventBus.emit('toast:show', { message: 'Failed to save bookmark', type: 'alert' });
+                    });
+                }
+            }
+            break;
+
         case 'suggest_dispatch': {
             const text = buildSuggestCommand('dispatch', selectedUnitId, gamePos);
             fetch('/api/amy/chat', {
@@ -230,6 +319,30 @@ function handleAction(action, gamePos, selectedUnitId) {
             });
             break;
         }
+
+        case 'investigate_target':
+            if (selectedUnitId) {
+                // Open dossiers panel and load this target's dossier
+                EventBus.emit('panel:request-open', { id: 'dossiers' });
+                setTimeout(() => {
+                    EventBus.emit('dossier:load-target', { target_id: selectedUnitId });
+                }, 200);
+            }
+            break;
+
+        case 'pin':
+            if (selectedUnitId) {
+                TritiumStore.pinTarget(selectedUnitId);
+                EventBus.emit('toast:show', { message: `Pinned: ${selectedUnitId}`, type: 'info' });
+            }
+            break;
+
+        case 'unpin':
+            if (selectedUnitId) {
+                TritiumStore.unpinTarget(selectedUnitId);
+                EventBus.emit('toast:show', { message: `Unpinned: ${selectedUnitId}`, type: 'info' });
+            }
+            break;
 
         case 'cancel':
             // No-op — menu is hidden by the caller

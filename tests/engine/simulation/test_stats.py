@@ -198,6 +198,8 @@ class TestShotFired:
     def test_unregistered_unit_no_crash(self):
         tracker = _make_tracker()
         tracker.on_shot_fired("ghost")  # Should not raise
+        # Unregistered unit should not appear in stats
+        assert tracker.get_unit_stats("ghost") is None
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +237,8 @@ class TestShotHit:
         tracker = _make_tracker()
         _register_hostile(tracker)
         tracker.on_shot_hit("ghost", "h1", 10.0)  # Should not raise
+        # Ghost shooter should not be created
+        assert tracker.get_unit_stats("ghost") is None
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +273,8 @@ class TestKill:
         tracker = _make_tracker()
         _register_hostile(tracker)
         tracker.on_kill("ghost", "h1")  # Should not raise
+        # Ghost killer should not be created
+        assert tracker.get_unit_stats("ghost") is None
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +298,8 @@ class TestDamageTaken:
     def test_unregistered_no_crash(self):
         tracker = _make_tracker()
         tracker.on_damage_taken("ghost", 10.0)  # Should not raise
+        # Ghost should not be auto-created
+        assert tracker.get_unit_stats("ghost") is None
 
 
 # ---------------------------------------------------------------------------

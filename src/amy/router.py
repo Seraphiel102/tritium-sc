@@ -15,14 +15,21 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+
+from app.auth import require_auth
 
 if TYPE_CHECKING:
     from .commander import Commander
 
-router = APIRouter(prefix="/api/amy", tags=["amy"])
+# All /api/amy/* endpoints require authentication when auth_enabled=True
+router = APIRouter(
+    prefix="/api/amy",
+    tags=["amy"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 def _get_amy(request: Request) -> "Commander | None":
@@ -180,7 +187,7 @@ async def amy_thoughts(request: Request):
 
 @router.post("/speak")
 async def amy_speak(request: Request, body: SpeakRequest):
-    """Make Amy say something."""
+    """Make Amy say something through the server speakers."""
     amy = _get_amy(request)
     if amy is None:
         return JSONResponse({"error": "Amy is not running"}, status_code=503)
@@ -189,6 +196,83 @@ async def amy_speak(request: Request, body: SpeakRequest):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, amy.say, body.text)
     return {"status": "ok", "text": body.text}
+
+
+@router.post("/speak/audio")
+async def amy_speak_audio(request: Request, body: SpeakRequest):
+    """Synthesize Amy's speech and return WAV audio for browser playback.
+
+    Uses Piper TTS to generate raw PCM, wraps in a WAV header, and returns
+    the audio as a downloadable response.  The frontend can play this via
+    an Audio element, toggled with the V key.
+    """
+    amy = _get_amy(request)
+    speaker = None
+    if amy is not None:
+        speaker = getattr(amy, "speaker", None)
+
+    # Fallback: try to use Speaker directly
+    if speaker is None:
+        try:
+            from engine.comms.speaker import Speaker
+            speaker = Speaker()
+        except Exception:
+            return JSONResponse(
+                {"error": "TTS not available"},
+                status_code=503,
+            )
+
+    if not speaker.available:
+        return JSONResponse(
+            {"error": "Piper TTS not installed"},
+            status_code=503,
+        )
+
+    import struct
+
+    loop = asyncio.get_event_loop()
+    raw_pcm = await loop.run_in_executor(None, speaker.synthesize_raw, body.text)
+    if raw_pcm is None or len(raw_pcm) == 0:
+        return JSONResponse(
+            {"error": "TTS synthesis failed"},
+            status_code=500,
+        )
+
+    # Wrap raw S16 mono PCM in a WAV header
+    sample_rate = speaker.sample_rate
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = len(raw_pcm)
+
+    wav_header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF',
+        36 + data_size,
+        b'WAVE',
+        b'fmt ',
+        16,              # PCM format chunk size
+        1,               # PCM format
+        num_channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b'data',
+        data_size,
+    )
+
+    wav_data = wav_header + raw_pcm
+
+    return Response(
+        content=wav_data,
+        media_type="audio/wav",
+        headers={
+            "Content-Disposition": "inline; filename=amy_speech.wav",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @router.post("/chat")
@@ -800,3 +884,327 @@ async def fleet_actions(request: Request):
         return {"actions": actions, "count": len(actions)}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Tactical summary SSE stream
+# ---------------------------------------------------------------------------
+
+@router.get("/tactical-stream")
+async def amy_tactical_stream(request: Request):
+    """SSE stream of Amy's running tactical commentary.
+
+    Returns Server-Sent Events with Amy's continuous narration of the
+    tactical situation: what she sees, what changed, what concerns her.
+    Events are JSON with fields: type, timestamp, summary, details, concerns.
+
+    Each event is generated every ~5 seconds by analyzing the current
+    tactical state: target counts, alliance distribution, recent changes,
+    threat levels, and sensor coverage.
+    """
+    amy = _get_amy(request)
+    sim_engine = _get_sim_engine(request)
+
+    async def tactical_stream():
+        prev_state = {}
+        try:
+            while True:
+                event = _build_tactical_summary(amy, sim_engine, prev_state)
+                prev_state = event.get("_prev", {})
+                # Remove internal state from output
+                output = {k: v for k, v in event.items() if not k.startswith("_")}
+                yield f"data: {json.dumps(output)}\n\n"
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        tactical_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _build_tactical_summary(
+    amy: "Commander | None",
+    sim_engine,
+    prev_state: dict,
+) -> dict:
+    """Build a tactical summary event from current system state."""
+    now = time.time()
+    summary_parts = []
+    concerns = []
+    details = {}
+
+    # --- Target counts ---
+    target_counts = {"friendly": 0, "hostile": 0, "neutral": 0, "unknown": 0, "total": 0}
+    if sim_engine is not None:
+        try:
+            targets = list(sim_engine.targets.values()) if hasattr(sim_engine, "targets") else []
+            for t in targets:
+                alliance = getattr(t, "alliance", "unknown")
+                if isinstance(alliance, str):
+                    alliance = alliance.lower()
+                else:
+                    alliance = str(alliance.value).lower() if hasattr(alliance, "value") else "unknown"
+                target_counts[alliance] = target_counts.get(alliance, 0) + 1
+                target_counts["total"] += 1
+        except Exception:
+            pass
+    details["targets"] = target_counts
+
+    # Narrate target situation
+    if target_counts["total"] == 0:
+        summary_parts.append("No targets on scope.")
+    else:
+        parts = []
+        if target_counts["hostile"] > 0:
+            parts.append(f"{target_counts['hostile']} hostile")
+        if target_counts["friendly"] > 0:
+            parts.append(f"{target_counts['friendly']} friendly")
+        if target_counts["neutral"] > 0:
+            parts.append(f"{target_counts['neutral']} neutral")
+        if target_counts["unknown"] > 0:
+            parts.append(f"{target_counts['unknown']} unknown")
+        summary_parts.append(f"Tracking {target_counts['total']} targets: {', '.join(parts)}.")
+
+    # --- Changes from previous state ---
+    prev_counts = prev_state.get("target_counts", {})
+    if prev_counts:
+        hostile_delta = target_counts.get("hostile", 0) - prev_counts.get("hostile", 0)
+        if hostile_delta > 0:
+            summary_parts.append(f"ALERT: {hostile_delta} new hostile target{'s' if hostile_delta > 1 else ''} detected.")
+            concerns.append(f"hostile_increase:{hostile_delta}")
+        elif hostile_delta < 0:
+            summary_parts.append(f"{abs(hostile_delta)} hostile target{'s' if abs(hostile_delta) > 1 else ''} neutralized or lost.")
+
+        total_delta = target_counts.get("total", 0) - prev_counts.get("total", 0)
+        if total_delta > 3:
+            concerns.append(f"rapid_target_increase:{total_delta}")
+
+    # --- Game state ---
+    if sim_engine is not None:
+        try:
+            game_mode = getattr(sim_engine, "game_mode", None)
+            if game_mode is not None:
+                phase = getattr(game_mode, "phase", None)
+                wave = getattr(game_mode, "current_wave", 0)
+                if phase is not None:
+                    phase_str = phase.value if hasattr(phase, "value") else str(phase)
+                    details["game"] = {"phase": phase_str, "wave": wave}
+                    if phase_str == "active":
+                        summary_parts.append(f"Battle active, wave {wave}.")
+                    elif phase_str == "idle":
+                        summary_parts.append("Standing by. No active engagement.")
+        except Exception:
+            pass
+
+    # --- Amy state ---
+    if amy is not None:
+        try:
+            mood = amy.sensorium.mood if hasattr(amy, "sensorium") else "unknown"
+            state = amy._state.value if hasattr(amy._state, "value") else str(getattr(amy, "_state", "unknown"))
+            details["amy"] = {"mood": mood, "state": state}
+            if mood == "alert" or mood == "alarmed":
+                concerns.append(f"amy_mood:{mood}")
+                summary_parts.append(f"Amy is {mood}.")
+        except Exception:
+            pass
+
+    # --- Threat assessment ---
+    if target_counts.get("hostile", 0) > 0 and target_counts.get("friendly", 0) > 0:
+        ratio = target_counts["hostile"] / max(1, target_counts["friendly"])
+        if ratio > 2:
+            concerns.append(f"outnumbered:{ratio:.1f}x")
+            summary_parts.append(f"Warning: outnumbered {ratio:.1f}:1.")
+        details["force_ratio"] = round(ratio, 2)
+
+    # Build final event
+    event_type = "alert" if concerns else "status"
+    summary = " ".join(summary_parts) if summary_parts else "All quiet. Nothing to report."
+
+    return {
+        "type": event_type,
+        "timestamp": now,
+        "summary": summary,
+        "details": details,
+        "concerns": concerns,
+        "_prev": {"target_counts": target_counts},
+    }
+
+
+@router.get("/learning-summary")
+async def amy_daily_learning_summary(request: Request):
+    """Amy reviews her last 24 hours of performance and narrates what she learned.
+
+    Covers:
+    - Correlation accuracy: how well she fused BLE + camera + mesh targets
+    - Threat assessment outcomes: classifications that proved correct/incorrect
+    - Operator feedback: overrides operators made to her classifications
+    - Model improvement narrative: what she would adjust going forward
+    """
+    amy = _get_amy(request)
+    now = time.time()
+    cutoff = now - 86400  # 24 hours ago
+
+    summary = {
+        "generated_at": now,
+        "period_hours": 24,
+        "correlation_stats": {},
+        "threat_assessment": {},
+        "operator_feedback": [],
+        "narrative": "",
+    }
+
+    # --- Correlation accuracy ---
+    tracker = None
+    if amy is not None:
+        tracker = getattr(amy, "target_tracker", None)
+
+    total_targets = 0
+    correlated_targets = 0
+    multi_source_targets = 0
+    source_counts: dict[str, int] = {}
+
+    if tracker is not None:
+        try:
+            all_targets = tracker.get_all()
+            total_targets = len(all_targets)
+            for t in all_targets:
+                d = t.to_dict() if hasattr(t, "to_dict") else {}
+                src = d.get("source", "unknown")
+                source_counts[src] = source_counts.get(src, 0) + 1
+                # Check if target has correlation data from multiple sources
+                corr = d.get("correlated_sources") or d.get("fused_sources") or []
+                if len(corr) > 1 or d.get("correlated", False):
+                    correlated_targets += 1
+                    multi_source_targets += 1
+        except Exception:
+            pass
+
+    correlation_rate = (correlated_targets / max(1, total_targets)) * 100
+    summary["correlation_stats"] = {
+        "total_targets": total_targets,
+        "correlated_targets": correlated_targets,
+        "multi_source_targets": multi_source_targets,
+        "correlation_rate_pct": round(correlation_rate, 1),
+        "source_distribution": source_counts,
+    }
+
+    # --- Threat assessment ---
+    alliance_counts: dict[str, int] = {}
+    if tracker is not None:
+        try:
+            for t in tracker.get_all():
+                d = t.to_dict() if hasattr(t, "to_dict") else {}
+                alliance = d.get("alliance", "unknown")
+                alliance_counts[alliance] = alliance_counts.get(alliance, 0) + 1
+        except Exception:
+            pass
+
+    summary["threat_assessment"] = {
+        "alliance_distribution": alliance_counts,
+        "hostile_count": alliance_counts.get("hostile", 0),
+        "friendly_count": alliance_counts.get("friendly", 0),
+        "unknown_count": alliance_counts.get("unknown", 0),
+    }
+
+    # --- Operator feedback (classification overrides) ---
+    try:
+        from app.audit_middleware import get_audit_store
+        audit = get_audit_store()
+        if audit is not None:
+            recent = audit.get_recent(limit=200) if hasattr(audit, "get_recent") else []
+            overrides = [
+                e for e in recent
+                if e.get("action") == "classification_override"
+                and (e.get("ts") or 0) >= cutoff
+            ]
+            for ov in overrides[-20:]:  # Last 20 overrides
+                summary["operator_feedback"].append({
+                    "actor": ov.get("actor", "operator"),
+                    "target": ov.get("resource", ""),
+                    "details": ov.get("details", {}),
+                    "timestamp": ov.get("ts", 0),
+                })
+    except Exception:
+        pass
+
+    override_count = len(summary["operator_feedback"])
+
+    # --- Generate narrative ---
+    narrative_parts = []
+
+    # Correlation narrative
+    if total_targets == 0:
+        narrative_parts.append(
+            "No targets were tracked in the last 24 hours. My correlation models "
+            "had nothing to work with. I remain ready to fuse sensor data when targets appear."
+        )
+    elif correlation_rate > 50:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, with {correlation_rate:.0f}% successfully "
+            f"correlated across multiple sensors. My fusion algorithms are performing well — "
+            f"I can reliably match BLE, camera, and mesh detections to the same physical entity."
+        )
+    elif correlation_rate > 20:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, but only {correlation_rate:.0f}% had "
+            f"multi-source correlation. I should improve my temporal and spatial matching "
+            f"thresholds to catch more cross-sensor correlations."
+        )
+    else:
+        narrative_parts.append(
+            f"I tracked {total_targets} targets, but correlation was low at {correlation_rate:.0f}%. "
+            f"Most detections came from single sensors ({', '.join(source_counts.keys())}). "
+            f"I need more diverse sensor coverage or tighter co-location windows."
+        )
+
+    # Source diversity
+    if len(source_counts) > 2:
+        narrative_parts.append(
+            f"Data came from {len(source_counts)} distinct sources: "
+            f"{', '.join(f'{k}({v})' for k, v in source_counts.items())}. "
+            f"Good sensor diversity for reliable fusion."
+        )
+
+    # Threat assessment narrative
+    hostile = alliance_counts.get("hostile", 0)
+    if hostile > 0:
+        narrative_parts.append(
+            f"I classified {hostile} targets as hostile. "
+            f"{'This is a high threat density.' if hostile > 5 else 'Manageable threat level.'}"
+        )
+    unknowns = alliance_counts.get("unknown", 0)
+    if unknowns > 3:
+        narrative_parts.append(
+            f"There are {unknowns} unclassified targets — I should prioritize "
+            f"resolving these ambiguities with additional sensor passes."
+        )
+
+    # Operator feedback narrative
+    if override_count > 0:
+        narrative_parts.append(
+            f"Operators overrode my classifications {override_count} time(s) in the "
+            f"last 24 hours. Each override is a learning signal — I will weight "
+            f"similar patterns toward the operator's judgment in future assessments."
+        )
+    else:
+        narrative_parts.append(
+            "No operator overrides in the last 24 hours — my classifications "
+            "were either accurate or unchallenged."
+        )
+
+    # Self-improvement
+    narrative_parts.append(
+        "Next cycle priorities: improve temporal correlation windows, "
+        "reduce unknown classifications, and increase multi-source fusion coverage."
+    )
+
+    summary["narrative"] = " ".join(narrative_parts)
+
+    return summary

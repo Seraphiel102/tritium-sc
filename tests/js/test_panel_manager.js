@@ -176,8 +176,15 @@ sandbox.localStorage = mockLocalStorage;
 
 const ctx = vm.createContext(sandbox);
 
+// Load panel-utils.js first (_esc is used by panel-manager.js)
+const panelUtilsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/panel-utils.js', 'utf8');
+const panelUtilsPlain = panelUtilsCode
+    .replace(/^export\s+/gm, '')
+    .replace(/^import\s+.*$/gm, '');
+vm.runInContext(panelUtilsPlain, ctx);
+
 // Load EventBus first (panel-manager.js imports it)
-const eventsCode = fs.readFileSync(__dirname + '/../../frontend/js/command/events.js', 'utf8');
+const eventsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/events.js', 'utf8');
 // Strip ES module import/export syntax for Node.js vm
 const eventsPlain = eventsCode
     .replace(/^export\s+/gm, '')
@@ -185,7 +192,7 @@ const eventsPlain = eventsCode
 vm.runInContext(eventsPlain, ctx);
 
 // Load panel-manager.js, stripping ES module syntax and exposing classes on globalThis
-const panelCode = fs.readFileSync(__dirname + '/../../frontend/js/command/panel-manager.js', 'utf8');
+const panelCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/panel-manager.js', 'utf8');
 const panelPlain = panelCode
     .replace(/^import\s+.*$/gm, '')
     .replace(/^export\s+class/gm, 'class')

@@ -9,13 +9,8 @@
 import { TritiumStore } from '../store.js';
 import { EventBus } from '../events.js';
 import { DeviceControlRegistry, DeviceAPI } from '../device-modal.js';
+import { _esc } from '../panel-utils.js';
 
-function _esc(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
-}
 
 function _resolveModalType(unit) {
     const type = unit.asset_type || unit.type || 'generic';
@@ -195,8 +190,118 @@ export const UnitInspectorPanelDef = {
             _lastRenderedId = selectedId;
             _lastRenderedType = resolvedType;
 
-            contentEl.innerHTML = control.render(unit) + '<div class="dc-stats-live">' + _renderStats(unit) + '</div>';
+            const currentAlliance = (unit.alliance || 'unknown').toLowerCase();
+            contentEl.innerHTML = control.render(unit) + '<div class="dc-stats-live">' + _renderStats(unit) + '</div>' +
+                '<div class="tag-btn-row" data-bind="ui-tag-buttons" style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">' +
+                    '<button class="tag-btn tag-btn-friendly' + (currentAlliance === 'friendly' ? ' active' : '') + '" data-ui-tag="friendly">FRIENDLY</button>' +
+                    '<button class="tag-btn tag-btn-hostile' + (currentAlliance === 'hostile' ? ' active' : '') + '" data-ui-tag="hostile">HOSTILE</button>' +
+                    '<button class="tag-btn tag-btn-vip' + (unit.vip ? ' active' : '') + '" data-ui-tag="vip">VIP</button>' +
+                '</div>' +
+                '<div style="margin-top:6px;display:flex;gap:4px">' +
+                    '<button class="panel-action-btn" data-action="investigate" style="flex:1;font-size:0.45rem;background:rgba(0,240,255,0.12);border:1px solid #00f0ff;color:#00f0ff;font-weight:700;letter-spacing:0.06em;cursor:pointer;padding:6px">INVESTIGATE</button>' +
+                    '<button class="panel-action-btn" data-action="ar-export" style="flex:1;font-size:0.45rem">EXPORT AR</button>' +
+                '</div>' +
+                '<div class="ui-ar-export-result" data-bind="ar-result" style="display:none;margin-top:6px;font-size:0.4rem;color:var(--text-ghost);max-height:120px;overflow:auto"></div>';
             control.bind(contentEl, unit, DeviceAPI);
+
+            // Wire tagging buttons (FRIENDLY / HOSTILE / VIP)
+            const tagBtns = contentEl.querySelectorAll('[data-ui-tag]');
+            tagBtns.forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const tag = btn.dataset.uiTag;
+                    const targetId = unit.id;
+                    if (!targetId) return;
+
+                    try {
+                        if (tag === 'vip') {
+                            const isVip = btn.classList.contains('active');
+                            await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    target_id: targetId,
+                                    alliance: isVip ? (unit.alliance || 'unknown') : (unit.alliance || 'unknown'),
+                                    reason: isVip ? 'VIP tag removed' : 'Tagged as VIP',
+                                }),
+                            });
+                            unit.vip = !isVip;
+                            btn.classList.toggle('active');
+                            EventBus.emit('toast:show', { message: isVip ? 'VIP tag removed' : `${targetId} tagged as VIP`, type: 'info' });
+                        } else {
+                            const resp = await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    target_id: targetId,
+                                    alliance: tag,
+                                    reason: `Operator tagged as ${tag}`,
+                                }),
+                            });
+                            if (resp.ok) {
+                                unit.alliance = tag;
+                                tagBtns.forEach(b => {
+                                    if (b.dataset.uiTag !== 'vip') {
+                                        b.classList.toggle('active', b.dataset.uiTag === tag);
+                                    }
+                                });
+                                EventBus.emit('toast:show', { message: `${targetId} tagged as ${tag.toUpperCase()}`, type: 'info' });
+                            }
+                        }
+                    } catch (_err) {
+                        EventBus.emit('toast:show', { message: 'Tag update failed', type: 'error' });
+                    }
+                });
+            });
+
+            // Wire INVESTIGATE button — opens dossier panel for this target
+            const investigateBtn = contentEl.querySelector('[data-action="investigate"]');
+            if (investigateBtn) {
+                investigateBtn.addEventListener('click', () => {
+                    // Open the dossiers panel
+                    if (window.panelManager) {
+                        window.panelManager.open('dossiers');
+                    }
+                    // Emit event to load this target's dossier
+                    EventBus.emit('dossier:load-target', { target_id: unit.id });
+                });
+            }
+
+            // Wire AR export button
+            const arBtn = contentEl.querySelector('[data-action="ar-export"]');
+            const arResult = contentEl.querySelector('[data-bind="ar-result"]');
+            if (arBtn) {
+                arBtn.addEventListener('click', async () => {
+                    try {
+                        const resp = await fetch('/api/targets/ar-export?max_targets=50');
+                        if (!resp.ok) {
+                            if (arResult) {
+                                arResult.style.display = 'block';
+                                arResult.textContent = 'AR export unavailable';
+                            }
+                            return;
+                        }
+                        const data = await resp.json();
+                        const json = JSON.stringify(data, null, 2);
+                        // Copy to clipboard
+                        try {
+                            await navigator.clipboard.writeText(json);
+                            EventBus.emit('toast:show', { message: `AR export copied: ${data.target_count || 0} targets`, type: 'info' });
+                        } catch (_clipErr) {
+                            // Fallback: show in panel
+                            EventBus.emit('toast:show', { message: `AR export: ${data.target_count || 0} targets`, type: 'info' });
+                        }
+                        if (arResult) {
+                            arResult.style.display = 'block';
+                            arResult.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;margin:0;color:var(--cyan)">${_esc(json)}</pre>`;
+                        }
+                    } catch (_err) {
+                        if (arResult) {
+                            arResult.style.display = 'block';
+                            arResult.textContent = 'AR export failed';
+                        }
+                    }
+                });
+            }
         }
 
         function _navigate(delta) {

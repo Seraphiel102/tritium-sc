@@ -173,7 +173,11 @@ class WarAnnouncer:
                 if etype == "game_countdown":
                     self._on_countdown(data.get("seconds_remaining", 0))
                 elif etype == "game_state_change":
-                    if data.get("new_state") == "active":
+                    state = data.get("state") or data.get("new_state", "")
+                    countdown = data.get("countdown", 0)
+                    if state == "countdown" and countdown > 0:
+                        self._on_countdown(int(countdown))
+                    elif state == "active":
                         self._on_countdown(0)
                 elif etype == "target_eliminated":
                     self._on_target_eliminated(data)

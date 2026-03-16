@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     npc_max_vehicles: int = 150      # Peak vehicle count (scaled by time-of-day)
     npc_max_pedestrians: int = 200   # Peak pedestrian count (scaled by time-of-day)
 
+    # Demo mode — synthetic data generators for full pipeline testing
+    tritium_demo: bool = False
+
     # Amy AI Commander
     amy_enabled: bool = True
     amy_camera_device: str | None = None    # auto-detect BCC950
@@ -108,6 +111,11 @@ class Settings(BaseSettings):
     # Fleet / Model routing
     fleet_enabled: bool = True        # auto-discover Ollama fleet on LAN + Tailscale
     fleet_auto_discover: bool = True  # Tailscale peer scan when fleet_enabled
+
+    # Fleet bridge — WebSocket connection to tritium-edge fleet server
+    fleet_bridge_enabled: bool = False
+    fleet_bridge_url: str = "ws://192.168.86.9:8080/ws"
+    fleet_server_url: str = "http://192.168.86.9:8080"  # REST base URL for edge fleet server
 
     # Backstory generation (distributed via Ollama fleet)
     backstory_enabled: bool = True
@@ -126,11 +134,40 @@ class Settings(BaseSettings):
     detection_confidence: float = 0.5
     yolo_model: str = "yolov8n.pt"
 
+    # Authentication & Authorization
+    auth_enabled: bool = False             # Enable JWT auth middleware
+    auth_secret_key: str = ""              # JWT signing key (generate with: openssl rand -hex 32)
+    auth_algorithm: str = "HS256"          # JWT algorithm
+    auth_access_token_expire_minutes: int = 60  # Access token TTL
+    auth_refresh_token_expire_days: int = 7     # Refresh token TTL
+    auth_admin_username: str = "admin"     # Default admin username
+    auth_admin_password: str = ""          # Default admin password (must be set if auth_enabled)
+
+    # HTTPS / TLS
+    tls_enabled: bool = False              # Enable HTTPS
+    tls_cert_file: str = ""                # Path to TLS certificate
+    tls_key_file: str = ""                 # Path to TLS private key
+
+    # CORS
+    cors_allowed_origins: str = ""         # Comma-separated allowed origins (empty = allow all in dev)
+
+    # Content-Security-Policy
+    csp_enabled: bool = True               # Enable CSP headers
+
+    # API key authentication (stateless alternative to JWT)
+    api_keys: str = ""                     # Comma-separated API keys for X-API-Key header auth
+
+    # Rate limiting
+    rate_limit_enabled: bool = False       # Enable rate limiting
+    rate_limit_requests: int = 100         # Max requests per window
+    rate_limit_window_seconds: int = 60    # Rate limit window
+
     # NVR settings
     nvr_host: Optional[str] = None
     nvr_user: Optional[str] = None
     nvr_pass: Optional[str] = None
     nvr_port: int = 443
+    nvr_discovery_timeout: float = 3.0  # seconds — max wait for NVR probe at startup
 
 
 settings = Settings()

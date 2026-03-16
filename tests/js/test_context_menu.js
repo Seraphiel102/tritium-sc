@@ -159,17 +159,17 @@ const sandbox = {
 const ctx = vm.createContext(sandbox);
 
 // Load EventBus
-const eventsCode = fs.readFileSync(__dirname + '/../../frontend/js/command/events.js', 'utf8')
+const eventsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/events.js', 'utf8')
     .replace(/^export\s+/gm, '').replace(/^import\s+.*$/gm, '');
 vm.runInContext(eventsCode, ctx);
 
 // Load TritiumStore
-const storeCode = fs.readFileSync(__dirname + '/../../frontend/js/command/store.js', 'utf8')
+const storeCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/store.js', 'utf8')
     .replace(/^export\s+/gm, '').replace(/^import\s+.*$/gm, '');
 vm.runInContext(storeCode, ctx);
 
 // Load context menu module
-const contextMenuCode = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8')
+const contextMenuCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8')
     .replace(/^export\s+/gm, '').replace(/^import\s+.*$/gm, '');
 vm.runInContext(contextMenuCode, ctx);
 
@@ -186,10 +186,17 @@ console.log('\n--- Menu items with unit selected ---');
 (function testMenuItemsWithSelectedUnit() {
     const items = ContextMenu.getMenuItems('rover-01');
     const labels = items.map(i => i.label);
+    assert(labels.includes('INVESTIGATE'), 'Selected unit menu has INVESTIGATE');
     assert(labels.includes('DISPATCH HERE'), 'Selected unit menu has DISPATCH HERE');
     assert(labels.includes('SUGGEST TO AMY'), 'Selected unit menu has SUGGEST TO AMY');
     assert(labels.includes('SET WAYPOINT'), 'Selected unit menu has SET WAYPOINT');
     assert(labels.includes('CANCEL'), 'Selected unit menu has CANCEL');
+})();
+
+(function testInvestigateItemHasCorrectAction() {
+    const items = ContextMenu.getMenuItems('rover-01');
+    const investigate = items.find(i => i.label === 'INVESTIGATE');
+    assert(investigate && investigate.action === 'investigate_target', 'INVESTIGATE has action "investigate_target"');
 })();
 
 (function testDispatchItemHasCorrectAction() {
@@ -565,39 +572,39 @@ console.log('\n--- Waypoint backend call ---');
 console.log('\n--- map:marker / map:waypoint subscription ---');
 
 (function testMapLibreSubscribesMarkerEvent() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     assert(source.includes("'map:marker'"), 'map-maplibre.js subscribes to map:marker');
 })();
 
 (function testMapLibreSubscribesWaypointEvent() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     assert(source.includes("'map:waypoint'"), 'map-maplibre.js subscribes to map:waypoint');
 })();
 
 (function testOnDropMarkerHandlerExists() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     assert(source.includes('_onDropMarker'), 'map-maplibre.js has _onDropMarker handler');
 })();
 
 (function testOnDropWaypointHandlerExists() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     assert(source.includes('_onDropWaypoint'), 'map-maplibre.js has _onDropWaypoint handler');
 })();
 
 (function testMarkerHandlerChecksCoords() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const block = source.split('_onDropMarker')[1] || '';
     assert(block.includes('data.x') && block.includes('data.y'), 'marker handler checks x,y coords');
 })();
 
 (function testWaypointHandlerChecksCoords() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const block = source.split('_onDropWaypoint')[1] || '';
     assert(block.includes('data.x') && block.includes('data.y'), 'waypoint handler checks x,y coords');
 })();
 
 (function testMarkerHandlerCreatesMapElement() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     // Find the function definition, not the EventBus.on reference
     const funcStart = source.indexOf('function _onDropMarker');
     const block = funcStart >= 0 ? source.slice(funcStart, funcStart + 500) : '';
@@ -605,14 +612,14 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 })();
 
 (function testWaypointHandlerCreatesMapElement() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const funcStart = source.indexOf('function _onDropWaypoint');
     const block = funcStart >= 0 ? source.slice(funcStart, funcStart + 500) : '';
     assert(block.includes('operator-waypoint'), 'waypoint handler creates element with operator-waypoint class');
 })();
 
 (function testMarkerAutoRemove() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const funcStart = source.indexOf('function _onDropMarker');
     const block = funcStart >= 0 ? source.slice(funcStart, funcStart + 1000) : '';
     assert(block.includes('setTimeout'), 'marker handler has auto-remove timeout');
@@ -620,7 +627,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 })();
 
 (function testWaypointAutoRemove() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const funcStart = source.indexOf('function _onDropWaypoint');
     const block = funcStart >= 0 ? source.slice(funcStart, funcStart + 1000) : '';
     assert(block.includes('setTimeout'), 'waypoint handler has auto-remove timeout');
@@ -634,7 +641,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // Patrol mode should send via /api/amy/command not /api/npc/action
 (function testPatrolModeUsesAmyCommand() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     // Find patrol mode click handler
     const patrolIdx = source.indexOf('patrolMode && _state.patrolUnitId');
     assert(patrolIdx >= 0, 'patrol mode click handler exists');
@@ -646,7 +653,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // Aim mode should send via /api/devices/{id}/command (device route for hardware commands)
 (function testAimModeUsesDeviceCommand() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const aimIdx = source.indexOf('aimMode && _state.aimUnitId');
     assert(aimIdx >= 0, 'aim mode click handler exists');
     const aimBlock = source.slice(aimIdx, aimIdx + 600);
@@ -657,7 +664,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // Patrol sends params-style patrol command
 (function testPatrolSendsParamsCommand() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const patrolIdx = source.indexOf('patrolMode && _state.patrolUnitId');
     const patrolBlock = source.slice(patrolIdx, patrolIdx + 1000);
     assert(patrolBlock.includes("action: 'patrol'"), 'patrol sends action: patrol');
@@ -666,7 +673,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // Aim sends formatted Lua motor.aim command
 (function testAimSendsLuaCommand() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/map-maplibre.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/map-maplibre.js', 'utf8');
     const aimIdx = source.indexOf('aimMode && _state.aimUnitId');
     const aimBlock = source.slice(aimIdx, aimIdx + 600);
     assert(aimBlock.includes('motor.aim('), 'aim sends Lua motor.aim() command');
@@ -678,7 +685,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 // ============================================================
 
 (function testDispatchUsesParamsArray() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8');
     const dispatchIdx = source.indexOf("case 'dispatch':");
     assert(dispatchIdx >= 0, 'dispatch case exists in context menu');
     const dispatchBlock = source.slice(dispatchIdx, dispatchIdx + 600);
@@ -694,7 +701,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // Suggestions route through /api/amy/chat (not /api/amy/command)
 (function testSuggestionsUseAmyChat() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8');
     const sugDispIdx = source.indexOf("case 'suggest_dispatch':");
     assert(sugDispIdx >= 0, 'suggest_dispatch case exists');
     const sugBlock = source.slice(sugDispIdx, sugDispIdx + 400);
@@ -709,7 +716,7 @@ console.log('\n--- map:marker / map:waypoint subscription ---');
 
 // buildSuggestCommand returns natural language (not Lua syntax)
 (function testBuildSuggestCommandNaturalLanguage() {
-    const source = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8');
+    const source = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8');
     const buildFnIdx = source.indexOf('function buildSuggestCommand');
     assert(buildFnIdx >= 0, 'buildSuggestCommand function exists');
     const fnBlock = source.slice(buildFnIdx, buildFnIdx + 400);
@@ -747,12 +754,12 @@ console.log('\n--- getMenuItems falsy/edge values ---');
 
 (function testMenuItemCountWithUnit() {
     const items = ContextMenu.getMenuItems('rover-01');
-    assert(items.length === 4, 'Selected unit menu has exactly 4 items, got ' + items.length);
+    assert(items.length === 6, 'Selected unit menu has exactly 6 items, got ' + items.length);
 })();
 
 (function testMenuItemCountNoUnit() {
     const items = ContextMenu.getMenuItems(null);
-    assert(items.length === 3, 'No-selection menu has exactly 3 items, got ' + items.length);
+    assert(items.length === 10, 'No-selection menu has exactly 10 items, got ' + items.length);
 })();
 
 (function testCancelIsAlwaysLast() {
@@ -1018,8 +1025,8 @@ console.log('\n--- DOM element details ---');
     const items = el.querySelectorAll('.map-context-item');
     if (items.length > 0) {
         const first = items[0];
-        assert(first.textContent.includes('DISPATCH HERE'), 'First item textContent includes label');
-        assert(first.textContent.startsWith('>'), 'First item textContent starts with icon');
+        assert(first.textContent.includes('INVESTIGATE'), 'First item textContent includes label');
+        assert(first.textContent.startsWith('I'), 'First item textContent starts with icon');
     }
 })();
 
@@ -1028,7 +1035,7 @@ console.log('\n--- DOM element details ---');
     const el = ContextMenu.createMenuElement(container, 'rover-01', { x: 50, y: 100 }, 400, 300);
     const items = el.querySelectorAll('.map-context-item');
     if (items.length > 0) {
-        assert(items[0].dataset.action === 'dispatch', 'First item has data-action="dispatch"');
+        assert(items[0].dataset.action === 'investigate_target', 'First item has data-action="investigate_target"');
         assert(items[items.length - 1].dataset.action === 'cancel', 'Last item has data-action="cancel"');
     }
 })();
@@ -1211,14 +1218,14 @@ console.log('\n--- Click-outside dismiss ---');
 
 (function testOutsideHandlerRegisteredOnShow() {
     // Verify the code registers a mousedown handler for click-outside dismiss
-    const code = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8');
+    const code = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8');
     assert(code.includes("document.addEventListener('mousedown'"),
         'show() registers document mousedown listener for click-outside');
 })();
 
 (function testOutsideHandlerCleanedOnHide() {
     // Verify hide() removes the mousedown handler
-    const code = fs.readFileSync(__dirname + '/../../frontend/js/command/context-menu.js', 'utf8');
+    const code = fs.readFileSync(__dirname + '/../../src/frontend/js/command/context-menu.js', 'utf8');
     assert(code.includes("document.removeEventListener('mousedown'"),
         'hide() removes document mousedown listener');
 })();

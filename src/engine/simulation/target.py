@@ -876,6 +876,8 @@ class SimulationTarget:
             "radio_detected": self.radio_detected,
             "radio_signal_strength": round(self.radio_signal_strength, 3),
             "weapon_range": round(self.weapon_range, 1),
+            "weapon_cooldown": round(self.weapon_cooldown, 2),
+            "last_fired": round(self.last_fired, 3),
             "vision_range": round(self.vision_range, 1),
             "crowd_role": self.crowd_role,
             "drone_variant": self.drone_variant,

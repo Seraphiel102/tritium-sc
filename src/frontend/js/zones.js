@@ -6,6 +6,13 @@
  * Manages zone view, zone list, and zone events
  */
 
+function _esc(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
 // Global zone editor instance
 let zoneEditor = null;
 let currentZones = [];
@@ -69,9 +76,9 @@ function updateSidebarZoneList() {
                 ? `<span class="badge" style="background: var(--magenta); font-size: 0.6rem; padding: 2px 4px; margin-left: 4px;">${zone.total_events}</span>`
                 : '';
 
-            html += `<li class="tree-item" onclick="selectZone('${zone.zone_id}')" style="cursor: pointer;">
+            html += `<li class="tree-item" onclick="selectZone('${_esc(zone.zone_id)}')" style="cursor: pointer;">
                 <span style="color: ${color};">&#9632;</span>
-                ${zone.name}${eventBadge}
+                ${_esc(zone.name)}${eventBadge}
             </li>`;
         }
 
@@ -106,17 +113,17 @@ function updateZoneListPanel() {
         const isSelected = zone.zone_id === selectedZoneId;
         const bgStyle = isSelected ? 'background: rgba(0, 240, 255, 0.1); border-left: 3px solid var(--cyan);' : '';
 
-        html += `<div class="zone-item" onclick="selectZone('${zone.zone_id}')"
+        html += `<div class="zone-item" onclick="selectZone('${_esc(zone.zone_id)}')"
                       style="padding: var(--space-sm); margin-bottom: var(--space-xs); cursor: pointer; ${bgStyle}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="color: ${color}; font-weight: bold;">${zone.name}</span>
+                <span style="color: ${color}; font-weight: bold;">${_esc(zone.name)}</span>
                 <span class="badge" style="background: ${color}; color: #0a0a0f; font-size: 0.6rem; padding: 2px 6px;">
-                    ${zone.zone_type.toUpperCase()}
+                    ${_esc(zone.zone_type.toUpperCase())}
                 </span>
             </div>
             <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
                 ${zone.total_events} events
-                ${zone.monitored_object ? ` | Monitoring: ${zone.monitored_object}` : ''}
+                ${zone.monitored_object ? ` | Monitoring: ${_esc(zone.monitored_object)}` : ''}
             </div>
             ${zone.last_event_at ? `<div style="font-size: 0.65rem; color: var(--text-muted);">
                 Last: ${new Date(zone.last_event_at).toLocaleString()}

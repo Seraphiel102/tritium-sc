@@ -6,13 +6,7 @@
 // Subscribes to: alerts
 
 import { TritiumStore } from '../store.js';
-
-function _esc(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
-}
+import { _esc } from '../panel-utils.js';
 
 export const AlertsPanelDef = {
     id: 'alerts',
@@ -59,11 +53,14 @@ export const AlertsPanelDef = {
                 const dotClass = a.type === 'escalation' ? 'panel-dot-hostile'
                     : a.type === 'warning' ? 'panel-dot-unknown'
                     : 'panel-dot-neutral';
+                const severityLabel = a.type === 'escalation' ? 'Threat escalation'
+                    : a.type === 'warning' ? 'Warning'
+                    : 'Info';
                 const time = a.time
                     ? new Date(a.time).toLocaleTimeString().substr(0, 5)
                     : '';
-                return `<li class="panel-list-item" style="cursor:default">
-                    <span class="panel-dot ${dotClass}"></span>
+                return `<li class="panel-list-item" style="cursor:default" title="${severityLabel}: ${_esc(a.message)}">
+                    <span class="panel-dot ${dotClass}" title="${severityLabel}"></span>
                     <span style="flex:1;font-size:0.6rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_esc(a.message)}</span>
                     <span class="panel-stat-value" style="font-size:0.45rem;color:var(--text-ghost)">${time}</span>
                 </li>`;

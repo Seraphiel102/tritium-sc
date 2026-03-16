@@ -16,6 +16,8 @@
  * Exports: DeviceModalManager, DeviceControlRegistry, DeviceAPI
  */
 
+import { _esc } from './panel-utils.js';
+
 // ============================================================
 // Device API -- sends commands to backend
 // ============================================================
@@ -71,16 +73,6 @@ const DeviceAPI = {
     },
 };
 
-// ============================================================
-// Helper: escape HTML
-// ============================================================
-
-function _esc(s) {
-    if (typeof s !== 'string') return String(s || '');
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
 function _pct(val, max) {
     if (!max || max <= 0) return 0;
     return Math.round((val / max) * 100);
@@ -126,6 +118,17 @@ function _updateStatValues(container, values) {
 }
 
 // ============================================================
+// Robot helpers
+// ============================================================
+
+function _robotPatrolInfo(device) {
+    const wps = device.waypoints;
+    if (!Array.isArray(wps) || wps.length === 0) return '';
+    const loop = device.loopWaypoints ? 'LOOP' : 'ONE-WAY';
+    return `${wps.length} waypoints (${loop})`;
+}
+
+// ============================================================
 // Built-in Device Controls
 // ============================================================
 
@@ -136,17 +139,25 @@ const RoverControl = {
     render(device) {
         const hpPct = _pct(device.health, device.maxHealth);
         const hpColor = _healthColor(hpPct);
+        const fsmState = device.fsmState || device.fsm_state || 'idle';
+        const dispatchTarget = device.dispatch_target || device.dispatchTarget;
+        const patrolInfo = _robotPatrolInfo(device);
+        const lastCmd = device.last_command || device.lastCommand || '--';
         return `
             <div class="dc-stats">
                 <div class="dc-stat-row"><span class="dc-label">NAME</span><span class="dc-value">${_esc(device.name)}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">TYPE</span><span class="dc-value">${_esc(device.type || 'rover')}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">STATUS</span><span class="dc-value dc-status-${device.status || 'idle'}">${(device.status || 'idle').toUpperCase()}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">TASK</span><span class="dc-value" style="color:var(--cyan)">${_esc(fsmState.toUpperCase())}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">POSITION</span><span class="dc-value">(${(device.position?.x || 0).toFixed(1)}, ${(device.position?.y || 0).toFixed(1)})</span></div>
                 <div class="dc-stat-row"><span class="dc-label">HEADING</span><span class="dc-value">${Math.round(device.heading || 0)}&deg;</span></div>
                 <div class="dc-stat-row"><span class="dc-label">SPEED</span><span class="dc-value">${(device.speed || 0).toFixed(1)} m/s</span></div>
                 <div class="dc-stat-row"><span class="dc-label">BATTERY</span><span class="dc-value">${_batteryStr(device.battery)}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">HEALTH</span><span class="dc-value" style="color:${hpColor}">${Math.round(device.health || 0)}/${device.maxHealth || 0}</span></div>
                 <div class="dc-health-bar"><div class="dc-health-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+                ${dispatchTarget ? `<div class="dc-stat-row"><span class="dc-label">DEST</span><span class="dc-value" style="color:var(--green)">(${(dispatchTarget.x || 0).toFixed(1)}, ${(dispatchTarget.y || 0).toFixed(1)})</span></div>` : ''}
+                ${patrolInfo ? `<div class="dc-stat-row"><span class="dc-label">PATROL</span><span class="dc-value" style="color:var(--amber)">${_esc(patrolInfo)}</span></div>` : ''}
+                <div class="dc-stat-row"><span class="dc-label">LAST CMD</span><span class="dc-value" style="color:var(--text-ghost);font-size:0.45rem">${_esc(String(lastCmd))}</span></div>
             </div>
             <div class="dc-actions">
                 <div class="dc-section-label">MOVEMENT</div>
@@ -256,13 +267,18 @@ const RoverControl = {
     update(container, device) {
         const hpPct = _pct(device.health, device.maxHealth);
         const hpColor = _healthColor(hpPct);
+        const fsmState = device.fsmState || device.fsm_state || 'idle';
+        const lastCmd = device.last_command || device.lastCommand || '--';
         _updateStatValues(container, {
             'STATUS': (device.status || 'idle').toUpperCase(),
+            'TASK': fsmState.toUpperCase(),
             'POSITION': `(${(device.position?.x || 0).toFixed(1)}, ${(device.position?.y || 0).toFixed(1)})`,
             'HEADING': Math.round(device.heading || 0) + '\u00B0',
             'SPEED': (device.speed || 0).toFixed(1) + ' m/s',
             'BATTERY': _batteryStr(device.battery),
             'HEALTH': `${Math.round(device.health || 0)}/${device.maxHealth || 0}`,
+            'PATROL': _robotPatrolInfo(device) || '--',
+            'LAST CMD': String(lastCmd),
             _hpPct: hpPct,
             _hpColor: hpColor,
         });
@@ -280,16 +296,24 @@ const DroneControl = {
     render(device) {
         const hpPct = _pct(device.health, device.maxHealth);
         const hpColor = _healthColor(hpPct);
+        const fsmState = device.fsmState || device.fsm_state || 'idle';
+        const dispatchTarget = device.dispatch_target || device.dispatchTarget;
+        const patrolInfo = _robotPatrolInfo(device);
+        const lastCmd = device.last_command || device.lastCommand || '--';
         return `
             <div class="dc-stats">
                 <div class="dc-stat-row"><span class="dc-label">NAME</span><span class="dc-value">${_esc(device.name)}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">TYPE</span><span class="dc-value">${_esc(device.type || 'drone')}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">STATUS</span><span class="dc-value">${(device.status || 'idle').toUpperCase()}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">TASK</span><span class="dc-value" style="color:var(--cyan)">${_esc(fsmState.toUpperCase())}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">ALTITUDE</span><span class="dc-value">${(device.altitude || 0).toFixed(1)}m</span></div>
                 <div class="dc-stat-row"><span class="dc-label">POSITION</span><span class="dc-value">(${(device.position?.x || 0).toFixed(1)}, ${(device.position?.y || 0).toFixed(1)})</span></div>
                 <div class="dc-stat-row"><span class="dc-label">BATTERY</span><span class="dc-value">${_batteryStr(device.battery)}</span></div>
                 <div class="dc-stat-row"><span class="dc-label">HEALTH</span><span class="dc-value" style="color:${hpColor}">${Math.round(device.health || 0)}/${device.maxHealth || 0}</span></div>
                 <div class="dc-health-bar"><div class="dc-health-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+                ${dispatchTarget ? `<div class="dc-stat-row"><span class="dc-label">DEST</span><span class="dc-value" style="color:var(--green)">(${(dispatchTarget.x || 0).toFixed(1)}, ${(dispatchTarget.y || 0).toFixed(1)})</span></div>` : ''}
+                ${patrolInfo ? `<div class="dc-stat-row"><span class="dc-label">PATROL</span><span class="dc-value" style="color:var(--amber)">${_esc(patrolInfo)}</span></div>` : ''}
+                <div class="dc-stat-row"><span class="dc-label">LAST CMD</span><span class="dc-value" style="color:var(--text-ghost);font-size:0.45rem">${_esc(String(lastCmd))}</span></div>
             </div>
             <div class="dc-actions">
                 <div class="dc-btn-row">
@@ -882,6 +906,18 @@ const DeviceControlRegistry = {
             'ip_camera': 'camera',
             'ptz_camera': 'camera',
             'synthetic_camera': 'camera',
+            'phone': 'ble_device',
+            'watch': 'ble_device',
+            'laptop': 'ble_device',
+            'tablet': 'ble_device',
+            'headphones': 'ble_device',
+            'speaker': 'ble_device',
+            'beacon': 'ble_device',
+            'wearable': 'ble_device',
+            'iot': 'ble_device',
+            'wifi_ap': 'wifi_device',
+            'wifi_client': 'wifi_device',
+            'edge_node': 'ble_device',
         };
 
         if (aliases[type] && this._controls.has(aliases[type])) {
@@ -897,6 +933,180 @@ const DeviceControlRegistry = {
     },
 };
 
+// TrackedTargetControl — for BLE, WiFi, and edge-tracker detected targets
+const TrackedTargetControl = {
+    type: 'tracked_target',
+    title: 'TRACKED TARGET',
+
+    render(device) {
+        const alliance = (device.alliance || 'unknown').toUpperCase();
+        const allianceColor = { FRIENDLY: '#05ffa1', HOSTILE: '#ff2a6d', UNKNOWN: '#aaa', NEUTRAL: '#fcee0a' }[alliance] || '#aaa';
+        const rssi = device.rssi ?? device.strongest_rssi ?? device.last_rssi ?? null;
+        const confidence = device.confidence != null ? Math.round(device.confidence * 100) + '%' : '--';
+        const source = device.source || device.asset_type || device.type || '--';
+        const firstSeen = device.first_seen ? new Date(device.first_seen).toLocaleString() : '--';
+        const lastSeen = device.last_seen || device.lastSeen ? new Date(device.last_seen || device.lastSeen).toLocaleString() : '--';
+        const manufacturer = device.manufacturer || device.oui_manufacturer || '';
+        const deviceClass = device.device_class || device.classification || '';
+
+        // RL classification with confidence
+        const rlClass = device.rl_classification || device.device_class || device.classification || '';
+        const rlConf = device.classification_confidence ?? device.confidence ?? null;
+        let classificationHtml = '';
+        if (rlClass) {
+            const confPct = rlConf != null ? Math.round(rlConf * 100) + '%' : '--';
+            const confColor = rlConf != null
+                ? (rlConf > 0.8 ? '#05ffa1' : rlConf > 0.5 ? '#fcee0a' : '#ff2a6d')
+                : 'var(--text-ghost)';
+            classificationHtml = `<div class="dc-stat-row"><span class="dc-label">CLASSIFICATION</span><span class="dc-value">${_esc(rlClass)} <span style="color:${confColor};font-size:0.45rem">(${confPct} confidence)</span></span></div>`;
+        }
+
+        let rssiHtml = '--';
+        if (rssi !== null) {
+            const rssiColor = rssi > -50 ? '#05ffa1' : rssi > -70 ? '#fcee0a' : '#ff2a6d';
+            const pct = Math.max(0, Math.min(100, ((rssi + 100) / 70) * 100));
+            rssiHtml = `<span style="color:${rssiColor}">${rssi} dBm</span>
+                <div style="width:80px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;display:inline-block;vertical-align:middle;margin-left:6px">
+                    <div style="width:${pct}%;height:100%;background:${rssiColor};border-radius:2px"></div>
+                </div>`;
+        }
+
+        // Determine current tag for highlighting active button
+        const currentAlliance = (device.alliance || 'unknown').toLowerCase();
+
+        return `
+            <div class="dc-stats">
+                <div class="dc-stat-row"><span class="dc-label">TARGET ID</span><span class="dc-value" style="font-family:'JetBrains Mono',monospace;font-size:0.55rem">${_esc(device.id || '--')}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">NAME</span><span class="dc-value">${_esc(device.name || device.id || '--')}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">TYPE</span><span class="dc-value">${_esc(source)}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">ALLIANCE</span><span class="dc-value" style="color:${allianceColor};font-weight:600">${alliance}</span></div>
+                ${classificationHtml}
+                ${deviceClass && deviceClass !== rlClass ? `<div class="dc-stat-row"><span class="dc-label">DEVICE CLASS</span><span class="dc-value">${_esc(deviceClass)}</span></div>` : ''}
+                ${manufacturer ? `<div class="dc-stat-row"><span class="dc-label">MANUFACTURER</span><span class="dc-value">${_esc(manufacturer)}</span></div>` : ''}
+                <div class="dc-stat-row"><span class="dc-label">RSSI</span><span class="dc-value">${rssiHtml}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">CONFIDENCE</span><span class="dc-value">${confidence}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">POSITION</span><span class="dc-value">(${(device.position?.x || 0).toFixed(4)}, ${(device.position?.y || 0).toFixed(4)})</span></div>
+                <div class="dc-stat-row"><span class="dc-label">FIRST SEEN</span><span class="dc-value" style="font-size:0.5rem">${firstSeen}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">LAST SEEN</span><span class="dc-value" style="font-size:0.5rem">${lastSeen}</span></div>
+                <div class="dc-stat-row"><span class="dc-label">STATUS</span><span class="dc-value">${(device.status || 'active').toUpperCase()}</span></div>
+            </div>
+            <div class="tag-btn-row" data-bind="tag-buttons">
+                <button class="tag-btn tag-btn-friendly${currentAlliance === 'friendly' ? ' active' : ''}" data-tag="friendly">FRIENDLY</button>
+                <button class="tag-btn tag-btn-hostile${currentAlliance === 'hostile' ? ' active' : ''}" data-tag="hostile">HOSTILE</button>
+                <button class="tag-btn tag-btn-vip${device.vip ? ' active' : ''}" data-tag="vip">VIP</button>
+            </div>
+        `;
+    },
+
+    bind(container, device) {
+        // Wire tag buttons
+        const tagBtns = container.querySelectorAll('.tag-btn');
+        tagBtns.forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const tag = btn.dataset.tag;
+                const targetId = device.id;
+                if (!targetId) return;
+
+                try {
+                    if (tag === 'vip') {
+                        // VIP is a toggle — add a dossier note
+                        const isVip = btn.classList.contains('active');
+                        const newAlliance = isVip ? 'unknown' : device.alliance || 'unknown';
+                        await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_id: targetId,
+                                alliance: newAlliance,
+                                reason: isVip ? 'VIP tag removed' : 'Tagged as VIP',
+                            }),
+                        });
+                        device.vip = !isVip;
+                        btn.classList.toggle('active');
+                    } else {
+                        // Alliance tag — friendly or hostile
+                        const resp = await fetch(`/api/targets/${encodeURIComponent(targetId)}/classify`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_id: targetId,
+                                alliance: tag,
+                                reason: `Operator tagged as ${tag}`,
+                            }),
+                        });
+                        if (resp.ok) {
+                            device.alliance = tag;
+                            // Update active states
+                            tagBtns.forEach(b => {
+                                if (b.dataset.tag !== 'vip') {
+                                    b.classList.toggle('active', b.dataset.tag === tag);
+                                }
+                            });
+                            // Update alliance display
+                            const allianceRow = container.querySelector('.dc-label');
+                            const rows = container.querySelectorAll('.dc-stat-row');
+                            for (const row of rows) {
+                                const label = row.querySelector('.dc-label');
+                                const value = row.querySelector('.dc-value');
+                                if (label && value && label.textContent === 'ALLIANCE') {
+                                    const newAlliance = tag.toUpperCase();
+                                    const allianceColorMap = { FRIENDLY: '#05ffa1', HOSTILE: '#ff2a6d', UNKNOWN: '#aaa', NEUTRAL: '#fcee0a' };
+                                    value.style.color = allianceColorMap[newAlliance] || '#aaa';
+                                    value.textContent = newAlliance;
+                                    break;
+                                }
+                            }
+                            // Update store so map marker color updates
+                            const { TritiumStore } = await import('../store.js');
+                            TritiumStore.updateUnit(targetId, { alliance: tag });
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[TAG] Failed to tag target:', err);
+                }
+            });
+        });
+    },
+
+    update(container, device) {
+        // Live update RSSI, last_seen, and classification
+        const rows = container.querySelectorAll('.dc-stat-row');
+        for (const row of rows) {
+            const label = row.querySelector('.dc-label');
+            const value = row.querySelector('.dc-value');
+            if (!label || !value) continue;
+            const key = label.textContent;
+            if (key === 'LAST SEEN') {
+                const ls = device.last_seen || device.lastSeen;
+                value.textContent = ls ? new Date(ls).toLocaleString() : '--';
+            } else if (key === 'RSSI') {
+                const rssi = device.rssi ?? device.strongest_rssi ?? device.last_rssi ?? null;
+                if (rssi !== null) {
+                    const rssiColor = rssi > -50 ? '#05ffa1' : rssi > -70 ? '#fcee0a' : '#ff2a6d';
+                    value.innerHTML = `<span style="color:${rssiColor}">${rssi} dBm</span>`;
+                }
+            } else if (key === 'ALLIANCE') {
+                const alliance = (device.alliance || 'unknown').toUpperCase();
+                const allianceColor = { FRIENDLY: '#05ffa1', HOSTILE: '#ff2a6d', UNKNOWN: '#aaa', NEUTRAL: '#fcee0a' }[alliance] || '#aaa';
+                value.style.color = allianceColor;
+                value.textContent = alliance;
+            } else if (key === 'CLASSIFICATION') {
+                const rlClass = device.rl_classification || device.device_class || device.classification || '';
+                const rlConf = device.classification_confidence ?? device.confidence ?? null;
+                if (rlClass) {
+                    const confPct = rlConf != null ? Math.round(rlConf * 100) + '%' : '--';
+                    const confColor = rlConf != null
+                        ? (rlConf > 0.8 ? '#05ffa1' : rlConf > 0.5 ? '#fcee0a' : '#ff2a6d')
+                        : 'var(--text-ghost)';
+                    value.innerHTML = `${_esc(rlClass)} <span style="color:${confColor};font-size:0.45rem">(${confPct} confidence)</span>`;
+                }
+            }
+        }
+    },
+
+    destroy(container) {},
+};
+
 // Register built-in controls
 DeviceControlRegistry.register('rover', RoverControl);
 DeviceControlRegistry.register('drone', DroneControl);
@@ -905,6 +1115,9 @@ DeviceControlRegistry.register('sensor', SensorControl);
 DeviceControlRegistry.register('mesh_radio', MeshRadioControl);
 DeviceControlRegistry.register('camera', CameraControl);
 DeviceControlRegistry.register('npc', NPCControl);
+DeviceControlRegistry.register('ble_device', TrackedTargetControl);
+DeviceControlRegistry.register('wifi_device', TrackedTargetControl);
+DeviceControlRegistry.register('tracked_target', TrackedTargetControl);
 
 // ============================================================
 // DeviceModalManager

@@ -26,10 +26,10 @@ TEST_LNG = -122.4194
 @pytest.fixture(autouse=True)
 def reset_reference():
     """Reset the geo reference before each test."""
-    import engine.tactical.geo as geo_mod
-    geo_mod._ref = GeoReference()
+    from engine.tactical.geo import reset
+    reset()
     yield
-    geo_mod._ref = GeoReference()
+    reset()
 
 
 class TestGeoReference:

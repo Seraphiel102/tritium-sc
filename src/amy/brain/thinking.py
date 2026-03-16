@@ -47,6 +47,8 @@ RECENT THOUGHTS:
 
 {goals}
 
+{edge_sensors}
+
 {tactical_situation}
 
 Respond with a Lua function call. For complex situations, you may chain 2-3 actions:
@@ -83,6 +85,8 @@ Usually ONE action is sufficient. Available actions:
 - patrol("target_id", "[[x1,y1],[x2,y2],...]") -- assign patrol route to a unit
 - escalate("target_id", "level") -- manually set threat level (unknown/suspicious/hostile)
 - clear_threat("target_id") -- clear a threat classification
+- investigate("target_id") -- open an intelligence investigation on a target
+- watch("mac_address") -- add a BLE MAC to the surveillance watch list
 
 RULES:
 - Most of the time, use think() -- internal reflection is free and natural.
@@ -400,7 +404,8 @@ class ThinkingThread:
 
         # Build war mode context if game is active
         war_mode_ctx = ""
-        game_mode = getattr(commander, "game_mode", None)
+        sim_engine = getattr(commander, "simulation_engine", None)
+        game_mode = getattr(sim_engine, "game_mode", None) if sim_engine else None
         if game_mode is not None:
             state = getattr(game_mode, "state", None)
             if state == "active":
@@ -444,6 +449,24 @@ class ThinkingThread:
         from ..commander import build_tactical_context
         tactical_ctx = build_tactical_context(commander)
 
+        # Edge sensor context (BLE + Mesh)
+        edge_parts: list[str] = []
+        ble_ctx = commander.sensorium.ble_context()
+        if ble_ctx:
+            edge_parts.append(ble_ctx)
+        mesh_ctx = commander.sensorium.mesh_context()
+        if mesh_ctx:
+            edge_parts.append(mesh_ctx)
+        anomaly_ctx = commander.sensorium.anomaly_context()
+        if anomaly_ctx:
+            edge_parts.append(anomaly_ctx)
+        env_ctx = commander.sensorium.environment_context()
+        if env_ctx:
+            edge_parts.append(env_ctx)
+        edge_sensors_ctx = ""
+        if edge_parts:
+            edge_sensors_ctx = "EDGE SENSORS:\n" + "\n".join(edge_parts)
+
         system = THINKING_SYSTEM_PROMPT.format(
             narrative=narrative,
             battlespace=battlespace_ctx,
@@ -455,6 +478,7 @@ class ThinkingThread:
             time_of_day=f"It is currently {tod} ({datetime.now().strftime('%H:%M')})",
             war_mode=war_mode_ctx,
             tactical_situation=tactical_ctx,
+            edge_sensors=edge_sensors_ctx,
         )
 
         messages = [
@@ -464,27 +488,36 @@ class ThinkingThread:
 
         t0 = time.monotonic()
         try:
-            router = getattr(commander, "model_router", None)
-            if router is not None:
-                from engine.inference.model_router import TaskType
-                # Classify based on battlespace state
-                hostile_count = len(tracker.get_hostiles()) if tracker else 0
-                active_threats = 0
-                classifier = getattr(commander, "threat_classifier", None)
-                if classifier is not None:
-                    active_threats = len(classifier.get_active_threats())
-                has_images = any("images" in m for m in messages)
-                task_type = router.classify_task(
-                    messages=messages,
-                    context={
-                        "hostile_count": hostile_count,
-                        "active_threats": active_threats,
-                    },
-                    has_images=has_images,
-                )
-                response = router.infer(task_type, messages)
-            else:
-                response = ollama_chat(model=self._model, messages=messages)
+            # Use a timeout wrapper so thinking doesn't stall for 300s
+            # if Ollama is unreachable — fall back to scripted thoughts quickly
+            import concurrent.futures
+            llm_timeout = 15  # seconds — keeps thinking responsive
+
+            def _call_llm():
+                router = getattr(commander, "model_router", None)
+                if router is not None:
+                    from engine.inference.model_router import TaskType
+                    hostile_count_inner = len(tracker.get_hostiles()) if tracker else 0
+                    active_threats_inner = 0
+                    classifier_inner = getattr(commander, "threat_classifier", None)
+                    if classifier_inner is not None:
+                        active_threats_inner = len(classifier_inner.get_active_threats())
+                    has_images = any("images" in m for m in messages)
+                    task_type = router.classify_task(
+                        messages=messages,
+                        context={
+                            "hostile_count": hostile_count_inner,
+                            "active_threats": active_threats_inner,
+                        },
+                        has_images=has_images,
+                    )
+                    return router.infer(task_type, messages)
+                else:
+                    return ollama_chat(model=self._model, messages=messages)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_call_llm)
+                response = future.result(timeout=llm_timeout)
         except Exception as e:
             print(f"  [thinking LLM error: {e}] — using fallback")
             # Use fallback thought generator when LLM is unavailable
@@ -528,6 +561,12 @@ class ThinkingThread:
                 else:
                     print(f"  [fallback->{formatted}]")
                 self._dispatch(result)
+            else:
+                # Ensure at least a raw thought gets published even if parse fails
+                raw = response_text.strip()[:120] if response_text else "Monitoring the battlespace..."
+                commander.sensorium.push("thought", raw)
+                commander.event_bus.publish("thought", {"text": raw})
+                print(f"  [fallback raw]: {raw}")
             return
 
         response_text = response.get("message", {}).get("content", "").strip()
@@ -949,6 +988,53 @@ class ThinkingThread:
                 commander.event_bus.publish("squad_scatter", res)
             else:
                 commander.sensorium.push("thought", f"Scatter failed: {res.get('error', 'unknown error')}")
+
+        elif result.action == "investigate":
+            target_id = result.params[0]
+            inv_engine = getattr(commander, "investigation_engine", None)
+            dossier_mgr = getattr(commander, "dossier_manager", None)
+            if inv_engine is None or dossier_mgr is None:
+                commander.sensorium.push("thought", "No investigation engine available")
+                return
+            dossier = dossier_mgr.get_dossier_for_target(target_id)
+            if dossier is None:
+                commander.sensorium.push("thought", f"No dossier found for {target_id}")
+                return
+            dossier_id = dossier.get("dossier_id", "")
+            dossier_name = dossier.get("name", target_id[:8])
+            inv = inv_engine.auto_investigate_threat(
+                dossier_id, "high", dossier_name=dossier_name,
+            )
+            if inv is not None:
+                commander.sensorium.push(
+                    "thought",
+                    f"Opened investigation {inv.inv_id[:8]} on {dossier_name}",
+                )
+                commander.event_bus.publish("investigation_created", {
+                    "inv_id": inv.inv_id,
+                    "target_id": target_id,
+                })
+            else:
+                commander.sensorium.push(
+                    "thought",
+                    f"Investigation already exists for {dossier_name}",
+                )
+
+        elif result.action == "watch":
+            mac = result.params[0]
+            instinct = getattr(commander, "instinct_layer", None)
+            if instinct is not None:
+                instinct.add_to_watch_list(mac)
+                commander.sensorium.push(
+                    "thought",
+                    f"Added {mac} to BLE watch list",
+                )
+                commander.event_bus.publish("watchlist_add", {
+                    "mac": mac.upper(),
+                    "reason": "manual",
+                })
+            else:
+                commander.sensorium.push("thought", "No instinct layer available")
 
     def _handle_look_at(self, direction: str) -> None:
         commander = self._commander

@@ -282,16 +282,24 @@ class TestTickAndReset:
     def test_tick_no_error(self):
         ds = DegradationSystem()
         t = _make_target(health=50.0, max_health=100.0)
-        # tick takes dt and targets dict
+        # tick takes dt and targets dict — should not raise
         ds.tick(0.1, {"test-1": t})
+        # Target should still be functional after tick
+        assert t.health == 50.0, "tick should not alter target health"
 
     def test_tick_with_empty_targets(self):
         ds = DegradationSystem()
-        ds.tick(0.1, {})
+        ds.tick(0.1, {})  # should not raise with empty dict
+        # Verify system is still usable after empty tick
+        factor = ds.get_degradation_factor(_make_target(health=100.0, max_health=100.0))
+        assert factor == 1.0
 
     def test_reset_no_error(self):
         ds = DegradationSystem()
         ds.reset()
+        # After reset, degradation should still compute correctly
+        factor = ds.get_degradation_factor(_make_target(health=100.0, max_health=100.0))
+        assert factor == 1.0
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,8 @@ const ALLIANCE_COLORS = {
 
 const UNIT_TYPES = [
     'rover', 'drone', 'turret', 'hostile_person', 'neutral_person',
-    'tank', 'sensor', 'camera',
+    'tank', 'sensor', 'camera', 'ble_device', 'mesh_radio',
+    'rf_motion', 'camera_detection',
 ];
 
 // Vision radius per type (world meters)
@@ -34,6 +35,10 @@ const VISION_RADII = {
     turret:  50,
     camera:  30,
     sensor:  30,
+    ble_device: 10,
+    mesh_radio: 35,
+    rf_motion: 20,
+    camera_detection: 25,
     neutral_person: 15,
     hostile_person: 20,
     tank:    45,
@@ -107,6 +112,18 @@ function drawUnit(ctx, type, alliance, heading, screenX, screenY, scale, selecte
         case 'sensor':
         case 'camera':
             _drawSensor(ctx, scale, color);
+            break;
+        case 'ble_device':
+            _drawBleDevice(ctx, scale, color);
+            break;
+        case 'mesh_radio':
+            _drawMeshRadio(ctx, scale, color);
+            break;
+        case 'rf_motion':
+            _drawRfMotion(ctx, scale);
+            break;
+        case 'camera_detection':
+            _drawCameraDetection(ctx, scale, color);
             break;
         default:
             // Fallback: simple square
@@ -407,6 +424,152 @@ function _drawSensor(ctx, scale, color) {
     ctx.fill();
 }
 
+/** BLE device: cyan ring with bluetooth rune */
+function _drawBleDevice(ctx, scale, color) {
+    const r = 5 * scale;
+
+    // Outer ring
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Inner dot
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bluetooth rune (stylized B shape)
+    const s = r * 0.75;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2 * scale;
+    ctx.beginPath();
+    // Vertical line
+    ctx.moveTo(0, -s);
+    ctx.lineTo(0, s);
+    // Upper chevron: center-top to right-mid, right-mid to center-bottom
+    ctx.moveTo(-s * 0.4, s * 0.55);
+    ctx.lineTo(s * 0.4, 0);
+    ctx.lineTo(-s * 0.4, -s * 0.55);
+    ctx.stroke();
+}
+
+/** Mesh radio: green dot with radio wave arcs */
+function _drawMeshRadio(ctx, scale, color) {
+    const r = 5 * scale;
+
+    // Center dot
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Radio wave arcs (two concentric arcs on the right side)
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2 * scale;
+    for (let i = 1; i <= 2; i++) {
+        const arcR = r * (0.6 + i * 0.45);
+        ctx.beginPath();
+        ctx.arc(0, 0, arcR, -Math.PI / 4, Math.PI / 4);
+        ctx.stroke();
+    }
+
+    // Left-side arcs (bidirectional radio)
+    for (let i = 1; i <= 2; i++) {
+        const arcR = r * (0.6 + i * 0.45);
+        ctx.beginPath();
+        ctx.arc(0, 0, arcR, Math.PI - Math.PI / 4, Math.PI + Math.PI / 4);
+        ctx.stroke();
+    }
+}
+
+/** RF motion: pulsing yellow concentric rings (motion detected via RSSI variance) */
+function _drawRfMotion(ctx, scale) {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(now * 0.004));
+    const r = 6 * scale;
+
+    // Outer pulsing ring
+    ctx.strokeStyle = `rgba(252, 238, 10, ${pulse * 0.6})`;
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.2 + pulse * 0.4), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Middle ring
+    ctx.strokeStyle = `rgba(252, 238, 10, ${pulse * 0.4})`;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Center dot
+    ctx.fillStyle = '#fcee0a';
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Motion wave arcs (animated)
+    const wavePhase = (now * 0.003) % (Math.PI * 2);
+    ctx.strokeStyle = `rgba(252, 238, 10, ${0.3 * pulse})`;
+    ctx.lineWidth = 1 * scale;
+    for (let i = 0; i < 3; i++) {
+        const waveR = r * (1.8 + i * 0.5) * pulse;
+        const angleOff = wavePhase + i * (Math.PI * 2 / 3);
+        ctx.beginPath();
+        ctx.arc(0, 0, waveR, angleOff, angleOff + Math.PI / 3);
+        ctx.stroke();
+    }
+}
+
+/** Camera detection: magenta diamond (hostile) or green circle (friendly) with eye icon */
+function _drawCameraDetection(ctx, scale, color) {
+    const s = 7 * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    if (color === '#ff2a6d' || color === ALLIANCE_COLORS.hostile) {
+        // Hostile: magenta diamond with pulsing glow
+        const pulse = 0.5 + 0.5 * Math.sin(now * 0.005);
+        ctx.fillStyle = `rgba(255, 42, 109, ${pulse * 0.25})`;
+        ctx.beginPath();
+        ctx.moveTo(0, -s * 1.3);
+        ctx.lineTo(s * 1.3, 0);
+        ctx.lineTo(0, s * 1.3);
+        ctx.lineTo(-s * 1.3, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#ff2a6d';
+        ctx.beginPath();
+        ctx.moveTo(0, -s);
+        ctx.lineTo(s, 0);
+        ctx.lineTo(0, s);
+        ctx.lineTo(-s, 0);
+        ctx.closePath();
+        ctx.fill();
+    } else {
+        // Friendly/neutral/unknown: colored circle
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Eye icon in center (camera detection marker)
+    const eyeR = s * 0.35;
+    ctx.strokeStyle = '#0a0a0f';
+    ctx.lineWidth = 1.2 * scale;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, eyeR * 1.4, eyeR * 0.7, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#0a0a0f';
+    ctx.beginPath();
+    ctx.arc(0, 0, eyeR * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+}
+
 /** Fallback: simple filled square */
 function _drawFallback(ctx, scale, color) {
     const s = 8 * scale;
@@ -622,8 +785,174 @@ function _drawRioterIndicator(ctx, scale) {
     ctx.globalAlpha = 1.0;
 }
 
+/**
+ * Draw a multi-source fusion indicator around a correlated target.
+ * Shows how many sensors see this target with a ring of source-type pips.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} screenX
+ * @param {number} screenY
+ * @param {number} scale
+ * @param {number} sourceCount - number of distinct sensor sources
+ * @param {string[]} sourceTypes - array of source type strings (e.g. ['ble', 'yolo', 'mesh'])
+ */
+function drawFusionIndicator(ctx, screenX, screenY, scale, sourceCount, sourceTypes) {
+    if (!sourceCount || sourceCount < 2) return;
+
+    ctx.save();
+    ctx.translate(screenX, screenY);
+
+    const r = (10 + sourceCount * 2) * scale;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const rotSpeed = 0.0008;
+    const rotation = now * rotSpeed;
+    const pulse = 0.7 + 0.3 * Math.sin(now / 600);
+
+    // Source color map
+    const SOURCE_COLORS = {
+        ble: '#00f0ff',     // cyan
+        yolo: '#ff2a6d',    // magenta
+        camera: '#ff2a6d',  // magenta
+        mesh: '#05ffa1',    // green
+        meshtastic: '#05ffa1',
+        wifi: '#00a0ff',    // blue
+        rf_motion: '#fcee0a', // yellow
+        simulation: '#05ffa1',
+    };
+
+    // Source icon glyphs (single char shorthand)
+    const SOURCE_ICONS = {
+        ble: '\u{1F4F6}',       // signal bars
+        yolo: '\u{1F4F7}',      // camera
+        camera: '\u{1F4F7}',    // camera
+        mesh: '\u{1F4E1}',      // antenna
+        meshtastic: '\u{1F4E1}',
+        wifi: '\u{1F4F6}',      // signal
+        rf_motion: '\u{1F30A}', // wave
+        simulation: '\u{2699}', // gear
+    };
+
+    // Source label abbreviations (fallback for monospace rendering)
+    const SOURCE_LABELS = {
+        ble: 'BLE',
+        yolo: 'CAM',
+        camera: 'CAM',
+        mesh: 'MESH',
+        meshtastic: 'MESH',
+        wifi: 'WiFi',
+        rf_motion: 'RF',
+        simulation: 'SIM',
+    };
+
+    const types = sourceTypes || [];
+
+    // --- Concentric rings ---
+    // Inner ring: solid, brighter
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.4 * pulse})`;
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Middle ring: dashed, rotating
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.35 * pulse})`;
+    ctx.lineWidth = 1.2 * scale;
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -rotation * 50;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Outer ring: faint glow, counter-rotating
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.15 * pulse})`;
+    ctx.lineWidth = 2.5 * scale;
+    ctx.setLineDash([3, 6]);
+    ctx.lineDashOffset = rotation * 30;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // --- Source icon badges around the ring ---
+    const pipCount = Math.max(sourceCount, types.length);
+    for (let i = 0; i < pipCount; i++) {
+        const angle = (i / pipCount) * Math.PI * 2 - Math.PI / 2;
+        const orbR = r * 1.15;
+        const px = Math.cos(angle) * orbR;
+        const py = Math.sin(angle) * orbR;
+        const type = types[i] || 'unknown';
+        const pipColor = SOURCE_COLORS[type] || '#fcee0a';
+        const label = SOURCE_LABELS[type] || type.substring(0, 3).toUpperCase();
+
+        // Icon background circle
+        const iconR = 8 * scale;
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.9)';
+        ctx.beginPath();
+        ctx.arc(px, py, iconR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Icon border with source color
+        ctx.strokeStyle = pipColor;
+        ctx.lineWidth = 1.2 * scale;
+        ctx.beginPath();
+        ctx.arc(px, py, iconR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Icon label text
+        ctx.fillStyle = pipColor;
+        ctx.font = `bold ${Math.max(6, 7 * scale)}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, px, py);
+
+        // Small glow behind the icon
+        ctx.globalAlpha = 0.15 * pulse;
+        ctx.fillStyle = pipColor;
+        ctx.beginPath();
+        ctx.arc(px, py, iconR + 3 * scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+
+    // --- Fusion count badge (top-right) ---
+    const badgeX = r * 0.85;
+    const badgeY = -r * 0.85;
+    const badgeR = 7 * scale;
+
+    // Badge background
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.9)';
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Badge border — multi-color gradient effect by using brightest source color
+    const primaryColor = types.length > 0 ? (SOURCE_COLORS[types[0]] || '#00f0ff') : '#00f0ff';
+    ctx.strokeStyle = primaryColor;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Badge text
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${Math.max(7, 9 * scale)}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(sourceCount), badgeX, badgeY);
+
+    // --- "FUSED" label below the rings ---
+    ctx.fillStyle = `rgba(0, 240, 255, ${0.5 * pulse})`;
+    ctx.font = `bold ${Math.max(6, 7 * scale)}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('FUSED', 0, r * 1.3 + 4 * scale);
+
+    ctx.restore();
+}
+
 // ============================================================
 // Exports
 // ============================================================
 
-export { drawUnit, drawCrowdRoleIndicator, UNIT_TYPES, ALLIANCE_COLORS, CROWD_ROLE_COLORS, getVisionRadius };
+export { drawUnit, drawCrowdRoleIndicator, drawFusionIndicator, UNIT_TYPES, ALLIANCE_COLORS, CROWD_ROLE_COLORS, getVisionRadius };

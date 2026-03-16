@@ -104,7 +104,7 @@ async def begin_war(request: Request):
     state = engine.game_mode.state
     if state != "setup":
         raise HTTPException(400, f"Cannot begin war in state: {state}")
-    engine.begin_war()
+    engine.begin_war(auto_load_layout=True)
     return {"status": "countdown_started", "wave": 1, "countdown": 5}
 
 

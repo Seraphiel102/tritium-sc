@@ -38,6 +38,71 @@ async def plugin_health(request: Request):
     return mgr.health_check()
 
 
+@router.get("/discovery")
+async def plugin_discovery_report(request: Request):
+    """Plugin auto-discovery report from boot.
+
+    Shows which paths were scanned, which plugin files were found,
+    which plugins were successfully loaded, registered, and started,
+    and which failed. Useful for debugging plugin loading issues.
+    """
+    report = getattr(request.app.state, "plugin_discovery_report", None)
+    if report is None:
+        return {"status": "no_report", "detail": "Plugin discovery has not run yet"}
+    return report
+
+
+@router.get("/dependencies")
+async def plugin_dependencies(request: Request):
+    """Plugin dependency graph — which plugins depend on which services.
+
+    Returns nodes (plugins and services) and edges (dependency/provides
+    relationships) for visualization in the system health panel.
+    """
+    mgr = _get_manager(request)
+    if mgr is None:
+        return {"nodes": [], "edges": []}
+
+    plugins = mgr.list_plugins()
+    nodes = []
+    edges = []
+    service_set = set()
+
+    for p in plugins:
+        pid = p["id"]
+        nodes.append({
+            "id": pid,
+            "name": p["name"],
+            "type": "plugin",
+            "healthy": p["healthy"],
+            "status": p["status"],
+        })
+
+        # Dependencies
+        for dep in p.get("dependencies", []):
+            edges.append({"from": pid, "to": dep, "type": "depends"})
+            service_set.add(dep)
+
+        # Capabilities (services provided)
+        for cap in p.get("capabilities", []):
+            edges.append({"from": pid, "to": cap, "type": "provides"})
+            service_set.add(cap)
+
+    # Add service nodes that aren't also plugins
+    plugin_ids = {p["id"] for p in plugins}
+    for svc in service_set:
+        if svc not in plugin_ids:
+            nodes.append({
+                "id": svc,
+                "name": svc,
+                "type": "service",
+                "healthy": True,
+                "status": "available",
+            })
+
+    return {"nodes": nodes, "edges": edges}
+
+
 @router.get("/{plugin_id}")
 async def get_plugin(plugin_id: str, request: Request):
     """Get details for a specific plugin."""

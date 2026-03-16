@@ -85,6 +85,10 @@ class MQTTBridge:
         self._commander = None
         # Sensorium reference for pushing robot thoughts into Amy's awareness
         self._sensorium = None
+        # Camera frame callbacks: cam_id -> list of callables(jpeg_bytes)
+        self._camera_frame_callbacks: dict[str, list] = {}
+        # Wildcard camera frame callbacks (receive all cameras)
+        self._camera_frame_callbacks_all: list = []
 
     @property
     def connected(self) -> bool:
@@ -135,6 +139,18 @@ class MQTTBridge:
     def robot_nodes(self) -> dict[str, "MQTTSensorNode"]:
         """Return dict of auto-discovered MQTT robot nodes."""
         return dict(self._robot_nodes)
+
+    def register_camera_callback(self, cam_id: str | None, callback) -> None:
+        """Register a callback to receive JPEG frames from MQTT cameras.
+
+        Args:
+            cam_id: Specific camera ID, or None for all cameras.
+            callback: Callable(jpeg_bytes: bytes) invoked on each frame.
+        """
+        if cam_id is None:
+            self._camera_frame_callbacks_all.append(callback)
+        else:
+            self._camera_frame_callbacks.setdefault(cam_id, []).append(callback)
 
     def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False) -> None:
         """Publish a raw message to MQTT (topic + JSON string).
@@ -207,6 +223,7 @@ class MQTTBridge:
             prefix = f"tritium/{self._site}"
             subscriptions = [
                 (f"{prefix}/cameras/+/detections", 0),
+                (f"{prefix}/cameras/+/frame", 0),
                 (f"{prefix}/cameras/+/status", 1),
                 (f"{prefix}/robots/+/telemetry", 0),
                 (f"{prefix}/robots/+/thoughts", 1),
@@ -214,6 +231,10 @@ class MQTTBridge:
                 (f"{prefix}/robots/+/command/ack", 1),
                 (f"{prefix}/sensors/+/events", 1),
                 (f"{prefix}/sensors/+/status", 1),
+                # Acoustic feature vectors from edge devices
+                (f"{prefix}/acoustic/+/features", 0),
+                # Edge device sightings (BLE/WiFi) — topic: tritium/{device_id}/sighting
+                ("tritium/+/sighting", 0),
             ]
             client.subscribe(subscriptions)
             logger.info(f"MQTT subscribed to {len(subscriptions)} topic patterns")
@@ -236,14 +257,34 @@ class MQTTBridge:
         """Route incoming MQTT messages to appropriate handlers."""
         self._messages_received += 1
         topic = msg.topic
+
+        # Parse topic
+        parts = topic.split("/")
+
+        # Camera frame topics carry raw JPEG bytes, not JSON
+        if (len(parts) >= 5 and parts[2] == "cameras" and parts[4] == "frame"):
+            cam_id = parts[3]
+            self._device_last_seen[cam_id] = time.monotonic()
+            self._on_camera_frame(cam_id, msg.payload)
+            return
+
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"MQTT bad payload on {topic}: {e}")
             return
 
-        # Parse topic: tritium/{site}/{category}/{device_id}/{action}[/{sub}]
-        parts = topic.split("/")
+        # Edge device sightings: tritium/{device_id}/sighting
+        if len(parts) == 3 and parts[0] == "tritium" and parts[2] == "sighting":
+            device_id = parts[1]
+            self._device_last_seen[device_id] = time.monotonic()
+            try:
+                self._on_edge_sighting(device_id, payload)
+            except Exception as e:
+                logger.debug(f"MQTT edge sighting handler error: {e}")
+            return
+
+        # Site-scoped topics: tritium/{site}/{category}/{device_id}/{action}[/{sub}]
         if len(parts) < 5:
             return
 
@@ -270,6 +311,9 @@ class MQTTBridge:
                     self._on_device_status("robot", device_id, payload)
                 elif action == "command" and sub_action == "ack":
                     self._on_command_ack(device_id, payload)
+            elif category == "acoustic":
+                if action == "features":
+                    self._on_acoustic_features(device_id, msg.payload)
             elif category == "sensors":
                 if action == "events":
                     self._on_sensor_event(device_id, payload)
@@ -296,6 +340,24 @@ class MQTTBridge:
             "camera_id": cam_id,
             "detection_count": len(boxes),
             "boxes": boxes,
+        })
+
+    def _on_camera_frame(self, cam_id: str, raw_bytes: bytes) -> None:
+        """Camera published a JPEG frame -> forward to registered callbacks."""
+        callbacks = self._camera_frame_callbacks.get(cam_id, [])
+        for cb in callbacks:
+            try:
+                cb(raw_bytes)
+            except Exception as e:
+                logger.debug(f"Camera frame callback error for {cam_id}: {e}")
+        for cb in self._camera_frame_callbacks_all:
+            try:
+                cb(raw_bytes)
+            except Exception as e:
+                logger.debug(f"Camera frame wildcard callback error: {e}")
+        self._event_bus.publish("mqtt_camera_frame", {
+            "camera_id": cam_id,
+            "size": len(raw_bytes),
         })
 
     def _on_robot_telemetry(self, robot_id: str, payload: dict) -> None:
@@ -370,6 +432,50 @@ class MQTTBridge:
             "text": thought_text,
         })
 
+    def _on_acoustic_features(self, device_id: str, raw_payload: bytes) -> None:
+        """Edge device published acoustic feature vector for ML classification.
+
+        Parses the compact MQTT payload using AcousticFeatureVector.from_mqtt_payload()
+        from tritium-lib and forwards to the EventBus for the acoustic classifier.
+        """
+        try:
+            from tritium_lib.models import AcousticFeatureVector
+
+            payload_str = raw_payload.decode("utf-8") if isinstance(raw_payload, bytes) else str(raw_payload)
+            fv = AcousticFeatureVector.from_mqtt_payload(payload_str)
+
+            # Forward parsed feature vector to EventBus for acoustic classifier
+            self._event_bus.publish("acoustic_features", {
+                "device_id": fv.device_id,
+                "timestamp": fv.timestamp,
+                "mfcc_coefficients": fv.mfcc_coefficients,
+                "energy": fv.energy,
+                "zero_crossing_rate": fv.zero_crossing_rate,
+                "spectral_centroid": fv.spectral_centroid,
+                "duration_ms": fv.duration_ms,
+                "sample_rate": fv.sample_rate,
+                "classification": fv.classification,
+                "confidence": fv.confidence,
+            })
+
+            # If edge already classified, forward as a sensor event too
+            if fv.classification:
+                self._event_bus.publish("mqtt_sensor_event", {
+                    "sensor_id": device_id,
+                    "event_type": "acoustic",
+                    "classification": fv.classification,
+                    "confidence": fv.confidence,
+                    "device_id": fv.device_id,
+                    "timestamp": fv.timestamp,
+                })
+
+            logger.debug(
+                "Acoustic features from %s: energy=%.3f cls=%s",
+                device_id, fv.energy, fv.classification or "pending",
+            )
+        except Exception as e:
+            logger.debug("Failed to parse acoustic features from %s: %s", device_id, e)
+
     def _on_sensor_event(self, sensor_id: str, payload: dict) -> None:
         """Sensor published event (motion, sound, etc)."""
         event_type = payload.get("event_type", "unknown")
@@ -412,6 +518,37 @@ class MQTTBridge:
             "robot_id": robot_id,
         })
         logger.debug(f"Command ACK from {robot_id}: {payload.get('command', '?')} -> {payload.get('status', '?')}")
+
+    def _on_edge_sighting(self, device_id: str, payload: dict) -> None:
+        """Edge device published BLE/WiFi sighting -> inject into EventBus.
+
+        Edge publishes to tritium/{device_id}/sighting with payload:
+          BLE: {"type": "ble", "devices": [...], "summary": "..."}
+          WiFi: {"type": "wifi", "networks": [...], "count": N}
+
+        Re-publishes as fleet.ble_presence or fleet.wifi_presence so
+        edge_tracker plugin receives sightings regardless of transport.
+        """
+        sighting_type = payload.get("type", "")
+
+        if sighting_type == "ble":
+            devices = payload.get("devices", [])
+            self._event_bus.publish("fleet.ble_presence", {
+                "node_id": device_id,
+                "devices": devices,
+            })
+        elif sighting_type == "wifi":
+            networks = payload.get("networks", [])
+            self._event_bus.publish("fleet.wifi_presence", {
+                "node_id": device_id,
+                "networks": networks,
+            })
+        else:
+            # Unknown sighting type — forward raw payload
+            self._event_bus.publish("fleet.sighting", {
+                "node_id": device_id,
+                **payload,
+            })
 
     # --- Outbound publishing ---
 

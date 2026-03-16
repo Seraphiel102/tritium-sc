@@ -7,13 +7,8 @@
 
 import { TritiumStore } from '../store.js';
 import { EventBus } from '../events.js';
+import { _esc } from '../panel-utils.js';
 
-function _esc(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
-}
 
 export const PatrolPanelDef = {
     id: 'patrol',
@@ -32,6 +27,7 @@ export const PatrolPanelDef = {
                 <div class="panel-empty">No patrol routes</div>
             </div>
             <div class="patrol-actions">
+                <button class="panel-action-btn" data-action="draw-new-route" style="color:#05ffa1;border-color:#05ffa1">DRAW NEW ROUTE</button>
                 <button class="panel-action-btn" data-action="patrol-all">PATROL ALL</button>
                 <button class="panel-action-btn" data-action="recall-all">RECALL ALL</button>
             </div>
@@ -42,6 +38,7 @@ export const PatrolPanelDef = {
     mount(bodyEl, panel) {
         const summaryEl = bodyEl.querySelector('[data-bind="summary"]');
         const listEl = bodyEl.querySelector('[data-bind="list"]');
+        const drawNewBtn = bodyEl.querySelector('[data-action="draw-new-route"]');
         const patrolAllBtn = bodyEl.querySelector('[data-action="patrol-all"]');
         const recallAllBtn = bodyEl.querySelector('[data-action="recall-all"]');
 
@@ -109,6 +106,9 @@ export const PatrolPanelDef = {
                             <span class="mono">${_esc(u.name)}</span>
                             <span class="mono" style="color:var(--text-ghost);font-size:0.45rem">${_esc(u.type)}</span>
                         </div>
+                        <div class="patrol-entry-info">
+                            <button class="patrol-btn-clear" data-action="draw-route" data-unit-id="${_esc(u.id)}" title="Draw patrol route on map">DRAW ROUTE</button>
+                        </div>
                     </div>`;
                 }
             }
@@ -123,6 +123,16 @@ export const PatrolPanelDef = {
                         TritiumStore.set('map.selectedUnitId', uid);
                         EventBus.emit('unit:selected', { id: uid });
                         EventBus.emit('map:centerOnUnit', { id: uid });
+                    }
+                });
+            });
+
+            listEl.querySelectorAll('[data-action="draw-route"]').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const uid = btn.dataset.unitId;
+                    if (uid) {
+                        EventBus.emit('patrol:drawRoute', { unitId: uid });
                     }
                 });
             });
@@ -152,6 +162,13 @@ export const PatrolPanelDef = {
             TritiumStore.on('units', renderList),
             TritiumStore.on('game.phase', renderList),
         );
+
+        // Draw new route button
+        if (drawNewBtn) {
+            drawNewBtn.addEventListener('click', () => {
+                EventBus.emit('patrol:drawRoute', { unitId: null });
+            });
+        }
 
         // Batch actions
         if (patrolAllBtn) {

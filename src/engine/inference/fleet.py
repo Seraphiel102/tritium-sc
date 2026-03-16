@@ -104,6 +104,10 @@ class OllamaFleet:
         if auto_discover:
             candidates.update(self._scan_tailscale())
 
+        # 4. LAN subnet scan (probe local /24 for Ollama instances)
+        if auto_discover:
+            candidates.update(self._scan_lan_subnet())
+
         # Probe all candidates in parallel
         if not candidates:
             return
@@ -139,6 +143,53 @@ class OllamaFleet:
                         hosts.add(f"{name}:{DEFAULT_PORT}")
         except (subprocess.TimeoutExpired, FileNotFoundError,
                 json.JSONDecodeError, OSError):
+            pass
+        return hosts
+
+    def _scan_lan_subnet(self) -> set[str]:
+        """Discover Ollama on LAN by scanning the local /24 subnet."""
+        import socket
+        hosts: set[str] = set()
+        try:
+            # Get local IP to determine subnet
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            subnet = ".".join(local_ip.split(".")[:3])
+
+            # Quick parallel probe of common hosts (skip full /24 — too slow)
+            # Probe .1-.20 and .200-.254 plus the local broadcast neighbors
+            probe_ips = [f"{subnet}.{i}" for i in list(range(1, 21)) + list(range(200, 255))]
+            # Also probe nearby IPs from our own address
+            my_last = int(local_ip.split(".")[-1])
+            for offset in range(-5, 6):
+                ip_last = my_last + offset
+                if 1 <= ip_last <= 254:
+                    probe_ips.append(f"{subnet}.{ip_last}")
+
+            # Deduplicate and remove self
+            probe_ips = list(set(probe_ips) - {local_ip})
+
+            import urllib.request
+            def _quick_check(ip: str) -> str | None:
+                try:
+                    req = urllib.request.Request(
+                        f"http://{ip}:{DEFAULT_PORT}/api/tags",
+                        headers={"Accept": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=1) as resp:
+                        if resp.status == 200:
+                            return f"{ip}:{DEFAULT_PORT}"
+                except Exception:
+                    return None
+
+            with ThreadPoolExecutor(max_workers=30) as pool:
+                for result in pool.map(_quick_check, probe_ips[:60]):
+                    if result:
+                        hosts.add(result)
+        except Exception:
             pass
         return hosts
 

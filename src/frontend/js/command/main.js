@@ -7,10 +7,11 @@
 //
 // Include via: <script type="module" src="/static/js/command/main.js"></script>
 
+import { _esc } from './panel-utils.js';
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { WebSocketManager } from './websocket.js';
-import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow } from './map-maplibre.js';
+import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleMeshNodes, toggleMeshLinks, toggleMeshCoverage, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow, toggleGeoLayers, togglePatrolRoutes, toggleWeaponRange, toggleHeatmap, toggleSwarmHull, toggleHazardZones, toggleHostileObjectives, toggleCrowdDensity, toggleCoverPoints, toggleUnitSignals, toggleHostileIntel, togglePredictionCones, toggleCoverageOverlap, toggleGeofenceZones } from './map-maplibre.js';
 import { PanelManager } from './panel-manager.js';
 import { LayoutManager } from './layout-manager.js';
 import { createMenuBar, focusSaveInput } from './menu-bar.js';
@@ -32,11 +33,91 @@ import { BattleStatsPanelDef } from './panels/stats.js';
 import { SensorNetPanelDef } from './panels/sensors.js';
 import { UnitInspectorPanelDef } from './panels/unit-inspector.js';
 import { CamerasPanelDef } from './panels/cameras.js';
+import { CameraFeedsPanelDef } from './panels/camera-feeds.js';
 import { SearchPanelDef } from './panels/search.js';
 import { TakPanelDef } from './panels/tak.js';
 import { VideosPanelDef } from './panels/videos.js';
 import { ZonesPanelDef } from './panels/zones.js';
+import { LayersPanelDef } from './panels/layers.js';
+import { FleetPanelDef } from './panels/fleet.js';
+import { EdgeTrackerPanelDef } from './panels/edge-tracker.js';
+import { AssetsPanelDef } from './panels/assets.js';
+import { FleetDashboardPanelDef } from './panels/fleet-dashboard.js';
+import { GeofencePanelDef } from './panels/geofence.js';
+import { TargetSearchPanelDef } from './panels/target-search.js';
+import { DossiersPanelDef } from './panels/dossiers.js';
+import { GraphExplorerPanelDef } from './panels/graph-explorer.js';
+import { TimelinePanelDef } from './panels/timeline.js';
+import { NotificationsPanelDef } from './panels/notifications.js';
+import { HeatmapPanelDef } from './panels/heatmap.js';
+import { HeatmapTimelinePanelDef } from './panels/heatmap-timeline.js';
+import { TestingPanelDef } from './panels/testing.js';
+import { DeviceManagerPanelDef } from './panels/device-manager.js';
+import { DeviceCapabilitiesPanelDef } from './panels/device-capabilities.js';
+import { AutomationPanelDef } from './panels/automation.js';
+import { RfMotionPanelDef } from './panels/rf-motion.js';
+import { EdgeIntelligencePanelDef } from './panels/edge-intelligence.js';
+import { SystemHealthPanelDef } from './panels/system-health.js';
+import { QuickStartPanelDef } from './panels/quick-start.js';
+import { BookmarksPanelDef } from './panels/bookmarks.js';
+import { MissionsPanelDef } from './panels/missions.js';
+import { TargetComparePanelDef } from './panels/target-compare.js';
+import { MultiCameraPanelDef } from './panels/multi-camera.js';
+import { TargetMergePanelDef } from './panels/target-merge.js';
+import { AmyConversationPanelDef } from './panels/amy-conversation.js';
+import { ExportSchedulerPanelDef } from './panels/export-scheduler.js';
+import { OpsDashboardPanelDef } from './panels/ops-dashboard.js';
+import { DossierGroupsPanelDef } from './panels/dossier-groups.js';
+import { DossierTimelinePanelDef } from './panels/dossier-timeline.js';
+import { SetupWizardPanelDef, ConfigStore } from './panels/setup-wizard.js';
+import { ActivityFeedPanelDef } from './panels/activity-feed.js';
+import { MqttInspectorPanelDef } from './panels/mqtt-inspector.js';
+import { AnnotationsPanelDef } from './panels/annotations.js';
+import { NotificationPrefsPanelDef } from './panels/notification_prefs.js';
+import { WatchlistPanelDef } from './panels/watchlist.js';
+import { MapSharePanelDef, checkShareHash } from './panels/map-share.js';
+import { KeyboardMacrosPanelDef } from './panels/keyboard-macros.js';
+import { GridOverlayPanelDef, toggleGridOverlay } from './panels/grid-overlay.js';
+import { DeploymentPanelDef } from './panels/deployment.js';
+import { FloorPlanPanelDef } from './panels/floorplan.js';
+import { BuildingOccupancyPanelDef } from './panels/building-occupancy.js';
+import { AnalyticsDashboardPanelDef } from './panels/analytics-dashboard.js';
+import { SensorHealthPanelDef } from './panels/sensor-health.js';
+import { AcousticIntelligencePanelDef } from './panels/acoustic-intelligence.js';
+import { BehavioralIntelligencePanelDef } from './panels/behavioral-intelligence.js';
+import { MapReplayPanelDef } from './panels/map-replay.js';
+import { VoiceCommandPanelDef } from './panels/voice-command.js';
+import { WiFiFingerprintPanelDef } from './panels/wifi-fingerprint.js';
+import { CommandHistoryPanelDef } from './panels/command-history.js';
+import { SecurityAuditPanelDef } from './panels/security-audit.js';
+import { DwellMonitorPanelDef } from './panels/dwell-monitor.js';
+import { FederationPanelDef } from './panels/federation.js';
+import { LprPanelDef } from './panels/lpr.js';
+import { ReIDMatchesPanelDef } from './panels/reid-matches.js';
+import { EdgeDiagnosticsPanelDef } from './panels/edge-diagnostics.js';
+import { FusionDashboardPanelDef } from './panels/fusion-dashboard.js';
+import { OperatorActivityPanelDef } from './panels/operator-activity.js';
+import { SwarmCoordinationPanelDef } from './panels/swarm-coordination.js';
+import { TrainingDashboardPanelDef } from './panels/training-dashboard.js';
+import { ConvoyPanelDef } from './panels/convoy-panel.js';
+import { OperatorCursorsPanelDef } from './panels/operator-cursors-panel.js';
+import { WeatherOverlayPanelDef } from './panels/weather-overlay-panel.js';
+import { TrailExportPanelDef } from './panels/trail-export-panel.js';
+import { MapLayerSwitcherPanelDef } from './panels/map-layer-switcher.js';
+import { CollaborationHubPanelDef } from './panels/collaboration-hub.js';
+import { IndoorPositioningPanelDef } from './panels/indoor-positioning-panel.js';
+import { UnifiedAlertsPanelDef } from './panels/alerts-panel.js';
+import { PredictionEllipseManager } from './prediction-ellipses.js';
+import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
+import { initTargetCounter } from './target-counter.js';
+import { initTargetFilter, matchesFilter, getTargetFilters } from './target-filter.js';
+import { initCommandPalette, openCommandPalette } from './command-palette.js';
+import { createTacticalBanner } from './tactical-banner.js';
+import { createMapQuickToggles } from './map-quick-toggles.js';
+import { TargetTrailManager } from './target-trails.js';
+import { HandoffLineManager } from './handoff-lines.js';
+import { ConvoyOverlayManager } from './convoy-overlay.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -57,6 +138,9 @@ function init() {
     // Clock
     updateClock();
     setInterval(updateClock, 1000);
+
+    // Target counter widget (live target counts in header)
+    initTargetCounter();
 
     // WebSocket
     ws.connect();
@@ -118,11 +202,11 @@ function init() {
         renderUnitList();
     });
 
-    // Game state updates (header + game over overlay + auto-fog)
+    // Game state updates (header + game over overlay + auto-fog + auto-panels)
     TritiumStore.on('game.phase', (phase) => {
         // Show/hide game score in header
         const scoreArea = document.getElementById('game-score-area');
-        if (scoreArea) scoreArea.hidden = (phase === 'idle' || !phase);
+        if (scoreArea) scoreArea.hidden = (phase === 'idle' || phase === 'setup' || !phase);
 
         // Game over overlay
         if (phase === 'victory' || phase === 'defeat') {
@@ -133,12 +217,10 @@ function init() {
             if (goOverlay) goOverlay.hidden = true;
         }
 
-        // Auto-enable fog of war during battle, disable when idle
-        const mapState = getMapState();
-        if (phase === 'countdown' || phase === 'active') {
-            if (!mapState.showFog) toggleFog();
-        } else if (phase === 'idle' || phase === 'setup') {
-            if (mapState.showFog) toggleFog();
+        // Auto-open Game HUD panel when battle starts (countdown or active)
+        // so the operator can see wave/score/elimination stats and kill feed
+        if ((phase === 'countdown' || phase === 'active') && panelManager && !panelManager.isOpen('game')) {
+            panelManager.open('game');
         }
 
         // Auto-enable fog of war during battle, disable when idle
@@ -157,7 +239,17 @@ function init() {
 
     TritiumStore.on('game.score', (score) => {
         const header = document.getElementById('game-score');
-        if (header) header.textContent = score;
+        if (header) {
+            header.textContent = score.toLocaleString();
+            // Brief glow pulse on score change
+            header.style.color = '#fcee0a';
+            header.style.textShadow = '0 0 8px #fcee0a';
+            clearTimeout(header._pulseTimer);
+            header._pulseTimer = setTimeout(() => {
+                header.style.color = '';
+                header.style.textShadow = '';
+            }, 400);
+        }
     });
 
     TritiumStore.on('game.eliminations', (elims) => {
@@ -214,8 +306,56 @@ function init() {
         showToast(data.message || data, data.type || 'info');
     });
 
+    // Geofence enter/exit push notifications — toast + notification bell
+    // Restricted zones = magenta (alert), monitored = cyan (amy), safe = green (robot)
+    EventBus.on('notification:geofence', (data) => {
+        const dir = data.direction === 'enter' ? 'ENTERED' : 'EXITED';
+        const zone = data.zone_name || data.zone_id || '?';
+        const target = (data.target_id || '?').substring(0, 16);
+        const zoneType = data.zone_type || 'monitored';
+        const severity = zoneType === 'restricted' ? 'alert'
+            : zoneType === 'safe' ? 'robot'
+            : 'amy';
+        showToast(`GEOFENCE: Target ${target} ${dir} zone ${zone}`, severity);
+        // Push as a notification for the bell badge
+        EventBus.emit('notification:new', {
+            id: `gf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            title: `GEOFENCE ${dir}`,
+            message: `${target} ${dir.toLowerCase()} zone "${zone}" (${data.zone_type || 'monitored'})`,
+            severity: data.zone_type === 'restricted' ? 'critical' : 'warning',
+            source: 'geofence',
+            entity_id: data.target_id,
+            timestamp: data.timestamp || (Date.now() / 1000),
+            read: false,
+        });
+    });
+
     // Initialize tactical map
     initMap();
+
+    // Target trail manager (speed-colored movement trails on map)
+    const trailManager = new TargetTrailManager();
+    trailManager.start();
+
+    // Handoff line visualization — animated arcs when targets move between sensors
+    const handoffManager = new HandoffLineManager();
+    handoffManager.start();
+
+    // Check URL for shared map view
+    checkShareHash();
+
+    // Target filter overlay (on tactical map)
+    const tacticalArea = document.getElementById('tactical-area');
+    if (tacticalArea) {
+        initTargetFilter(tacticalArea);
+
+        // Map layer quick toggles (floating buttons on map right edge)
+        createMapQuickToggles(tacticalArea);
+    }
+
+    // Expose filter functions for map renderers
+    window.matchesTargetFilter = matchesFilter;
+    window.getTargetFilters = getTargetFilters;
 
     // Initialize panel system (unified layout) or legacy sidebar
     const panelContainer = document.getElementById('panel-container');
@@ -263,7 +403,7 @@ function init() {
                 document.body.appendChild(indicator);
             }
             indicator.innerHTML =
-                `<span class="wasd-label mono">CONTROLLING: ${escapeHtml(name)}</span>` +
+                `<span class="wasd-label mono">CONTROLLING: ${_esc(name)}</span>` +
                 `<span class="wasd-hint mono">WASD move // ESC release</span>`;
             indicator.hidden = false;
         } else if (indicator) {
@@ -362,7 +502,7 @@ function init() {
                 EventBus.on('game:state', (d) => {
                     if (d.state === 'active') {
                         audioMgr.startAmbient();
-                        audioMgr.play('hostile_detected');
+                        audioMgr.play('countdown_go');
                     } else if (d.state === 'idle' || d.state === 'victory' || d.state === 'defeat') {
                         audioMgr.stopAmbient();
                     }
@@ -402,6 +542,42 @@ function init() {
                     audioMgr.play('escalation_siren');
                 });
 
+                // ---- Notification sound effects ----
+                // Play subtle audio cues for critical notifications.
+                // Respects a mute toggle stored in TritiumStore.
+                EventBus.on('notification:new', (data) => {
+                    if (TritiumStore.get('notifications.muted')) return;
+                    const severity = data.severity || data.level || 'info';
+                    const source = data.source || '';
+                    // Map notification types to appropriate sounds
+                    if (source === 'geofence' || severity === 'critical') {
+                        audioMgr.play('perimeter_breach');
+                    } else if (source === 'threat' || source === 'escalation') {
+                        audioMgr.play('hostile_detected');
+                    } else if (source === 'suspicious_device' || source === 'new_device') {
+                        audioMgr.play('sensor_triggered');
+                    } else if (severity === 'warning') {
+                        audioMgr.play('alert_tone');
+                    } else if (severity === 'error') {
+                        audioMgr.play('alert_critical');
+                    }
+                    // info-level notifications are silent by default
+                });
+
+                // Geofence breach gets its own dedicated sound
+                EventBus.on('geofence:breach', () => {
+                    if (!TritiumStore.get('notifications.muted')) {
+                        audioMgr.play('perimeter_breach');
+                    }
+                });
+
+                // Threat escalation sound
+                EventBus.on('threat:escalated', () => {
+                    if (!TritiumStore.get('notifications.muted')) {
+                        audioMgr.play('escalation_siren');
+                    }
+                });
+
                 console.log('[TRITIUM] Audio initialized + combat events wired');
             } catch (e) {
                 console.warn('[TRITIUM] Audio init failed:', e);
@@ -410,8 +586,134 @@ function init() {
     };
     document.addEventListener('click', _initAudio, { once: true });
     document.addEventListener('keydown', _initAudio, { once: true });
+    // Also init audio on game state changes (user has already clicked BEGIN WAR
+    // before game_state events arrive, so AudioContext will be unlocked)
+    EventBus.on('game:state', _initAudio);
+
+    // Demo start button — visible when no targets on map, hidden once targets appear
+    const demoOverlay = document.getElementById('demo-start-overlay');
+    const demoBtn = document.getElementById('demo-start-btn');
+    if (demoBtn && demoOverlay) {
+        demoBtn.addEventListener('click', async () => {
+            demoBtn.disabled = true;
+            demoBtn.textContent = '[ STARTING... ]';
+            try {
+                const res = await fetch('/api/demo/start', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    EventBus.emit('toast:show', { message: 'Demo mode started', type: 'info' });
+                    demoOverlay.classList.add('hidden');
+                } else {
+                    EventBus.emit('toast:show', { message: data.error || 'Failed to start demo', type: 'alert' });
+                }
+            } catch (e) {
+                EventBus.emit('toast:show', { message: 'Demo start failed: ' + e.message, type: 'alert' });
+            }
+            demoBtn.disabled = false;
+            demoBtn.textContent = '[ START DEMO ]';
+        });
+
+        // Hide demo button once targets appear on the map
+        TritiumStore.on('units', () => {
+            if (TritiumStore.units.size > 0) {
+                demoOverlay.classList.add('hidden');
+            }
+        });
+
+        // Check demo status — hide button if demo already running
+        fetch('/api/demo/status').then(r => r.ok ? r.json() : {}).then(d => {
+            if (d.active) demoOverlay.classList.add('hidden');
+        }).catch(() => {});
+    }
+
+    // Start Battle button — visible when targets on map and game is idle
+    const battleOverlay = document.getElementById('war-begin-btn');
+    const battleBtn = document.getElementById('battle-start-btn');
+    if (battleBtn && battleOverlay) {
+        battleBtn.addEventListener('click', () => {
+            beginWar();
+        });
+
+        // Show battle button when targets appear and game is idle
+        function _updateBattleBtn() {
+            const phase = TritiumStore.game.phase;
+            const hasTargets = TritiumStore.units && TritiumStore.units.size > 0;
+            const isIdle = !phase || phase === 'idle' || phase === 'setup';
+            if (hasTargets && isIdle) {
+                battleOverlay.style.display = '';
+            } else {
+                battleOverlay.style.display = 'none';
+            }
+        }
+        TritiumStore.on('units', _updateBattleBtn);
+        TritiumStore.on('game.phase', _updateBattleBtn);
+        // Initial check
+        _updateBattleBtn();
+    }
+
+    // Welcome tooltip — show once on first visit
+    _showWelcomeTooltip();
 
     console.log('%c[TRITIUM] Command Center ready', 'color: #05ffa1; font-weight: bold;');
+}
+
+// ---------------------------------------------------------------------------
+// Welcome Tooltip (first visit only)
+// ---------------------------------------------------------------------------
+
+function _showWelcomeTooltip() {
+    const STORAGE_KEY = 'tritium-welcome-shown';
+    if (localStorage.getItem(STORAGE_KEY)) return;
+
+    const tip = document.createElement('div');
+    tip.id = 'welcome-tooltip';
+    tip.style.cssText = `
+        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(12px); z-index: 10000;
+        max-width: 340px; padding: 16px 20px;
+        background: rgba(10, 10, 20, 0.95);
+        border: 1px solid #00f0ff44;
+        border-radius: 6px;
+        font-family: 'JetBrains Mono', 'Inter', monospace;
+        font-size: 11px; line-height: 1.6;
+        color: #c0c0d0;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6), 0 0 12px rgba(0, 240, 255, 0.08);
+        opacity: 0;
+        transition: opacity 0.4s ease, transform 0.4s ease;
+        pointer-events: auto;
+    `;
+    tip.innerHTML = `
+        <div style="color:#00f0ff;font-weight:bold;font-size:12px;margin-bottom:8px;letter-spacing:0.5px">WELCOME TO TRITIUM</div>
+        <div style="margin-bottom:6px">Click <span style="color:#05ffa1;font-weight:bold">GAME &gt; Start Demo</span> to see targets.</div>
+        <div style="margin-bottom:6px">Click targets on the map to <span style="color:#00f0ff">inspect</span> them.</div>
+        <div style="margin-bottom:10px">Press <span style="color:#fcee0a;font-weight:bold">?</span> for keyboard shortcuts.</div>
+        <button id="welcome-dismiss" style="
+            background: transparent; border: 1px solid #00f0ff44; color: #00f0ff;
+            font-family: 'JetBrains Mono', monospace; font-size: 10px;
+            padding: 4px 12px; border-radius: 3px; cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        ">DISMISS</button>
+    `;
+    document.body.appendChild(tip);
+
+    // Animate in
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            tip.style.opacity = '1';
+            tip.style.transform = 'translateX(-50%) translateY(0)';
+        });
+    });
+
+    const dismiss = () => {
+        localStorage.setItem(STORAGE_KEY, '1');
+        tip.style.opacity = '0';
+        tip.style.transform = 'translateY(12px)';
+        setTimeout(() => tip.remove(), 400);
+    };
+
+    tip.querySelector('#welcome-dismiss').addEventListener('click', dismiss);
+
+    // Auto-dismiss after 15 seconds
+    setTimeout(dismiss, 15000);
 }
 
 // ---------------------------------------------------------------------------
@@ -441,10 +743,98 @@ function initPanelSystem(container) {
     panelManager.register(SensorNetPanelDef);
     panelManager.register(UnitInspectorPanelDef);
     panelManager.register(CamerasPanelDef);
+    panelManager.register(CameraFeedsPanelDef);
     panelManager.register(SearchPanelDef);
     panelManager.register(TakPanelDef);
     panelManager.register(VideosPanelDef);
     panelManager.register(ZonesPanelDef);
+    panelManager.register(LayersPanelDef);
+    panelManager.register(FleetPanelDef);
+    panelManager.register(EdgeTrackerPanelDef);
+    panelManager.register(AssetsPanelDef);
+    panelManager.register(FleetDashboardPanelDef);
+    panelManager.register(GeofencePanelDef);
+    panelManager.register(TargetSearchPanelDef);
+    panelManager.register(DossiersPanelDef);
+    panelManager.register(GraphExplorerPanelDef);
+    panelManager.register(TimelinePanelDef);
+    panelManager.register(NotificationsPanelDef);
+    panelManager.register(HeatmapPanelDef);
+    panelManager.register(HeatmapTimelinePanelDef);
+    panelManager.register(TestingPanelDef);
+    panelManager.register(DeviceManagerPanelDef);
+    panelManager.register(DeviceCapabilitiesPanelDef);
+    panelManager.register(AutomationPanelDef);
+    panelManager.register(RfMotionPanelDef);
+    panelManager.register(EdgeIntelligencePanelDef);
+    panelManager.register(SystemHealthPanelDef);
+    panelManager.register(QuickStartPanelDef);
+    panelManager.register(BookmarksPanelDef);
+    panelManager.register(TargetComparePanelDef);
+    panelManager.register(MissionsPanelDef);
+    panelManager.register(MultiCameraPanelDef);
+    panelManager.register(TargetMergePanelDef);
+    panelManager.register(AmyConversationPanelDef);
+    panelManager.register(ExportSchedulerPanelDef);
+    panelManager.register(OpsDashboardPanelDef);
+    panelManager.register(DossierGroupsPanelDef);
+    panelManager.register(DossierTimelinePanelDef);
+    panelManager.register(SetupWizardPanelDef);
+    panelManager.register(ActivityFeedPanelDef);
+    panelManager.register(MqttInspectorPanelDef);
+    panelManager.register(AnnotationsPanelDef);
+    panelManager.register(NotificationPrefsPanelDef);
+    panelManager.register(WatchlistPanelDef);
+    panelManager.register(MapSharePanelDef);
+    panelManager.register(KeyboardMacrosPanelDef);
+    panelManager.register(GridOverlayPanelDef);
+    panelManager.register(DeploymentPanelDef);
+    panelManager.register(FloorPlanPanelDef);
+    panelManager.register(BuildingOccupancyPanelDef);
+    panelManager.register(AnalyticsDashboardPanelDef);
+    panelManager.register(SensorHealthPanelDef);
+    panelManager.register(AcousticIntelligencePanelDef);
+    panelManager.register(BehavioralIntelligencePanelDef);
+    panelManager.register(MapReplayPanelDef);
+    panelManager.register(VoiceCommandPanelDef);
+    panelManager.register(WiFiFingerprintPanelDef);
+    panelManager.register(CommandHistoryPanelDef);
+    panelManager.register(SecurityAuditPanelDef);
+    panelManager.register(DwellMonitorPanelDef);
+    panelManager.register(FederationPanelDef);
+    panelManager.register(LprPanelDef);
+    panelManager.register(ReIDMatchesPanelDef);
+    panelManager.register(EdgeDiagnosticsPanelDef);
+    panelManager.register(FusionDashboardPanelDef);
+    panelManager.register(OperatorActivityPanelDef);
+    panelManager.register(SwarmCoordinationPanelDef);
+    panelManager.register(TrainingDashboardPanelDef);
+    panelManager.register(ConvoyPanelDef);
+    panelManager.register(OperatorCursorsPanelDef);
+    panelManager.register(WeatherOverlayPanelDef);
+    panelManager.register(TrailExportPanelDef);
+    panelManager.register(MapLayerSwitcherPanelDef);
+    panelManager.register(CollaborationHubPanelDef);
+    panelManager.register(IndoorPositioningPanelDef);
+    panelManager.register(UnifiedAlertsPanelDef);
+
+    // Start prediction confidence ellipses on the map
+    const predictionEllipses = new PredictionEllipseManager();
+    predictionEllipses.start();
+
+    // Start convoy bounding box overlay on the map
+    const convoyOverlay = new ConvoyOverlayManager();
+    // Wait for map load event then attach
+    EventBus.on('map:ready', (mapInstance) => {
+        convoyOverlay.start(mapInstance);
+    });
+    // If map is already ready, try to start with window._tritiumMap
+    if (window._tritiumMap) {
+        convoyOverlay.start(window._tritiumMap);
+    }
+
+    // Enhanced map screenshot hotkey (Ctrl+Shift+P)
+    initScreenshotHotkey();
 
     // panel:request-open — allows map click to open panels by id
     EventBus.on('panel:request-open', (data) => {
@@ -453,12 +843,52 @@ function initPanelSystem(container) {
         }
     });
 
-    // Try loading saved layout; if none, open defaults
+    // Notification bell in header — click opens notifications panel
+    const notifBellBtn = document.getElementById('notif-bell-btn');
+    const notifBellCount = document.getElementById('notif-bell-count');
+    let _notifUnreadCount = 0;
+
+    function _updateBellBadge(count) {
+        _notifUnreadCount = count;
+        if (notifBellCount) {
+            notifBellCount.textContent = String(count);
+            notifBellCount.hidden = count <= 0;
+        }
+    }
+
+    if (notifBellBtn) {
+        notifBellBtn.addEventListener('click', () => {
+            if (panelManager) panelManager.toggle('notifications');
+        });
+    }
+
+    // Track unread notification count
+    EventBus.on('notification:new', () => {
+        _updateBellBadge(_notifUnreadCount + 1);
+    });
+    // When notifications panel marks all read
+    EventBus.on('notifications:all-read', () => {
+        _updateBellBadge(0);
+    });
+    // Fetch initial count
+    fetch('/api/notifications?limit=100').then(r => r.ok ? r.json() : []).then(notifications => {
+        const unread = (notifications || []).filter(n => !n.read).length;
+        _updateBellBadge(unread);
+    }).catch(() => {});
+
+    // Try loading saved layout; if none, open minimal defaults.
+    // Users open additional panels via VIEW menu (organized by category).
     if (!panelManager.loadLayout()) {
         panelManager.open('amy');
-        panelManager.open('units');
-        panelManager.open('alerts');
         panelManager.open('minimap');
+    }
+
+    // Setup wizard — available from HELP menu, not auto-opened.
+    // Was blocking the map on first load with no obvious close mechanism.
+
+    // Auto-start demo mode if configured
+    if (ConfigStore.get('demo.autoStart', false)) {
+        fetch('/api/demo/start', { method: 'POST' }).catch(() => {});
     }
 
     // Layout manager
@@ -482,6 +912,9 @@ function initPanelSystem(container) {
             toggleTilt: () => (_activeMapModule ? _activeMapModule.toggleTilt() : toggleTilt()),
             toggleBuildings: () => (_activeMapModule ? _activeMapModule.toggleBuildings() : toggleBuildings()),
             toggleMesh: () => (_activeMapModule ? _activeMapModule.toggleMesh() : toggleMesh()),
+            toggleMeshNodes: () => (_activeMapModule ? _activeMapModule.toggleMeshNodes() : toggleMeshNodes()),
+            toggleMeshLinks: () => (_activeMapModule ? _activeMapModule.toggleMeshLinks() : toggleMeshLinks()),
+            toggleMeshCoverage: () => (_activeMapModule ? _activeMapModule.toggleMeshCoverage() : toggleMeshCoverage()),
             toggleThoughts: () => (_activeMapModule ? _activeMapModule.toggleThoughts() : toggleThoughts()),
             toggleAllLayers: () => (_activeMapModule ? _activeMapModule.toggleAllLayers() : toggleAllLayers()),
             toggleTracers: () => (_activeMapModule ? _activeMapModule.toggleTracers() : toggleTracers()),
@@ -497,6 +930,20 @@ function initPanelSystem(container) {
             toggleSelectionFx: () => (_activeMapModule ? _activeMapModule.toggleSelectionFx() : toggleSelectionFx()),
             toggleSquadHulls: () => (_activeMapModule ? _activeMapModule.toggleSquadHulls() : toggleSquadHulls()),
             toggleAutoFollow: () => (_activeMapModule ? _activeMapModule.toggleAutoFollow() : toggleAutoFollow()),
+            toggleGeoLayers: () => (_activeMapModule ? _activeMapModule.toggleGeoLayers() : toggleGeoLayers()),
+            togglePatrolRoutes: () => (_activeMapModule ? _activeMapModule.togglePatrolRoutes() : togglePatrolRoutes()),
+            toggleWeaponRange: () => (_activeMapModule ? _activeMapModule.toggleWeaponRange() : toggleWeaponRange()),
+            toggleHeatmap: () => (_activeMapModule ? _activeMapModule.toggleHeatmap() : toggleHeatmap()),
+            toggleSwarmHull: () => (_activeMapModule ? _activeMapModule.toggleSwarmHull() : toggleSwarmHull()),
+            toggleHazardZones: () => (_activeMapModule ? _activeMapModule.toggleHazardZones() : toggleHazardZones()),
+            toggleGeofenceZones: () => (_activeMapModule ? _activeMapModule.toggleGeofenceZones() : toggleGeofenceZones()),
+            toggleHostileObjectives: () => (_activeMapModule ? _activeMapModule.toggleHostileObjectives() : toggleHostileObjectives()),
+            toggleCrowdDensity: () => (_activeMapModule ? _activeMapModule.toggleCrowdDensity() : toggleCrowdDensity()),
+            toggleCoverPoints: () => (_activeMapModule ? _activeMapModule.toggleCoverPoints() : toggleCoverPoints()),
+            toggleUnitSignals: () => (_activeMapModule ? _activeMapModule.toggleUnitSignals() : toggleUnitSignals()),
+            toggleHostileIntel: () => (_activeMapModule ? _activeMapModule.toggleHostileIntel() : toggleHostileIntel()),
+            togglePredictionCones: () => (_activeMapModule ? _activeMapModule.togglePredictionCones() : togglePredictionCones()),
+            toggleCoverageOverlap: () => (_activeMapModule ? _activeMapModule.toggleCoverageOverlap() : toggleCoverageOverlap()),
             centerOnAction: () => (_activeMapModule ? _activeMapModule.centerOnAction() : centerOnAction()),
             resetCamera: () => (_activeMapModule ? _activeMapModule.resetCamera() : resetCamera()),
             zoomIn: () => (_activeMapModule ? _activeMapModule.zoomIn() : zoomIn()),
@@ -512,6 +959,19 @@ function initPanelSystem(container) {
         // Expose for automated testing
         window._mapActions = mapActions;
         menuBarEl = createMenuBar(barContainer, panelManager, layoutManager, mapActions);
+
+        // Tactical situation banner (persistent bar below menu)
+        createTacticalBanner(barContainer);
+
+        // Command palette (Ctrl+K or /)
+        initCommandPalette(panelManager, mapActions);
+        window.openCommandPalette = openCommandPalette;
+
+        // Bridge map actions to Layers panel
+        EventBus.on('layers:request-map-actions', () => {
+            EventBus.emit('layers:set-map-actions', mapActions);
+        });
+        EventBus.emit('layers:set-map-actions', mapActions);
     }
 
     console.log('%c[TRITIUM] Panel system initialized', 'color: #00f0ff;');
@@ -530,8 +990,8 @@ function updateClock() {
 // Toast notifications
 // ---------------------------------------------------------------------------
 
-const TOAST_MAX = 5;
-const TOAST_DURATION = 6000;
+const TOAST_MAX = 2;
+const TOAST_DURATION = 3500;
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
@@ -541,11 +1001,11 @@ function showToast(message, type = 'info') {
     toast.className = `toast toast-${type}`;
     toast.innerHTML = `
         <div class="toast-header">
-            <span class="toast-label mono">${escapeHtml(type.toUpperCase())}</span>
+            <span class="toast-label mono">${_esc(type.toUpperCase())}</span>
             <span class="toast-time mono">${new Date().toLocaleTimeString().substr(0, 5)}</span>
             <button class="toast-close" aria-label="Dismiss">&times;</button>
         </div>
-        <div class="toast-body">${escapeHtml(message)}</div>
+        <div class="toast-body">${_esc(message)}</div>
     `;
 
     toast.querySelector('.toast-close')?.addEventListener('click', () => {
@@ -606,13 +1066,24 @@ function showGameOver(phase) {
     }
 
     const scoreEl = document.getElementById('go-score');
-    if (scoreEl) scoreEl.textContent = TritiumStore.game.score || 0;
-
     const wavesEl = document.getElementById('go-waves');
-    if (wavesEl) wavesEl.textContent = `${TritiumStore.game.wave}/${TritiumStore.game.totalWaves}`;
-
     const elimsEl = document.getElementById('go-eliminations');
+
+    // Use store values first, then backfill from API if empty
+    if (scoreEl) scoreEl.textContent = TritiumStore.game.score || 0;
+    const totalW = TritiumStore.game.totalWaves || 10;
+    const displayWave = Math.min(TritiumStore.game.wave || 0, totalW);
+    if (wavesEl) wavesEl.textContent = `${displayWave}/${totalW}`;
     if (elimsEl) elimsEl.textContent = TritiumStore.game.eliminations || 0;
+
+    // Backfill from API if store values are empty (e.g., late-joining session)
+    if (!TritiumStore.game.score) {
+        fetch('/api/game/state').then(r => r.json()).then(gs => {
+            if (scoreEl && gs.score) scoreEl.textContent = gs.score;
+            if (wavesEl && gs.wave) wavesEl.textContent = `${gs.wave}/${gs.total_waves || 10}`;
+            if (elimsEl && gs.total_eliminations) elimsEl.textContent = gs.total_eliminations;
+        }).catch(() => {});
+    }
 
     // Clear previous stats sections
     const mvpSection = document.getElementById('go-mvp-section');
@@ -629,7 +1100,13 @@ function showGameOver(phase) {
 
     overlay.querySelector('[data-action="play-again"]')?.addEventListener('click', () => {
         overlay.hidden = true;
-        resetGame();
+        try { resetGame(); } catch (_) {}
+        setTimeout(() => { try { beginWar(); } catch (_) {} }, 500);
+    }, { once: true });
+
+    overlay.querySelector('[data-action="exit-game"]')?.addEventListener('click', () => {
+        overlay.hidden = true;
+        try { resetGame(); } catch (_) {}
     }, { once: true });
 }
 
@@ -845,8 +1322,8 @@ function appendChatMessage(sender, text, type) {
     const msg = document.createElement('div');
     msg.className = `chat-msg chat-msg-${type}`;
     msg.innerHTML =
-        `<div class="chat-msg-header"><span class="chat-msg-sender mono">${escapeHtml(sender)}</span><span class="chat-msg-time mono">${timeStr}</span></div>` +
-        `<div class="chat-msg-text">${escapeHtml(text)}</div>`;
+        `<div class="chat-msg-header"><span class="chat-msg-sender mono">${_esc(sender)}</span><span class="chat-msg-time mono">${timeStr}</span></div>` +
+        `<div class="chat-msg-text">${_esc(text)}</div>`;
     messages.appendChild(msg);
     messages.scrollTop = messages.scrollHeight;
 }
@@ -914,9 +1391,9 @@ function renderUnitList() {
         }[alliance] || 'var(--text-dim)';
         const icon = { rover: 'R', drone: 'D', turret: 'T', person: 'P', hostile_kid: 'H' }[u.type] || '?';
         const hp = u.health !== undefined && u.maxHealth ? `${Math.round(u.health)}/${u.maxHealth}` : '';
-        return `<li class="unit-list-item" data-unit-id="${escapeHtml(u.id)}" role="option">
+        return `<li class="unit-list-item" data-unit-id="${_esc(u.id)}" role="option">
             <span class="unit-icon-mini" style="color:${allianceColor}">${icon}</span>
-            <span class="unit-item-name">${escapeHtml(u.name || u.id)}</span>
+            <span class="unit-item-name">${_esc(u.name || u.id)}</span>
             <span class="unit-item-hp mono" style="font-size:0.55rem;color:var(--text-dim)">${hp}</span>
         </li>`;
     }).join('');
@@ -944,7 +1421,7 @@ function renderAlertFeed(alerts) {
                     a.type === 'warning' ? 'alert-warning' : 'alert-info';
         const time = a.time ? new Date(a.time).toLocaleTimeString().substr(0, 5) : '';
         return `<li class="alert-item ${cls}">
-            <span class="alert-text">${escapeHtml(a.message)}</span>
+            <span class="alert-text">${_esc(a.message)}</span>
             <span class="alert-time mono">${time}</span>
         </li>`;
     }).join('');
@@ -997,7 +1474,7 @@ async function resetGame() {
         // Clear all game-related state so stale data does not leak into the next game
         TritiumStore.resetGameState();
         // Clear projectiles, particles, and screen effects from previous game
-        if (typeof warCombatReset === 'function') warCombatReset();
+        if (typeof window.warCombatReset === 'function') window.warCombatReset();
     } catch (e) {
         showToast('Failed to reset game', 'alert');
     }
@@ -1150,6 +1627,20 @@ function initKeyboard() {
             return;
         }
 
+        // Ctrl+G: toggle military grid overlay
+        if (e.ctrlKey && !e.shiftKey && (e.key === 'G' || e.key === 'g')) {
+            e.preventDefault();
+            toggleGridOverlay();
+            return;
+        }
+
+        // Ctrl+Shift+M: toggle macro recording
+        if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+            e.preventDefault();
+            if (panelManager) panelManager.toggle('keyboard-macros');
+            return;
+        }
+
         // Ctrl+1-4: switch layouts
         if (e.ctrlKey && !e.shiftKey && layoutManager) {
             const layoutMap = { '1': 'commander', '2': 'observer', '3': 'tactical', '4': 'battle' };
@@ -1158,6 +1649,14 @@ function initKeyboard() {
                 layoutManager.apply(layoutMap[e.key]);
                 return;
             }
+        }
+
+        // Drawing mode keys (geofence polygon / patrol waypoints)
+        if (e.key === 'Enter') {
+            EventBus.emit('map:drawFinish', {});
+        }
+        if (e.key === 'Escape') {
+            EventBus.emit('map:drawCancel', {});
         }
 
         switch (e.key) {
@@ -1299,6 +1798,21 @@ function initKeyboard() {
             case 'H':
                 _mapActions ? _mapActions.toggleTerrain() : toggleTerrain();
                 break;
+            case 'l':
+            case 'L':
+                if (panelManager) panelManager.toggle('layers');
+                break;
+            case 'x':
+            case 'X': {
+                // Toggle notification sound mute
+                const muted = !TritiumStore.get('notifications.muted');
+                TritiumStore.set('notifications.muted', muted);
+                EventBus.emit('toast:show', {
+                    message: muted ? 'Notification sounds MUTED' : 'Notification sounds UNMUTED',
+                    type: 'info',
+                });
+                break;
+            }
             case 'Tab':
                 if (panelManager) {
                     e.preventDefault();
@@ -1354,18 +1868,8 @@ let _activeMapModule = null;
 // Module-scoped reference so keyboard handlers can call through the proxy
 let _mapActions = null;
 
-// ---------------------------------------------------------------------------
-// Utility
-// ---------------------------------------------------------------------------
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
-}
-
 // Export for use by other modules
+const escapeHtml = _esc;
 export { showToast, showBanner, selectUnit, dispatchUnit, escapeHtml, ws, panelManager, layoutManager, appendChatMessage, getChatHistory, toggleChat };
 
 // ---------------------------------------------------------------------------

@@ -31,7 +31,7 @@ function assertClose(a, b, eps, msg) {
 // Load mesh-layer.js into a sandboxed context
 // ---------------------------------------------------------------------------
 
-const code = fs.readFileSync(__dirname + '/../../frontend/js/command/mesh-layer.js', 'utf8');
+const code = fs.readFileSync(__dirname + '/../../src/frontend/js/command/mesh-layer.js', 'utf8');
 
 // Mock canvas context that records draw calls
 function createMockCtx() {
@@ -76,6 +76,7 @@ const {
     meshDrawNodes,
     meshGetIconForProtocol,
     meshShouldDrawLink,
+    meshAreNeighbors,
     meshState,
 } = fakeModule.exports;
 
@@ -223,6 +224,79 @@ console.log('\n--- Mesh State ---');
 
 (function testMeshStateDefaultVisible() {
     assertEqual(meshState.visible, true, 'Mesh layer visible by default');
+})();
+
+// ============================================================
+// Neighbor-based links (real data only, no fake coverage)
+// ============================================================
+
+console.log('\n--- Neighbor Links ---');
+
+(function testNeighborsLinked() {
+    const a = { target_id: 'mesh_001', x: 0, y: 0, metadata: { neighbors: ['mesh_002'], rssi_map: { 'mesh_002': -65 } } };
+    const b = { target_id: 'mesh_002', x: 10, y: 0, metadata: { neighbors: ['mesh_001'] } };
+    const result = meshAreNeighbors(a, b);
+    assert(result.linked, 'Nodes with mutual neighbor data are linked');
+    assertEqual(result.snrAB, -65, 'SNR from A rssi_map extracted');
+})();
+
+(function testNeighborsNotLinked() {
+    const a = { target_id: 'mesh_001', x: 0, y: 0, metadata: { neighbors: [] } };
+    const b = { target_id: 'mesh_002', x: 10, y: 0, metadata: { neighbors: [] } };
+    const result = meshAreNeighbors(a, b);
+    assert(!result.linked, 'Nodes without neighbor data are NOT linked');
+})();
+
+(function testNeighborsOneSided() {
+    const a = { target_id: 'mesh_001', x: 0, y: 0, metadata: { neighbors: ['mesh_002'] } };
+    const b = { target_id: 'mesh_002', x: 10, y: 0, metadata: {} };
+    const result = meshAreNeighbors(a, b);
+    assert(result.linked, 'One-sided neighbor listing still creates a link');
+})();
+
+(function testNeighborHopCount() {
+    const a = { target_id: 'mesh_001', x: 0, y: 0, metadata: { neighbors: ['mesh_002'], hop_count: 0 } };
+    const b = { target_id: 'mesh_002', x: 10, y: 0, metadata: { neighbors: ['mesh_001'], hop_count: 1 } };
+    const result = meshAreNeighbors(a, b);
+    assert(result.linked, 'Nodes with hop data are linked');
+    assertEqual(result.hops, 1, 'Hop count delta is computed');
+})();
+
+(function testNoFakeCoverageCircles() {
+    // meshDrawCoverage should NOT exist anymore
+    assert(fakeModule.exports.meshDrawCoverage === undefined, 'meshDrawCoverage removed (no fake coverage)');
+    // MESH_COVERAGE_RADIUS should NOT exist
+    assert(fakeModule.exports.MESH_COVERAGE_RADIUS === undefined, 'MESH_COVERAGE_RADIUS removed');
+})();
+
+(function testDrawLinksOnlyWithNeighborData() {
+    const mockCtx = createMockCtx();
+    const worldToScreen = (wx, wy) => ({ x: wx * 10, y: wy * 10 });
+
+    // Two nodes close together but NO neighbor data -- should NOT draw links
+    const targets = [
+        { target_id: 'mesh_001', x: 5, y: 10, metadata: { mesh_protocol: 'meshtastic' } },
+        { target_id: 'mesh_002', x: 6, y: 10, metadata: { mesh_protocol: 'meshtastic' } },
+    ];
+    meshDrawNodes(mockCtx, worldToScreen, targets, true);
+
+    const lineOps = mockCtx.calls.filter(c => c.op === 'lineTo');
+    assertEqual(lineOps.length, 0, 'No links drawn without neighbor data');
+})();
+
+(function testDrawLinksWithNeighborData() {
+    const mockCtx = createMockCtx();
+    const worldToScreen = (wx, wy) => ({ x: wx * 10, y: wy * 10 });
+
+    // Two nodes with neighbor data -- SHOULD draw links
+    const targets = [
+        { target_id: 'mesh_001', x: 5, y: 10, metadata: { mesh_protocol: 'meshtastic', neighbors: ['mesh_002'] } },
+        { target_id: 'mesh_002', x: 6, y: 10, metadata: { mesh_protocol: 'meshtastic', neighbors: ['mesh_001'] } },
+    ];
+    meshDrawNodes(mockCtx, worldToScreen, targets, true);
+
+    const lineOps = mockCtx.calls.filter(c => c.op === 'lineTo');
+    assert(lineOps.length >= 1, 'Links drawn when neighbor data present');
 })();
 
 // ============================================================

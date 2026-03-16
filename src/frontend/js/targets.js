@@ -45,7 +45,7 @@ async function populateChannelFilter() {
             const cameras = await response.json();
             select.innerHTML = '<option value="">All Channels</option>';
             cameras.forEach(cam => {
-                select.innerHTML += `<option value="${cam.channel}">CH${cam.channel} - ${cam.name || 'Camera ' + cam.channel}</option>`;
+                select.innerHTML += `<option value="${escapeHtml(String(cam.channel))}">CH${escapeHtml(String(cam.channel))} - ${escapeHtml(cam.name || 'Camera ' + cam.channel)}</option>`;
             });
         }
     } catch (e) {

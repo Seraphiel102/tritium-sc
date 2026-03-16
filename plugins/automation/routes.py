@@ -1,0 +1,285 @@
+# Created by Matthew Valancy
+# Copyright 2026 Valpatel Software LLC
+# Licensed under AGPL-3.0 — see LICENSE for details.
+"""FastAPI routes for the Automation Engine plugin.
+
+CRUD for rules plus a dry-run test endpoint.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from app.auth import require_auth
+
+if TYPE_CHECKING:
+    from .plugin import AutomationPlugin
+
+from .rules import ActionSpec, AutomationRule, TriggerCondition
+
+
+# -- Request/Response models -----------------------------------------------
+
+
+class ConditionModel(BaseModel):
+    field: str
+    operator: str
+    value: object = None
+
+
+class ActionModel(BaseModel):
+    action_type: str
+    params: dict = Field(default_factory=dict)
+
+
+class RuleCreateRequest(BaseModel):
+    name: str = Field(..., max_length=200)
+    trigger: str = Field(..., max_length=200)
+    conditions: list[ConditionModel] = Field(default_factory=list, max_length=50)
+    actions: list[ActionModel] = Field(default_factory=list, max_length=50)
+    enabled: bool = True
+    cooldown_seconds: float = Field(default=0.0, ge=0.0, le=86400.0)
+    description: str = Field(default="", max_length=2000)
+
+
+class RuleUpdateRequest(BaseModel):
+    name: str | None = None
+    trigger: str | None = None
+    conditions: list[ConditionModel] | None = None
+    actions: list[ActionModel] | None = None
+    enabled: bool | None = None
+    cooldown_seconds: float | None = None
+    description: str | None = None
+
+
+class TestRunRequest(BaseModel):
+    event_type: str
+    data: dict = Field(default_factory=dict)
+
+
+# -- Router factory --------------------------------------------------------
+
+
+def create_router(plugin: AutomationPlugin) -> APIRouter:
+    """Build and return the automation engine APIRouter."""
+
+    router = APIRouter(prefix="/api/automation", tags=["automation"])
+
+    @router.get("/rules")
+    async def list_rules():
+        """List all automation rules."""
+        rules = plugin.engine.list_rules()
+        return {
+            "rules": [r.to_dict() for r in rules],
+            "count": len(rules),
+        }
+
+    @router.get("/rules/{rule_id}")
+    async def get_rule(rule_id: str):
+        """Get a single rule by ID."""
+        rule = plugin.engine.get_rule(rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return {"rule": rule.to_dict()}
+
+    @router.post("/rules", status_code=201)
+    async def create_rule(req: RuleCreateRequest, user: dict = Depends(require_auth)):
+        """Create a new automation rule."""
+        conditions = [
+            TriggerCondition(field=c.field, operator=c.operator, value=c.value)
+            for c in req.conditions
+        ]
+        actions = [
+            ActionSpec(action_type=a.action_type, params=a.params)
+            for a in req.actions
+        ]
+        rule = AutomationRule(
+            name=req.name,
+            trigger=req.trigger,
+            conditions=conditions,
+            actions=actions,
+            enabled=req.enabled,
+            cooldown_seconds=req.cooldown_seconds,
+            description=req.description,
+        )
+        rule = plugin.engine.add_rule(rule)
+        plugin._save_rules()
+        return {"rule": rule.to_dict()}
+
+    @router.put("/rules/{rule_id}")
+    async def update_rule(rule_id: str, req: RuleUpdateRequest, user: dict = Depends(require_auth)):
+        """Update an existing rule."""
+        rule = plugin.engine.get_rule(rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        if req.name is not None:
+            rule.name = req.name
+        if req.trigger is not None:
+            rule.trigger = req.trigger
+        if req.conditions is not None:
+            rule.conditions = [
+                TriggerCondition(field=c.field, operator=c.operator, value=c.value)
+                for c in req.conditions
+            ]
+        if req.actions is not None:
+            rule.actions = [
+                ActionSpec(action_type=a.action_type, params=a.params)
+                for a in req.actions
+            ]
+        if req.enabled is not None:
+            rule.enabled = req.enabled
+        if req.cooldown_seconds is not None:
+            rule.cooldown_seconds = req.cooldown_seconds
+        if req.description is not None:
+            rule.description = req.description
+
+        plugin._save_rules()
+        return {"rule": rule.to_dict()}
+
+    @router.delete("/rules/{rule_id}")
+    async def delete_rule(rule_id: str, user: dict = Depends(require_auth)):
+        """Delete a rule by ID."""
+        removed = plugin.engine.remove_rule(rule_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        plugin._save_rules()
+        return {"deleted": True, "rule_id": rule_id}
+
+    @router.post("/rules/{rule_id}/enable")
+    async def enable_rule(rule_id: str, user: dict = Depends(require_auth)):
+        """Enable a rule."""
+        found = plugin.engine.enable_rule(rule_id)
+        if not found:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        plugin._save_rules()
+        return {"rule_id": rule_id, "enabled": True}
+
+    @router.post("/rules/{rule_id}/disable")
+    async def disable_rule(rule_id: str, user: dict = Depends(require_auth)):
+        """Disable a rule."""
+        found = plugin.engine.disable_rule(rule_id)
+        if not found:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        plugin._save_rules()
+        return {"rule_id": rule_id, "enabled": False}
+
+    @router.post("/rules/{rule_id}/test")
+    async def test_rule(rule_id: str, req: TestRunRequest):
+        """Dry-run a specific rule against a test event.
+
+        Does NOT execute actions — only reports what would happen.
+        """
+        rule = plugin.engine.get_rule(rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        event = {"type": req.event_type, "data": req.data}
+        results = plugin.engine.evaluate(event, dry_run=True)
+
+        # Filter results to just this rule
+        rule_result = next(
+            (r for r in results if r["rule_id"] == rule_id), None
+        )
+        if rule_result is None:
+            return {
+                "rule_id": rule_id,
+                "matched": False,
+                "reason": "Event did not match trigger or conditions",
+            }
+        return rule_result
+
+    @router.post("/test")
+    async def test_all_rules(req: TestRunRequest):
+        """Dry-run all rules against a test event."""
+        event = {"type": req.event_type, "data": req.data}
+        results = plugin.engine.evaluate(event, dry_run=True)
+        return {"results": results, "matched_count": len(results)}
+
+    @router.get("/stats")
+    async def get_stats():
+        """Get automation engine statistics."""
+        return plugin.get_stats()
+
+    # -- Export / Import ---------------------------------------------------
+
+    @router.get("/export")
+    async def export_rules():
+        """Export all automation rules as a portable JSON package.
+
+        Returns a JSON object with metadata and an array of rules,
+        suitable for saving to a file and importing into another
+        Tritium installation.
+        """
+        rules = plugin.engine.list_rules()
+        import time
+
+        package = {
+            "format": "tritium_automation_rules",
+            "version": "1.0.0",
+            "exported_at": time.time(),
+            "rule_count": len(rules),
+            "rules": [r.to_dict() for r in rules],
+        }
+        return JSONResponse(
+            content=package,
+            headers={
+                "Content-Disposition": 'attachment; filename="tritium_automation_rules.json"',
+            },
+        )
+
+    @router.post("/import")
+    async def import_rules(req: dict, user: dict = Depends(require_auth)):
+        """Import automation rules from a previously exported JSON package.
+
+        Expects the body to contain either:
+          - A full export package (with "format" and "rules" keys)
+          - A bare array of rule dicts
+
+        Rules with duplicate IDs will be skipped unless overwrite=true
+        is passed in the body.
+        """
+        overwrite = req.get("overwrite", False)
+
+        # Accept both full package and bare array
+        if isinstance(req.get("rules"), list):
+            rule_dicts = req["rules"]
+        elif isinstance(req, list):
+            rule_dicts = req
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Expected 'rules' array in request body",
+            )
+
+        imported = 0
+        skipped = 0
+        errors = []
+
+        for rd in rule_dicts:
+            try:
+                rule = AutomationRule.from_dict(rd)
+                existing = plugin.engine.get_rule(rule.rule_id)
+                if existing and not overwrite:
+                    skipped += 1
+                    continue
+                if existing:
+                    plugin.engine.remove_rule(rule.rule_id)
+                plugin.engine.add_rule(rule)
+                imported += 1
+            except Exception as exc:
+                errors.append(f"Rule '{rd.get('name', '?')}': {exc}")
+
+        plugin._save_rules()
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+            "total_rules": len(plugin.engine.list_rules()),
+        }
+
+    return router

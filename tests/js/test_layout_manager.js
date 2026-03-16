@@ -166,15 +166,22 @@ const sandbox = {
 
 const ctx = vm.createContext(sandbox);
 
+// Load panel-utils.js first (_esc is used by panel-manager.js)
+const panelUtilsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/panel-utils.js', 'utf8');
+const panelUtilsPlain = panelUtilsCode
+    .replace(/^export\s+/gm, '')
+    .replace(/^import\s+.*$/gm, '');
+vm.runInContext(panelUtilsPlain, ctx);
+
 // Load EventBus
-const eventsCode = fs.readFileSync(__dirname + '/../../frontend/js/command/events.js', 'utf8');
+const eventsCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/events.js', 'utf8');
 const eventsPlain = eventsCode
     .replace(/^export\s+/gm, '')
     .replace(/^import\s+.*$/gm, '');
 vm.runInContext(eventsPlain, ctx);
 
 // Load PanelManager (needed by LayoutManager)
-const panelCode = fs.readFileSync(__dirname + '/../../frontend/js/command/panel-manager.js', 'utf8');
+const panelCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/panel-manager.js', 'utf8');
 const panelPlain = panelCode
     .replace(/^import\s+.*$/gm, '')
     .replace(/^export\s+class/gm, 'class')
@@ -182,7 +189,7 @@ const panelPlain = panelCode
 vm.runInContext(panelPlain + '\nvar _Panel = Panel; var _PanelManager = PanelManager;', ctx);
 
 // Load LayoutManager
-const layoutCode = fs.readFileSync(__dirname + '/../../frontend/js/command/layout-manager.js', 'utf8');
+const layoutCode = fs.readFileSync(__dirname + '/../../src/frontend/js/command/layout-manager.js', 'utf8');
 const layoutPlain = layoutCode
     .replace(/^import\s+.*$/gm, '')
     .replace(/^export\s+class/gm, 'class')

@@ -152,6 +152,11 @@ class Asset(Base):
     capabilities: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: ["patrol", "track", "engage"]
     connection_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # Control endpoint
     camera_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # Onboard camera stream
+    height_meters: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Mounting height above ground
+    floor_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Floor/story number (0=ground)
+    mounting_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # wall, ceiling, pole, ground
+    coverage_radius_meters: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Sensor detection range
+    coverage_cone_angle: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Cone FOV in degrees (360=omni)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_heartbeat: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(

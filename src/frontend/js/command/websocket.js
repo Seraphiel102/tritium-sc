@@ -17,8 +17,11 @@ export class WebSocketManager {
     constructor() {
         this._ws = null;
         this._reconnectTimer = null;
-        this._reconnectDelay = 2000;
-        this._maxDelay = 30000;
+        this._reconnectDelay = 1000;
+        this._maxDelay = 16000;
+        this._disconnectedBanner = null;
+        this._pingTimer = null;
+        this._PING_INTERVAL_MS = 25000; // send client ping every 25s (server expects pong within 90s)
     }
 
     /**
@@ -36,16 +39,22 @@ export class WebSocketManager {
             this._ws.onopen = () => {
                 console.log('%c[WS] Connected', 'color: #05ffa1;');
                 TritiumStore.set('connection.status', 'connected');
-                this._reconnectDelay = 2000;
+                this._reconnectDelay = 1000;
+                this._hideDisconnectedBanner();
                 EventBus.emit('ws:connected');
                 // Sync full state on every connect (covers initial load and
                 // reconnects — events may have been missed during the gap).
                 this._refreshState();
+                // Start client-side keepalive pings to prevent server from
+                // closing us as stale (server expects pong within 90s).
+                this._startPingKeepalive();
             };
 
             this._ws.onclose = () => {
                 console.log('%c[WS] Disconnected', 'color: #ff2a6d;');
                 TritiumStore.set('connection.status', 'disconnected');
+                this._stopPingKeepalive();
+                this._showDisconnectedBanner();
                 EventBus.emit('ws:disconnected');
                 this._scheduleReconnect();
             };
@@ -86,6 +95,7 @@ export class WebSocketManager {
     disconnect() {
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = null;
+        this._stopPingKeepalive();
         if (this._ws) {
             // Remove onclose to prevent auto-reconnect
             this._ws.onclose = null;
@@ -150,6 +160,7 @@ export class WebSocketManager {
             if (t.ammo_max && t.ammo_count / t.ammo_max > 0.2) update.ammoLow = false;
         }
         if (t.ammo_max !== undefined) update.ammoMax = t.ammo_max;
+        if (t.weapon_cooldown !== undefined) update.weaponCooldown = t.weapon_cooldown;
         if (t.altitude !== undefined) update.altitude = t.altitude;
         if (t.instigator_state !== undefined) update.instigatorState = t.instigator_state;
         if (t.identified !== undefined) update.identified = t.identified;
@@ -160,6 +171,18 @@ export class WebSocketManager {
         if (t.radio_signal_strength !== undefined) update.radio_signal_strength = t.radio_signal_strength;
         // Source classification (sim, real, graphling)
         if (t.source !== undefined) update.source = t.source;
+        // Multi-source fusion fields (correlated targets)
+        if (t.sources !== undefined) update.sources = t.sources;
+        if (t.source_count !== undefined) update.source_count = t.source_count;
+        if (t.confirming_sources !== undefined) {
+            update.sources = t.confirming_sources;
+            update.source_count = t.confirming_sources.length;
+        }
+        if (t.correlated_ids !== undefined) update.correlated_ids = t.correlated_ids;
+        if (t.correlation_confidence !== undefined) update.correlation_confidence = t.correlation_confidence;
+        // Position confidence for rendering
+        if (t.position_confidence !== undefined) update.position_confidence = t.position_confidence;
+        if (t.position_source !== undefined) update.position_source = t.position_source;
         // Patrol route fields
         if (t.waypoints !== undefined) update.waypoints = t.waypoints;
         if (t.loop_waypoints !== undefined) update.loopWaypoints = t.loop_waypoints;
@@ -183,10 +206,80 @@ export class WebSocketManager {
 
     _scheduleReconnect() {
         clearTimeout(this._reconnectTimer);
+        const delay = this._reconnectDelay;
+        console.log(`%c[WS] Reconnecting in ${delay / 1000}s...`, 'color: #fcee0a;');
         this._reconnectTimer = setTimeout(() => {
-            this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, this._maxDelay);
+            // Exponential backoff: 1s -> 2s -> 4s -> 8s -> 16s (cap)
+            this._reconnectDelay = Math.min(this._reconnectDelay * 2, this._maxDelay);
             this.connect();
-        }, this._reconnectDelay);
+        }, delay);
+    }
+
+    /**
+     * Show a fixed "DISCONNECTED" banner at the top of the viewport.
+     * Idempotent — safe to call multiple times.
+     */
+    _showDisconnectedBanner() {
+        if (typeof document === 'undefined') return;
+        if (this._disconnectedBanner) return;
+        const banner = document.createElement('div');
+        banner.id = 'ws-disconnected-banner';
+        banner.style.cssText = [
+            'position: fixed',
+            'top: 0',
+            'left: 0',
+            'right: 0',
+            'z-index: 99999',
+            'background: #ff2a6d',
+            'color: #fff',
+            'text-align: center',
+            'padding: 6px 12px',
+            'font-family: monospace',
+            'font-size: 13px',
+            'font-weight: bold',
+            'letter-spacing: 2px',
+            'text-transform: uppercase',
+            'box-shadow: 0 2px 8px rgba(255,42,109,0.5)',
+        ].join(';');
+        banner.textContent = '// DISCONNECTED -- reconnecting...';
+        document.body.appendChild(banner);
+        this._disconnectedBanner = banner;
+    }
+
+    /**
+     * Remove the "DISCONNECTED" banner when connection is restored.
+     */
+    _hideDisconnectedBanner() {
+        if (this._disconnectedBanner) {
+            this._disconnectedBanner.remove();
+            this._disconnectedBanner = null;
+        }
+    }
+
+    /**
+     * Start a client-side ping interval that sends {"type":"ping"} every 25s.
+     * The server records pong timestamps for each client; if a client misses
+     * 3 consecutive server pings (90s), the server closes the connection.
+     * This keepalive ensures the client sends traffic regularly so the server
+     * always sees recent activity and never considers the connection stale.
+     */
+    _startPingKeepalive() {
+        this._stopPingKeepalive();
+        this._pingTimer = setInterval(() => {
+            if (this._ws?.readyState === WebSocket.OPEN) {
+                this.send({ type: 'ping' });
+            }
+        }, this._PING_INTERVAL_MS);
+    }
+
+    /**
+     * Stop the client-side ping keepalive interval.
+     */
+    _stopPingKeepalive() {
+        if (this._pingTimer) {
+            clearInterval(this._pingTimer);
+            this._pingTimer = null;
+        }
     }
 
     /**
@@ -241,6 +334,11 @@ export class WebSocketManager {
         const type = msg.type || msg.event;
 
         switch (type) {
+            case 'ping':
+                // Server-initiated heartbeat — respond with pong
+                this.send({ type: 'pong' });
+                return;
+
             case 'amy_thought':
                 TritiumStore.set('amy.lastThought', msg.text || msg.data?.text || '');
                 EventBus.emit('amy:thought', msg.data || msg);
@@ -306,6 +404,7 @@ export class WebSocketManager {
                 if (d.countdown !== undefined) TritiumStore.set('game.countdown', d.countdown);
                 if (d.wave_hostiles_remaining !== undefined) TritiumStore.set('game.waveHostilesRemaining', d.wave_hostiles_remaining);
                 if (d.difficulty_multiplier !== undefined) TritiumStore.set('game.difficultyMultiplier', d.difficulty_multiplier);
+                if (d.spawn_direction) TritiumStore.set('game.waveDirection', d.spawn_direction);
                 // Idle = initial state before any game.  Full reset clears
                 // units, score, overlays, and all per-game state so stale
                 // data from a previous session cannot leak into the next game.
@@ -341,14 +440,17 @@ export class WebSocketManager {
                 if (d.weighted_total_score !== undefined) TritiumStore.set('game.weightedTotalScore', d.weighted_total_score);
                 EventBus.emit('game:state', d);
                 // Route through warHandle* for audio hooks
-                if (typeof warHandleGameState === 'function') {
-                    warHandleGameState(d);
-                } else if (typeof warHudUpdateGameState === 'function') {
-                    warHudUpdateGameState(d);
+                if (typeof window.warHandleGameState === 'function') {
+                    window.warHandleGameState(d);
+                }
+                // Always update HUD state (warHandleGameState may not propagate to warHudUpdateGameState
+                // when war.js is not loaded, e.g. in Command Center view)
+                if (typeof window.warHudUpdateGameState === 'function') {
+                    window.warHudUpdateGameState(d);
                 }
                 // Trigger countdown audio when entering countdown state
-                if (d.state === 'countdown' && typeof warHandleCountdown === 'function') {
-                    warHandleCountdown(d);
+                if (d.state === 'countdown' && typeof window.warHandleCountdown === 'function') {
+                    window.warHandleCountdown(d);
                 }
                 break;
             }
@@ -363,14 +465,14 @@ export class WebSocketManager {
                 const stateData = { ...d, state: phase };
                 EventBus.emit('game:state', stateData);
                 // Update HUD game state so _hudState.gameState reflects victory/defeat
-                if (typeof warHandleGameState === 'function') {
-                    warHandleGameState(stateData);
+                if (typeof window.warHandleGameState === 'function') {
+                    window.warHandleGameState(stateData);
                 }
                 // Route through warHandle* for audio hooks (victory/defeat sounds)
-                if (typeof warHandleGameOver === 'function') {
-                    warHandleGameOver(d);
+                if (typeof window.warHandleGameOver === 'function') {
+                    window.warHandleGameOver(d);
                 }
-                if (typeof warHudShowGameOver === 'function') {
+                if (typeof window.warHudShowGameOver === 'function') {
                     // Pass mode-specific data as 5th argument for
                     // civil_unrest/drone_swarm game mode HUD rendering
                     const modeData = {
@@ -385,7 +487,7 @@ export class WebSocketManager {
                     };
                     // Backend sends 'wave' (singular); normalize to support both
                     const wavesCompleted = d.waves || d.wave || 0;
-                    warHudShowGameOver(d.result, d.score, wavesCompleted, d.total_eliminations || d.total_kills, modeData);
+                    window.warHudShowGameOver(d.result, d.score, wavesCompleted, d.total_eliminations || d.total_kills, modeData);
                 }
                 break;
             }
@@ -396,32 +498,45 @@ export class WebSocketManager {
             case 'game_kill':
             case 'amy_game_elimination':
             case 'amy_game_kill':
-                // Route through warHandle* for audio + visual + kill feed
-                if (typeof warHandleTargetEliminated === 'function') {
-                    warHandleTargetEliminated(msg.data || msg);
-                } else {
-                    if (typeof warCombatAddEliminationEffect === 'function') {
-                        warCombatAddEliminationEffect(msg.data || msg);
-                    }
-                    if (typeof warHudAddKillFeedEntry === 'function') {
-                        warHudAddKillFeedEntry(msg.data || msg);
-                    }
+                // Route through warHandle* for audio hooks (war-events.js patches
+                // these even when war.js is absent, so this always fires audio)
+                if (typeof window.warHandleTargetEliminated === 'function') {
+                    window.warHandleTargetEliminated(msg.data || msg);
+                }
+                // Always add elimination effect + kill feed entry.
+                // In Command Center (unified.html), war.js is NOT loaded so the
+                // warHandle* above only fires audio via war-events.js.  The visual
+                // effect + kill feed must be called unconditionally here.
+                if (typeof window.warCombatAddEliminationEffect === 'function') {
+                    window.warCombatAddEliminationEffect(msg.data || msg);
+                }
+                if (typeof window.warHudAddKillFeedEntry === 'function') {
+                    window.warHudAddKillFeedEntry(msg.data || msg);
                 }
                 EventBus.emit('combat:elimination', msg.data || msg);
                 EventBus.emit('game:elimination', msg.data || msg);
+                {
+                    const ed = msg.data || msg;
+                    TritiumStore.addAlert({
+                        type: 'combat',
+                        message: `${ed.interceptor_name || 'Unit'} eliminated ${ed.target_name || 'hostile'}`,
+                        source: 'combat',
+                    });
+                }
                 break;
 
             case 'announcer':
-            case 'amy_announcer': {
+            case 'amy_announcer':
+            case 'amy_announcement': {
                 const d = msg.data || msg;
                 // Normalize: some messages use 'message' instead of 'text'
                 if (!d.text && d.message) d.text = d.message;
                 EventBus.emit('announcer', d);
                 // Route through warHandle* for audio hooks
-                if (typeof warHandleAmyAnnouncement === 'function') {
-                    warHandleAmyAnnouncement(d);
-                } else if (typeof warHudShowAmyAnnouncement === 'function') {
-                    warHudShowAmyAnnouncement(d.text, d.category);
+                if (typeof window.warHandleAmyAnnouncement === 'function') {
+                    window.warHandleAmyAnnouncement(d);
+                } else if (typeof window.warHudShowAmyAnnouncement === 'function') {
+                    window.warHudShowAmyAnnouncement(d.text, d.category);
                 }
                 break;
             }
@@ -507,8 +622,8 @@ export class WebSocketManager {
                     source: 'escalation',
                 });
                 // Route through warHandle* for audio hooks (escalation siren)
-                if (typeof warHandleThreatEscalation === 'function') {
-                    warHandleThreatEscalation(d);
+                if (typeof window.warHandleThreatEscalation === 'function') {
+                    window.warHandleThreatEscalation(d);
                 }
                 EventBus.emit('alert:new', d);
                 EventBus.emit('escalation:change', d);
@@ -527,6 +642,18 @@ export class WebSocketManager {
                 break;
             }
 
+            case 'amy_dispatch': {
+                const dd = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'dispatch',
+                    message: `Dispatched ${dd.name || dd.target_id || 'unit'}`,
+                    source: 'amy',
+                });
+                EventBus.emit('alert:new', dd);
+                EventBus.emit('amy:dispatch', dd);
+                break;
+            }
+
             case 'detection':
             case 'amy_detection':
             case 'amy_detections':
@@ -537,20 +664,20 @@ export class WebSocketManager {
             case 'projectile_fired':
             case 'amy_projectile_fired':
                 // Route through warHandle* so war-events.js audio hooks fire
-                if (typeof warHandleProjectileFired === 'function') {
-                    warHandleProjectileFired(msg.data || msg);
-                } else if (typeof warCombatAddProjectile === 'function') {
-                    warCombatAddProjectile(msg.data || msg);
+                if (typeof window.warHandleProjectileFired === 'function') {
+                    window.warHandleProjectileFired(msg.data || msg);
+                } else if (typeof window.warCombatAddProjectile === 'function') {
+                    window.warCombatAddProjectile(msg.data || msg);
                 }
                 EventBus.emit('combat:projectile', msg.data || msg);
                 break;
 
             case 'projectile_hit':
             case 'amy_projectile_hit':
-                if (typeof warHandleProjectileHit === 'function') {
-                    warHandleProjectileHit(msg.data || msg);
-                } else if (typeof warCombatAddHitEffect === 'function') {
-                    warCombatAddHitEffect(msg.data || msg);
+                if (typeof window.warHandleProjectileHit === 'function') {
+                    window.warHandleProjectileHit(msg.data || msg);
+                } else if (typeof window.warCombatAddHitEffect === 'function') {
+                    window.warCombatAddHitEffect(msg.data || msg);
                 }
                 EventBus.emit('combat:hit', msg.data || msg);
                 break;
@@ -558,10 +685,10 @@ export class WebSocketManager {
             case 'elimination_streak':
             case 'kill_streak':
             case 'amy_elimination_streak':
-                if (typeof warHandleEliminationStreak === 'function') {
-                    warHandleEliminationStreak(msg.data || msg);
-                } else if (typeof warCombatAddEliminationStreakEffect === 'function') {
-                    warCombatAddEliminationStreakEffect(msg.data || msg);
+                if (typeof window.warHandleEliminationStreak === 'function') {
+                    window.warHandleEliminationStreak(msg.data || msg);
+                } else if (typeof window.warCombatAddEliminationStreakEffect === 'function') {
+                    window.warCombatAddEliminationStreakEffect(msg.data || msg);
                 }
                 EventBus.emit('combat:streak', msg.data || msg);
                 break;
@@ -570,15 +697,22 @@ export class WebSocketManager {
             case 'amy_wave_start': {
                 const d = msg.data || msg;
                 // Route through warHandle* for audio hooks
-                if (typeof warHandleWaveStart === 'function') {
-                    warHandleWaveStart(d);
+                if (typeof window.warHandleWaveStart === 'function') {
+                    window.warHandleWaveStart(d);
                 }
-                if (typeof warHudShowWaveBanner === 'function') {
+                if (typeof window.warHudShowWaveBanner === 'function') {
                     const briefingData = (d.briefing || d.threat_level || d.intel)
                         ? { briefing: d.briefing, threat_level: d.threat_level, intel: d.intel }
                         : null;
-                    warHudShowWaveBanner(d.wave || d.wave_number, d.wave_name, d.hostile_count, briefingData);
+                    window.warHudShowWaveBanner(d.wave || d.wave_number, d.wave_name, d.hostile_count, briefingData);
                 }
+                TritiumStore.addAlert({
+                    type: 'warning',
+                    message: `WAVE ${d.wave_number || d.wave || '?'} INCOMING — ${d.hostile_count || '?'} hostiles`,
+                    source: 'game',
+                });
+                // Store wave direction for late-joining browsers
+                if (d.spawn_direction) TritiumStore.set('game.waveDirection', d.spawn_direction);
                 EventBus.emit('game:wave_start', d);
                 break;
             }
@@ -586,13 +720,20 @@ export class WebSocketManager {
             case 'wave_complete':
             case 'amy_wave_complete': {
                 const d = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'info',
+                    message: `WAVE ${d.wave_number || d.wave || '?'} CLEAR`,
+                    source: 'game',
+                });
                 // Route through warHandle* for audio hooks
-                if (typeof warHandleWaveComplete === 'function') {
-                    warHandleWaveComplete(d);
+                if (typeof window.warHandleWaveComplete === 'function') {
+                    window.warHandleWaveComplete(d);
                 }
-                if (typeof warHudShowWaveComplete === 'function') {
-                    warHudShowWaveComplete(d.wave || d.wave_number, d.eliminations, d.score_bonus);
+                if (typeof window.warHudShowWaveComplete === 'function') {
+                    window.warHudShowWaveComplete(d.wave || d.wave_number, d.eliminations, d.score_bonus);
                 }
+                // Clear wave direction on completion, store next if available
+                TritiumStore.set('game.waveDirection', d.next_spawn_direction || null);
                 EventBus.emit('game:wave_complete', d);
                 break;
             }
@@ -602,8 +743,8 @@ export class WebSocketManager {
                 const d = msg.data || msg;
                 const unitId = d.unit_id || d.target_id;
                 // Route through warHandle* for dispatch arrow + audio (legacy canvas)
-                if (typeof warHandleDispatch === 'function') {
-                    warHandleDispatch({
+                if (typeof window.warHandleDispatch === 'function') {
+                    window.warHandleDispatch({
                         target_id: unitId,
                         destination: d.destination,
                     });
@@ -656,6 +797,35 @@ export class WebSocketManager {
 
             case 'tak_geochat':
                 EventBus.emit('tak:geochat', msg.data || msg);
+                break;
+
+            // -- Fleet bridge events (tritium-edge sensor nodes) --------
+            case 'fleet_heartbeat':
+                EventBus.emit('fleet:heartbeat', msg.data || msg);
+                break;
+
+            case 'fleet_device_update':
+                EventBus.emit('fleet:device_update', msg.data || msg);
+                break;
+
+            case 'fleet_ble_presence':
+                EventBus.emit('fleet:ble_presence', msg.data || msg);
+                break;
+
+            case 'fleet_registered':
+                EventBus.emit('fleet:registered', msg.data || msg);
+                break;
+
+            case 'fleet_offline':
+                EventBus.emit('fleet:offline', msg.data || msg);
+                break;
+
+            case 'fleet_connected':
+                EventBus.emit('fleet:connected', msg.data || msg);
+                break;
+
+            case 'fleet_disconnected':
+                EventBus.emit('fleet:disconnected', msg.data || msg);
                 break;
 
             case 'mission_progress':
@@ -770,6 +940,48 @@ export class WebSocketManager {
                     source: 'zone',
                 });
                 EventBus.emit('zone:violation', d);
+                break;
+            }
+
+            case 'amy_geofence:enter':
+            case 'geofence:enter': {
+                const d = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'geofence',
+                    message: `ENTER: ${d.target_id || '?'} entered ${d.zone_name || d.zone_id || '?'} (${d.zone_type || 'monitored'})`,
+                    source: 'geofence',
+                    severity: d.zone_type === 'restricted' ? 'critical' : 'warning',
+                    data: d,
+                });
+                EventBus.emit('geofence:enter', d);
+                EventBus.emit('notification:geofence', {
+                    direction: 'enter',
+                    target_id: d.target_id,
+                    zone_name: d.zone_name || d.zone_id,
+                    zone_type: d.zone_type || 'monitored',
+                    timestamp: d.timestamp,
+                });
+                break;
+            }
+
+            case 'amy_geofence:exit':
+            case 'geofence:exit': {
+                const d = msg.data || msg;
+                TritiumStore.addAlert({
+                    type: 'geofence',
+                    message: `EXIT: ${d.target_id || '?'} exited ${d.zone_name || d.zone_id || '?'}`,
+                    source: 'geofence',
+                    severity: 'info',
+                    data: d,
+                });
+                EventBus.emit('geofence:exit', d);
+                EventBus.emit('notification:geofence', {
+                    direction: 'exit',
+                    target_id: d.target_id,
+                    zone_name: d.zone_name || d.zone_id,
+                    zone_type: d.zone_type || 'monitored',
+                    timestamp: d.timestamp,
+                });
                 break;
             }
 
@@ -965,8 +1177,8 @@ export class WebSocketManager {
             case 'bonus_objective_completed':
             case 'amy_bonus_objective_completed': {
                 const d = msg.data || msg;
-                if (typeof warHudCompleteBonusObjective === 'function') {
-                    warHudCompleteBonusObjective(d.name);
+                if (typeof window.warHudCompleteBonusObjective === 'function') {
+                    window.warHudCompleteBonusObjective(d.name);
                 }
                 EventBus.emit('objective:completed', d);
                 break;
@@ -1001,6 +1213,44 @@ export class WebSocketManager {
                     TritiumStore.set('game.signals', signals);
                 }
                 EventBus.emit('unit:signal', d);
+                break;
+            }
+
+            // -- Edge tracker BLE updates --------------------------------
+            case 'amy_edge:ble_update':
+                EventBus.emit('edge:ble_update', msg.data || msg);
+                break;
+
+            // -- Edge tracker WiFi updates --------------------------------
+            case 'amy_edge:wifi_update':
+                EventBus.emit('edge:wifi_update', msg.data || msg);
+                break;
+
+            // -- Notifications ------------------------------------
+            case 'notification:new':
+                EventBus.emit('notification:new', msg.data || msg);
+                break;
+
+            // -- Operator cursor sharing ----------------------------
+            case 'cursor_position': {
+                // Another operator's cursor position and viewport on the map
+                const cursor = msg;
+                const cursorData = {
+                    session_id: cursor.session_id,
+                    username: cursor.username,
+                    display_name: cursor.display_name,
+                    role: cursor.role,
+                    color: cursor.color,
+                    lat: cursor.lat,
+                    lng: cursor.lng,
+                    timestamp: cursor.timestamp,
+                };
+                // Include viewport data if present (zoom, bounds, label)
+                if (cursor.zoom !== undefined) cursorData.zoom = cursor.zoom;
+                if (cursor.bounds) cursorData.bounds = cursor.bounds;
+                if (cursor.viewport_label) cursorData.viewport_label = cursor.viewport_label;
+                TritiumStore.setOperatorCursor(cursor.session_id, cursorData);
+                EventBus.emit('operator:cursor', cursorData);
                 break;
             }
 

@@ -51,6 +51,8 @@ class TestMoraleSystemCleanup:
     def test_remove_unknown_unit_no_error(self):
         ms = MoraleSystem()
         ms.remove_unit("nonexistent")  # should not raise
+        # System should still be functional
+        assert ms.get_morale("nonexistent") == 1.0  # default morale
 
 
 class TestWeaponSystemCleanup:

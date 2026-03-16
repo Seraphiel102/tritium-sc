@@ -41,9 +41,50 @@ ThreatRecord separately.  The tracker only tracks *identity and position*.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass, field
+
+from .target_history import TargetHistory
+from .target_reappearance import TargetReappearanceMonitor
+
+
+# ---------------------------------------------------------------------------
+# Confidence decay — exponential decay per source type
+# ---------------------------------------------------------------------------
+# half-life in seconds: after this time, confidence drops to 50%
+_HALF_LIVES: dict[str, float] = {
+    "ble": 30.0,
+    "wifi": 45.0,
+    "yolo": 15.0,
+    "rf_motion": 10.0,
+    "mesh": 120.0,
+    "simulation": 0.0,   # never decays
+    "manual": 300.0,
+}
+_MIN_CONFIDENCE = 0.05
+_LN2 = math.log(2)
+
+# Multi-source confidence boosting — multiplicative bonus per confirming source
+_MULTI_SOURCE_BOOST = 1.3  # 30% boost per additional confirming source
+_MAX_BOOSTED_CONFIDENCE = 0.99
+
+# Velocity consistency — max plausible speed in meters/second
+# 50 m/s ~ 180 km/h, anything above is suspicious
+_MAX_PLAUSIBLE_SPEED_MPS = 50.0
+_TELEPORT_FLAG_COOLDOWN = 30.0  # seconds before re-flagging same target
+
+
+def _decayed_confidence(source: str, initial: float, elapsed: float) -> float:
+    """Compute exponentially decayed confidence."""
+    if elapsed <= 0.0:
+        return max(0.0, min(1.0, initial))
+    hl = _HALF_LIVES.get(source, 300.0)
+    if hl <= 0.0:
+        return max(0.0, min(1.0, initial))
+    decayed = initial * math.exp(-_LN2 / hl * elapsed)
+    return min(1.0, decayed) if decayed >= _MIN_CONFIDENCE else 0.0
 
 
 @dataclass
@@ -63,11 +104,33 @@ class TrackedTarget:
     status: str = "active"
     position_source: str = "unknown"  # "gps", "simulation", "mqtt", "fixed", "yolo", "unknown"
     position_confidence: float = 0.0  # 0.0 = no confidence, 1.0 = high
+    threat_score: float = 0.0  # 0.0 = no threat, 1.0 = maximum threat probability
+    _initial_confidence: float = 0.0  # stored at detection time for decay
+    confirming_sources: set = field(default_factory=set)  # source types that confirmed this target
+    correlated_ids: list = field(default_factory=list)  # IDs of targets fused into this one
+    correlation_confidence: float = 0.0  # weighted correlation score from correlator
+    velocity_suspicious: bool = False  # flagged if target teleported
+    _last_velocity_flag: float = 0.0  # monotonic time of last velocity flag
+    classification: str = "unknown"  # RL/ML classification (person, vehicle, phone, etc.)
+    classification_confidence: float = 0.0  # confidence of the classification model
 
-    def to_dict(self) -> dict:
+    @property
+    def effective_confidence(self) -> float:
+        """Position confidence with exponential time decay and multi-source boost."""
+        elapsed = time.monotonic() - self.last_seen
+        initial = self._initial_confidence if self._initial_confidence > 0 else self.position_confidence
+        decayed = _decayed_confidence(self.source, initial, elapsed)
+        # Multi-source boost: each additional confirming source multiplies confidence
+        extra_sources = max(0, len(self.confirming_sources) - 1)
+        if extra_sources > 0:
+            boosted = decayed * (_MULTI_SOURCE_BOOST ** extra_sources)
+            return min(_MAX_BOOSTED_CONFIDENCE, boosted)
+        return decayed
+
+    def to_dict(self, history: TargetHistory | None = None) -> dict:
         from .geo import local_to_latlng
         geo = local_to_latlng(self.position[0], self.position[1])
-        return {
+        d = {
             "target_id": self.target_id,
             "name": self.name,
             "alliance": self.alliance,
@@ -83,8 +146,20 @@ class TrackedTarget:
             "source": self.source,
             "status": self.status,
             "position_source": self.position_source,
-            "position_confidence": self.position_confidence,
+            "position_confidence": self.effective_confidence,
+            "threat_score": self.threat_score,
+            "confirming_sources": list(self.confirming_sources),
+            "sources": list(self.confirming_sources),
+            "source_count": len(self.confirming_sources),
+            "correlated_ids": list(self.correlated_ids),
+            "correlation_confidence": self.correlation_confidence,
+            "velocity_suspicious": self.velocity_suspicious,
+            "classification": self.classification,
+            "classification_confidence": self.classification_confidence,
         }
+        if history is not None:
+            d["trail"] = history.get_trail_dicts(self.target_id, max_points=20)
+        return d
 
 
 class TargetTracker:
@@ -93,10 +168,67 @@ class TargetTracker:
     # Stale timeout — remove YOLO detections older than this
     STALE_TIMEOUT = 30.0
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus=None) -> None:
         self._targets: dict[str, TrackedTarget] = {}
         self._lock = threading.Lock()
         self._detection_counter: int = 0
+        self._event_bus = event_bus
+        self._geofence_engine = None  # Set via set_geofence_engine()
+        self.history = TargetHistory()
+        self.reappearance_monitor = TargetReappearanceMonitor(
+            event_bus=event_bus,
+            min_absence_seconds=60.0,
+        )
+
+    def set_geofence_engine(self, engine) -> None:
+        """Wire geofence engine for automatic zone checks on position updates."""
+        self._geofence_engine = engine
+
+    def _check_geofence(self, target_id: str, game_x: float, game_y: float) -> None:
+        """Check if a target's position triggers geofence enter/exit events.
+
+        Zone polygons are stored in game coordinates (meters from geo center),
+        so we pass game coordinates directly for point-in-polygon tests.
+        """
+        if not self._geofence_engine:
+            return
+        try:
+            self._geofence_engine.check(target_id, (game_x, game_y))
+        except Exception:
+            pass  # Don't let geofence errors break target tracking
+
+    def _check_velocity(self, target: TrackedTarget, new_pos: tuple[float, float]) -> None:
+        """Check if position change implies impossible velocity (teleportation).
+
+        Flags the target as velocity_suspicious if the implied speed exceeds
+        _MAX_PLAUSIBLE_SPEED_MPS. This catches GPS glitches, MAC rotation
+        misattribution, and spoofing.
+        """
+        now = time.monotonic()
+        dt = now - target.last_seen
+        if dt <= 0.0 or dt > 120.0:  # skip if first update or very stale
+            return
+
+        dx = new_pos[0] - target.position[0]
+        dy = new_pos[1] - target.position[1]
+        dist = math.sqrt(dx * dx + dy * dy)
+        speed = dist / dt  # meters per second (assuming local coords are meters)
+
+        if speed > _MAX_PLAUSIBLE_SPEED_MPS:
+            if (now - target._last_velocity_flag) > _TELEPORT_FLAG_COOLDOWN:
+                target.velocity_suspicious = True
+                target._last_velocity_flag = now
+        else:
+            # Clear flag if velocity is now plausible
+            target.velocity_suspicious = False
+
+    def _add_confirming_source(self, target: TrackedTarget, source: str) -> None:
+        """Register an additional source that confirms this target's existence.
+
+        Multi-source confirmation boosts confidence multiplicatively via
+        effective_confidence property.
+        """
+        target.confirming_sources.add(source)
 
     def update_from_simulation(self, sim_data: dict) -> None:
         """Update or create a tracked target from simulation telemetry.
@@ -106,25 +238,25 @@ class TargetTracker:
         """
         tid = sim_data["target_id"]
         pos = sim_data.get("position", {})
+        position = (pos.get("x", 0.0), pos.get("y", 0.0))
         with self._lock:
             if tid in self._targets:
                 t = self._targets[tid]
-                t.position = (pos.get("x", 0.0), pos.get("y", 0.0))
+                self._check_velocity(t, position)
+                t.position = position
                 t.heading = sim_data.get("heading", 0.0)
                 t.speed = sim_data.get("speed", 0.0)
                 t.battery = sim_data.get("battery", 1.0)
                 t.status = sim_data.get("status", "active")
                 t.last_seen = time.monotonic()
+                self._add_confirming_source(t, "simulation")
             else:
-                # Map SimulationTarget source to tracker source:
-                # "sim" -> "simulation", "graphling" -> "simulation" (still sim-managed),
-                # "real" -> "simulation" (real targets come through YOLO path instead)
                 self._targets[tid] = TrackedTarget(
                     target_id=tid,
                     name=sim_data.get("name", tid[:8]),
                     alliance=sim_data.get("alliance", "unknown"),
                     asset_type=sim_data.get("asset_type", "unknown"),
-                    position=(pos.get("x", 0.0), pos.get("y", 0.0)),
+                    position=position,
                     heading=sim_data.get("heading", 0.0),
                     speed=sim_data.get("speed", 0.0),
                     battery=sim_data.get("battery", 1.0),
@@ -133,7 +265,11 @@ class TargetTracker:
                     status=sim_data.get("status", "active"),
                     position_source="simulation",
                     position_confidence=1.0,
+                    _initial_confidence=1.0,
+                    confirming_sources={"simulation"},
                 )
+        self.history.record(tid, position)
+        self._check_geofence(tid, position[0], position[1])
 
     def update_from_detection(self, detection: dict) -> None:
         """Update or create a tracked target from a YOLO detection.
@@ -174,13 +310,20 @@ class TargetTracker:
                     continue
                 dx = existing.position[0] - cx
                 dy = existing.position[1] - cy
-                if (dx * dx + dy * dy) < 0.04:  # within ~0.2 normalized
+                dist_sq = dx * dx + dy * dy
+                # Adaptive threshold: if coords are in game space (meters),
+                # use 9 sq meters (3m radius); if normalized (0-1), use 0.04.
+                threshold = 9.0 if (abs(cx) > 2.0 or abs(cy) > 2.0) else 0.04
+                if dist_sq < threshold:  # within proximity
                     matched = existing
                     break
 
             if matched:
+                self._check_velocity(matched, (cx, cy))
                 matched.position = (cx, cy)
                 matched.last_seen = time.monotonic()
+                self._add_confirming_source(matched, "yolo")
+                tid = matched.target_id
             else:
                 self._detection_counter += 1
                 tid = f"det_{class_name}_{self._detection_counter}"
@@ -194,7 +337,200 @@ class TargetTracker:
                     source="yolo",
                     position_source="yolo",
                     position_confidence=0.1,
+                    _initial_confidence=0.1,
+                    confirming_sources={"yolo"},
+                    classification=class_name,
+                    classification_confidence=detection.get("confidence", 0.0),
                 )
+        self.history.record(tid, (cx, cy))
+
+    def update_from_camera_detection(
+        self,
+        detection: dict,
+        camera_lat: float,
+        camera_lng: float,
+    ) -> None:
+        """Update or create a target from a camera detection, positioned near the camera.
+
+        Converts normalized pixel coordinates (0-1) into game coordinates
+        offset from the camera's lat/lng, so detections appear on the
+        tactical map near their source camera.
+
+        Args:
+            detection: Dict with keys: label/class_name, confidence, bbox.
+            camera_lat: Camera latitude.
+            camera_lng: Camera longitude.
+        """
+        from .geo import latlng_to_local
+
+        label = detection.get("label") or detection.get("class_name", "unknown")
+        confidence = detection.get("confidence", 0.5)
+        if confidence < 0.4:
+            return
+
+        # Get camera position in game coordinates
+        cam_x, cam_y, _ = latlng_to_local(camera_lat, camera_lng)
+
+        # Compute a small offset from the camera based on pixel position.
+        # Normalized bbox center: (0,0)=top-left, (1,1)=bottom-right.
+        bbox = detection.get("bbox", {})
+        if isinstance(bbox, dict):
+            px = bbox.get("x", 0.5)
+            py = bbox.get("y", 0.5)
+        else:
+            px, py = 0.5, 0.5
+
+        # Map pixel position to a scatter area around the camera (up to 30m)
+        offset_x = (px - 0.5) * 60.0  # -30m to +30m
+        offset_y = (0.5 - py) * 30.0   # higher in frame = further away
+
+        game_x = cam_x + offset_x
+        game_y = cam_y + offset_y
+
+        self.update_from_detection({
+            "class_name": label,
+            "confidence": confidence,
+            "center_x": game_x,
+            "center_y": game_y,
+        })
+
+    # BLE sightings have longer stale timeout — devices can be stationary
+    BLE_STALE_TIMEOUT = 120.0
+
+    def update_from_ble(self, sighting: dict) -> None:
+        """Update or create a tracked target from a BLE sighting.
+
+        Args:
+            sighting: Dict with keys: mac, name, rssi, node_id,
+                      and optionally position (x, y) from trilateration
+                      and device_type from DeviceClassifier.
+        """
+        mac = sighting.get("mac", "")
+        if not mac:
+            return
+
+        # Normalize MAC as target ID
+        tid = f"ble_{mac.replace(':', '').lower()}"
+        name = sighting.get("name") or mac
+        rssi = sighting.get("rssi", -100)
+
+        # Device type from DeviceClassifier (phone, watch, laptop, etc.)
+        # Falls back to generic "ble_device" if not classified.
+        asset_type = sighting.get("device_type") or "ble_device"
+
+        # RSSI → confidence: -30dBm=1.0, -60dBm=0.7, -90dBm=0.1
+        confidence = max(0.0, min(1.0, (rssi + 100) / 70))
+
+        # Position from trilateration if available, else from observer node
+        pos = sighting.get("position")
+        if pos:
+            position = (float(pos.get("x", 0)), float(pos.get("y", 0)))
+            pos_source = "trilateration"
+        else:
+            # Use node position if available
+            node_pos = sighting.get("node_position")
+            if node_pos:
+                position = (float(node_pos.get("x", 0)), float(node_pos.get("y", 0)))
+                pos_source = "node_proximity"
+            else:
+                position = (0.0, 0.0)
+                pos_source = "unknown"
+
+        with self._lock:
+            if tid in self._targets:
+                t = self._targets[tid]
+                if pos_source != "unknown":
+                    self._check_velocity(t, position)
+                    t.position = position
+                    t.position_source = pos_source
+                t.last_seen = time.monotonic()
+                t.position_confidence = confidence
+                t._initial_confidence = confidence
+                self._add_confirming_source(t, "ble")
+                # Update asset_type if we got a specific classification
+                if asset_type != "ble_device":
+                    t.asset_type = asset_type
+                # Update classification from sighting data (RL/ML model output)
+                if sighting.get("classification"):
+                    t.classification = sighting["classification"]
+                    t.classification_confidence = float(sighting.get("classification_confidence", 0.0))
+            else:
+                self._targets[tid] = TrackedTarget(
+                    target_id=tid,
+                    name=name,
+                    alliance="unknown",
+                    asset_type=asset_type,
+                    position=position,
+                    last_seen=time.monotonic(),
+                    source="ble",
+                    position_source=pos_source,
+                    position_confidence=confidence,
+                    _initial_confidence=confidence,
+                    confirming_sources={"ble"},
+                    classification=sighting.get("classification", asset_type),
+                    classification_confidence=float(sighting.get("classification_confidence", 0.0)),
+                )
+                # Check if this is a returning target
+                self.reappearance_monitor.check_reappearance(
+                    target_id=tid,
+                    name=name,
+                    source="ble",
+                    asset_type=asset_type,
+                    position=position,
+                )
+        # Only record position if we have a meaningful location
+        if pos_source != "unknown":
+            self.history.record(tid, position)
+            self._check_geofence(tid, position[0], position[1])
+
+    # RF motion targets have shorter stale timeout — transient detections
+    RF_MOTION_STALE_TIMEOUT = 30.0
+
+    def update_from_rf_motion(self, motion: dict) -> None:
+        """Update or create a tracked target from an RF motion event.
+
+        Args:
+            motion: Dict with keys: target_id, pair_id, position (x, y tuple),
+                    confidence, direction_hint, variance.
+        """
+        tid = motion.get("target_id", "")
+        if not tid:
+            return
+
+        position = motion.get("position", (0.0, 0.0))
+        if isinstance(position, dict):
+            position = (float(position.get("x", 0)), float(position.get("y", 0)))
+
+        confidence = float(motion.get("confidence", 0.5))
+        direction = motion.get("direction_hint", "unknown")
+        pair_id = motion.get("pair_id", "")
+
+        with self._lock:
+            if tid in self._targets:
+                t = self._targets[tid]
+                self._check_velocity(t, position)
+                t.position = position
+                t.position_confidence = confidence
+                t._initial_confidence = confidence
+                t.last_seen = time.monotonic()
+                t.status = f"motion:{direction}"
+                self._add_confirming_source(t, "rf_motion")
+            else:
+                self._targets[tid] = TrackedTarget(
+                    target_id=tid,
+                    name=f"RF Motion ({pair_id})",
+                    alliance="unknown",
+                    asset_type="motion_detected",
+                    position=position,
+                    last_seen=time.monotonic(),
+                    source="rf_motion",
+                    position_source="rf_pair_midpoint",
+                    position_confidence=confidence,
+                    _initial_confidence=confidence,
+                    status=f"motion:{direction}",
+                    confirming_sources={"rf_motion"},
+                )
+        self.history.record(tid, position)
 
     def get_all(self) -> list[TrackedTarget]:
         """Return all tracked targets (pruning stale YOLO detections)."""
@@ -239,14 +575,24 @@ class TargetTracker:
 
         result = f"BATTLESPACE: {', '.join(parts)} target(s) tracked"
 
-        # Urgency alerts: hostiles near friendlies
+        # Urgency alerts: hostiles near friendlies (capped to avoid O(n*m) blowup)
         import math
         alerts = []
-        for h in hostiles:
-            for f in friendlies:
-                dist = math.hypot(h.position[0] - f.position[0], h.position[1] - f.position[1])
-                if dist < 5.0:
+        _max_proximity_checks = 200  # cap each side to keep summary fast
+        _h_sample = hostiles[:_max_proximity_checks]
+        _f_sample = friendlies[:_max_proximity_checks]
+        for h in _h_sample:
+            for f in _f_sample:
+                dx = h.position[0] - f.position[0]
+                dy = h.position[1] - f.position[1]
+                dist_sq = dx * dx + dy * dy
+                if dist_sq < 25.0:  # 5.0^2
+                    dist = math.sqrt(dist_sq)
                     alerts.append(f"ALERT: {h.name} within {dist:.1f} units of {f.name}")
+                    if len(alerts) >= 3:
+                        break
+            if len(alerts) >= 3:
+                break
         if alerts:
             result += "\n" + "\n".join(alerts[:3])
 
@@ -269,13 +615,29 @@ class TargetTracker:
     SIM_STALE_TIMEOUT = 10.0
 
     def _prune_stale(self) -> None:
-        """Remove targets that haven't been updated recently."""
+        """Remove targets that haven't been updated recently.
+
+        Records departures in the reappearance monitor so returning
+        targets can be detected.
+        """
         now = time.monotonic()
         with self._lock:
             stale = [
                 tid for tid, t in self._targets.items()
                 if (t.source == "yolo" and (now - t.last_seen) > self.STALE_TIMEOUT)
                 or (t.source == "simulation" and (now - t.last_seen) > self.SIM_STALE_TIMEOUT)
+                or (t.source == "ble" and (now - t.last_seen) > self.BLE_STALE_TIMEOUT)
+                or (t.source == "rf_motion" and (now - t.last_seen) > self.RF_MOTION_STALE_TIMEOUT)
             ]
             for tid in stale:
+                t = self._targets[tid]
+                # Record departure for reappearance monitoring
+                self.reappearance_monitor.record_departure(
+                    target_id=tid,
+                    name=t.name,
+                    source=t.source,
+                    asset_type=t.asset_type,
+                    last_position=t.position,
+                )
                 del self._targets[tid]
+                self.history.clear(tid)

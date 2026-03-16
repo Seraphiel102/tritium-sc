@@ -1,0 +1,11 @@
+tritium_camera:
+  ros__parameters:
+    mqtt_host: "localhost"       # Override via env: MQTT_HOST
+    mqtt_port: 1883
+    site_id: "home"
+    camera_id: "ros2-cam-01"
+    camera_enabled: true
+    detection_interval: 1.0      # Seconds between detection runs
+    frame_width: 640
+    frame_height: 480
+    jpeg_quality: 80

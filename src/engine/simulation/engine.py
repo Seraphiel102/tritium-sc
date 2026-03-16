@@ -324,7 +324,10 @@ class SimulationEngine:
                             target.asset_type,
                             target.alliance,
                         )
-                        target.waypoints = new_path
+                        target.waypoints = [
+                            wp for wp in new_path
+                            if not self._obstacles.point_in_building(wp[0], wp[1])
+                        ]
                     else:
                         # No segment crossings — just remove waypoints inside buildings
                         target.waypoints = [
@@ -517,18 +520,39 @@ class SimulationEngine:
 
     # -- Game mode interface ------------------------------------------------
 
-    def begin_war(self) -> None:
+    def begin_war(self, auto_load_layout: bool = False) -> None:
         """Start a new game (delegates to GameMode).
 
         Uses MissionDirector if a scenario was pre-generated (from the modal),
         otherwise falls back to ScenarioGenerator for backward compatibility.
         Publishes scenario context on the event bus for the frontend.
 
+        If *auto_load_layout* is True and no friendly combatants exist,
+        loads the default layout from settings.simulation_layout.
+
         Holds ``_lock`` for the entire method so the tick thread cannot read
         partially-initialised game state (e.g. game_mode.state == "active"
         while mission-type subsystems are still None).
         """
         with self._lock:
+            # Auto-load default layout if no friendly combatants exist
+            if auto_load_layout:
+                friendly_combatants = [
+                    t for t in self._targets.values()
+                    if t.alliance == "friendly" and t.speed >= 0
+                ]
+                if not friendly_combatants:
+                    try:
+                        from app.config import settings
+                        layout_path = settings.simulation_layout
+                        if layout_path:
+                            from .loader import load_layout
+                            count = load_layout(layout_path, self)
+                            if count > 0:
+                                logger.info("Auto-loaded {} units from {}", count, layout_path)
+                    except Exception as e:
+                        logger.warning("Failed to auto-load layout: {}", e)
+
             # Check if MissionDirector has a pre-generated scenario
             md = getattr(self, '_mission_director', None)
             if md and md.get_current_scenario():
@@ -1143,10 +1167,12 @@ class SimulationEngine:
                 if (abs(x) > self._map_bounds or abs(y) > self._map_bounds):
                     target.status = "escaped"
 
-            # Stall detection: hostiles stuck or oscillating for 15+s escape.
+            # Stall detection: hostiles stuck or oscillating for 45+s escape.
             # Uses distance-based check — if net displacement from the
             # recorded position is < 3m, increment the stall counter.
-            # At 150 ticks (15s at 10Hz), the hostile is force-escaped.
+            # At 450 ticks (45s at 10Hz), the hostile is force-escaped.
+            # Previously 15s was too aggressive — hostiles pathing toward
+            # defenders on large maps would escape before reaching combat range.
             if target.alliance == "hostile" and target.status == "active":
                 tid = target.target_id
                 pos = target.position
@@ -1158,7 +1184,7 @@ class SimulationEngine:
                     if dist < 3.0:
                         ticks = self._stall_ticks.get(tid, 0) + 1
                         self._stall_ticks[tid] = ticks
-                        if ticks >= 150:  # 15 seconds at 10Hz
+                        if ticks >= 450:  # 45 seconds at 10Hz
                             target.status = "escaped"
                     else:
                         # Moved significantly — reset stall tracking
@@ -1611,9 +1637,27 @@ class SimulationEngine:
             else:
                 return (self._map_min, coord)
 
-        # Combat: spawn at 70-95% of bounds so hostiles use full city
-        frac = random.uniform(0.70, 0.95)
-        radius = self._map_max * frac
+        # Combat: spawn near a random friendly defender at 80-150m distance.
+        # This guarantees hostiles enter weapon range within 5-15 seconds
+        # instead of 60-120s dead air on large maps (500m+).
+        # Fall back to center-based spawn if no friendlies are alive.
+        with self._lock:
+            alive_friendlies = [
+                t for t in self._targets.values()
+                if t.alliance == "friendly" and t.is_combatant
+                and t.status in ("active", "idle", "stationary")
+            ]
+
+        if alive_friendlies:
+            # Pick a random friendly as the anchor point
+            anchor = random.choice(alive_friendlies)
+            anchor_x, anchor_y = anchor.position[0], anchor.position[1]
+            # Spawn at 80-150m from the anchor (just outside weapon range)
+            spawn_dist = random.uniform(80.0, 150.0)
+        else:
+            # No friendlies — spawn near center
+            anchor_x, anchor_y = 0.0, 0.0
+            spawn_dist = random.uniform(50.0, 100.0)
 
         # Direction-constrained angle
         _DIR_ARCS = {
@@ -1641,8 +1685,11 @@ class SimulationEngine:
             # "random" or unknown -- full perimeter
             angle = random.uniform(0, 2 * math.pi)
 
-        x = radius * math.cos(angle)
-        y = radius * math.sin(angle)
+        x = anchor_x + spawn_dist * math.cos(angle)
+        y = anchor_y + spawn_dist * math.sin(angle)
+        # Clamp to map bounds
+        x = max(-self._map_bounds, min(self._map_bounds, x))
+        y = max(-self._map_bounds, min(self._map_bounds, y))
         return (x, y)
 
     def _compute_poi_buildings(self) -> list[tuple[float, float]]:
@@ -1673,11 +1720,13 @@ class SimulationEngine:
 
         Uses route_path() (street graph -> grid A* -> direct) for both the
         approach to objective and the escape to the map edge.
+
+        During active combat (game mode), the objective is the nearest
+        friendly defender (with slight jitter) so hostiles engage quickly
+        instead of wandering aimlessly.  Outside combat, a random objective
+        within ±50% bounds is used.
         """
-        objective = (
-            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
-            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
-        )
+        objective = self._pick_hostile_objective(position)
 
         # Route from spawn to objective
         approach = self.route_path(position, objective, "person", "hostile")
@@ -1690,6 +1739,46 @@ class SimulationEngine:
         if escape and len(escape) > 1:
             return list(approach) + list(escape)[1:]
         return list(approach) + [escape_edge]
+
+    def _pick_hostile_objective(
+        self, spawn_pos: tuple[float, float]
+    ) -> tuple[float, float]:
+        """Pick a hostile's walk-to objective.
+
+        During active game waves, targets the nearest alive friendly
+        defender with ±15m jitter so hostiles converge on the defense
+        perimeter rather than wandering to random map points.  This
+        cuts the dead-air time between spawn and first contact.
+
+        Outside combat, returns a random point within ±50% of bounds.
+        """
+        if self.game_mode.state == "active":
+            # Find nearest alive friendly
+            best_dist = float("inf")
+            best_pos = None
+            sx, sy = spawn_pos
+            with self._lock:
+                for t in self._targets.values():
+                    if t.alliance == "friendly" and t.status in ("active", "stationary", "idle"):
+                        dx = t.position[0] - sx
+                        dy = t.position[1] - sy
+                        d = dx * dx + dy * dy
+                        if d < best_dist:
+                            best_dist = d
+                            best_pos = t.position
+            if best_pos is not None:
+                # Add jitter so hostiles don't all converge on the same pixel
+                jitter = 15.0
+                return (
+                    best_pos[0] + random.uniform(-jitter, jitter),
+                    best_pos[1] + random.uniform(-jitter, jitter),
+                )
+
+        # Fallback: random objective within ±50% of bounds
+        return (
+            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
+            random.uniform(-self._map_bounds * 0.50, self._map_bounds * 0.50),
+        )
 
     def _count_active_hostiles(self) -> int:
         """Count hostiles that are still a threat (active, not neutralized/escaped/destroyed)."""

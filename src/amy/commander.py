@@ -365,20 +365,31 @@ def _process_bridge_message(cmd, msg: dict) -> None:
         _handle_combat_event(cmd, msg_type, data)
         return
 
-    # sim_telemetry — feed target tracker + check unit health
-    if msg_type == "sim_telemetry":
+    # sim_telemetry_batch — feed target tracker + check unit health
+    if msg_type == "sim_telemetry_batch":
         tracker = getattr(cmd, "target_tracker", None)
-        if tracker is not None:
-            tracker.update_from_simulation(data)
-        # Check health of each unit in telemetry
-        targets = data.get("targets", [])
-        if isinstance(targets, list):
-            for t in targets:
-                if isinstance(t, dict) and t.get("is_combatant"):
-                    _check_unit_health(cmd, t)
-        # Also check the top-level if it is a single unit dict
-        if data.get("is_combatant"):
-            _check_unit_health(cmd, data)
+        if isinstance(data, list):
+            for t in data:
+                if isinstance(t, dict):
+                    if tracker is not None:
+                        tracker.update_from_simulation(t)
+                    if t.get("is_combatant"):
+                        _check_unit_health(cmd, t)
+        elif isinstance(data, dict):
+            # Single target dict or wrapper with "targets" key
+            targets = data.get("targets", [])
+            if targets:
+                for t in targets:
+                    if isinstance(t, dict):
+                        if tracker is not None:
+                            tracker.update_from_simulation(t)
+                        if t.get("is_combatant"):
+                            _check_unit_health(cmd, t)
+            elif data.get("target_id"):
+                if tracker is not None:
+                    tracker.update_from_simulation(data)
+                if data.get("is_combatant"):
+                    _check_unit_health(cmd, data)
 
     elif msg_type == "game_state_change":
         state = data.get("state", "")
@@ -1050,6 +1061,9 @@ class Commander:
         self._tactical_summary_interval: float = 5.0
         self._health_warning_times: dict = {}
         self._health_warning_interval: float = 10.0
+
+        # Instinct layer (L2 autonomous responses)
+        self.instinct_layer = None
 
         self._running = False
         self._shutdown_called = False
@@ -1977,6 +1991,12 @@ class Commander:
         self.thinking.start()
         print("  Thinking thread: running")
 
+        # Start instinct layer (L2 autonomous responses)
+        from .brain.instinct import InstinctLayer
+        self.instinct_layer = InstinctLayer(self)
+        self.instinct_layer.start()
+        print("  Instinct layer: running")
+
         if self.motor is not None:
             self.motor.set_program(self._default_motor())
 
@@ -1985,6 +2005,12 @@ class Commander:
         print("  Amy is alive and monitoring.")
         print("=" * 58)
         print()
+
+        # Publish initial thought so the frontend doesn't stay on
+        # "Awaiting initialization..." — Amy is online and aware.
+        boot_thought = "Systems online. All sensors active — scanning the area."
+        self.sensorium.push("thought", boot_thought)
+        self.event_bus.publish("thought", {"text": boot_thought})
 
         listening_since: float | None = None
 
@@ -2157,9 +2183,13 @@ class Commander:
             try:
                 msg = self._sim_sub.get(timeout=1.0)
                 msg_type = msg.get("type", "")
-                if msg_type == "sim_telemetry":
-                    data = msg.get("data", {})
-                    self.target_tracker.update_from_simulation(data)
+                if msg_type == "sim_telemetry_batch":
+                    batch = msg.get("data", [])
+                    if isinstance(batch, list):
+                        for target_data in batch:
+                            self.target_tracker.update_from_simulation(target_data)
+                    elif isinstance(batch, dict):
+                        self.target_tracker.update_from_simulation(batch)
                 elif msg_type == "detections":
                     data = msg.get("data", {})
                     for det in data.get("boxes", []):
@@ -2177,62 +2207,61 @@ class Commander:
                     state = data.get("state", "")
                     wave = data.get("wave", 0)
                     if state == "countdown":
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation starting — countdown initiated.",
-                            importance=0.9,
-                        )
+                        text = "Battle simulation starting — countdown initiated."
+                        self.sensorium.push("tactical", text, importance=0.9)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "active" and wave == 1:
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation active — Wave 1 beginning. All units engage.",
-                            importance=1.0,
-                        )
+                        text = "Battle simulation active — Wave 1 beginning. All units engage."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
+                        # Unsuppress thinking so Amy responds immediately
+                        if self.thinking is not None:
+                            self.thinking._suppress_until = 0.0
                     elif state == "active" and wave > 1:
                         wave_name = data.get("wave_name", f"Wave {wave}")
-                        self.sensorium.push(
-                            "tactical",
-                            f"Wave {wave} ({wave_name}) incoming.",
-                            importance=0.9,
-                        )
+                        text = f"Wave {wave} ({wave_name}) incoming."
+                        self.sensorium.push("tactical", text, importance=0.9)
+                        self.event_bus.publish("thought", {"text": text})
+                        if self.thinking is not None:
+                            self.thinking._suppress_until = 0.0
                     elif state == "victory":
                         score = data.get("score", 0)
                         elims = data.get("total_eliminations", 0)
-                        self.sensorium.push(
-                            "tactical",
-                            f"Victory — all waves cleared. Score: {score}, eliminations: {elims}.",
-                            importance=1.0,
-                        )
+                        text = f"Victory — all waves cleared. Score: {score}, eliminations: {elims}."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "defeat":
-                        self.sensorium.push(
-                            "tactical",
-                            "Defeat — all friendly combatants eliminated. Battle simulation ended.",
-                            importance=1.0,
-                        )
+                        text = "Defeat — all friendly combatants eliminated. Battle simulation ended."
+                        self.sensorium.push("tactical", text, importance=1.0)
+                        self.event_bus.publish("thought", {"text": text})
                     elif state == "setup":
-                        self.sensorium.push(
-                            "tactical",
-                            "Battle simulation reset. Returning to normal operations.",
-                            importance=0.7,
-                        )
+                        text = "Battle simulation reset. Returning to normal operations."
+                        self.sensorium.push("tactical", text, importance=0.7)
+                        self.event_bus.publish("thought", {"text": text})
                 elif msg_type == "wave_complete":
                     data = msg.get("data", {})
                     wave = data.get("wave", 0)
                     elims = data.get("eliminations", 0)
-                    self.sensorium.push(
-                        "tactical",
-                        f"Wave {wave} cleared — {elims} hostiles eliminated.",
-                        importance=0.8,
-                    )
+                    text = f"Wave {wave} cleared — {elims} hostiles eliminated."
+                    self.sensorium.push("tactical", text, importance=0.8)
+                    self.event_bus.publish("thought", {"text": text})
                 elif msg_type == "game_over":
                     data = msg.get("data", {})
                     result = data.get("result", "unknown")
                     score = data.get("score", 0)
-                    self.sensorium.push(
-                        "tactical",
-                        f"Battle simulation ended: {result}. Final score: {score}.",
-                        importance=1.0,
-                    )
+                    text = f"Battle simulation ended: {result}. Final score: {score}."
+                    self.sensorium.push("tactical", text, importance=1.0)
+                    self.event_bus.publish("thought", {"text": text})
+                # ── Edge sensor events ─────────────────────────
+                elif msg_type == "fleet.ble_presence":
+                    data = msg.get("data", {})
+                    self.sensorium.update_ble(data)
+                elif msg_type == "meshtastic:nodes_updated":
+                    data = msg.get("data", {})
+                    self.sensorium.update_mesh(data)
+                elif msg_type == "meshtastic:environment":
+                    data = msg.get("data", {})
+                    self.sensorium.update_environment(data)
                 elif msg_type == "auto_dispatch_speech":
                     data = msg.get("data", {})
                     text = data.get("text", "")
@@ -2265,6 +2294,12 @@ class Commander:
                         if dispatcher is not None:
                             dispatcher.clear_dispatch(hostile_id)
             except queue.Empty:
+                # While idle, generate periodic tactical summaries during
+                # active combat so Amy always appears aware.
+                if _maybe_generate_tactical_summary(self):
+                    summary = _generate_tactical_summary(self)
+                    if summary:
+                        self.event_bus.publish("thought", {"text": summary})
                 continue
             except Exception as e:
                 import logging
@@ -2297,6 +2332,8 @@ class Commander:
         self._auto_chat_stop.set()
         if self.thinking:
             self.thinking.stop()
+        if self.instinct_layer:
+            self.instinct_layer.stop()
         self.memory.add_event("shutdown", "Amy shutting down")
         self.memory.save()
         self.transcript.close()

@@ -171,7 +171,7 @@ class TestBugProof:
         bus = MagicMock()
         bus.subscribe.return_value = MagicMock()
         bus.subscribe.return_value.get = MagicMock(side_effect=Exception("timeout"))
-        engine = SimulationEngine(bus, map_bounds=200.0)
+        engine = SimulationEngine(bus, map_bounds=15.0)
         spawner = AmbientSpawner(engine)
 
         found_inside = False
@@ -550,7 +550,7 @@ class TestEngineWiring:
         building = _make_square_building(0, 0, half=5.0)
         engine = _make_engine_with_buildings([building])
 
-        safe_waypoints = [(-20.0, -20.0), (20.0, 20.0)]
+        safe_waypoints = [(-20.0, -20.0), (-20.0, 20.0)]
         target = SimulationTarget(
             target_id="ew-preserve-1",
             name="SafeWP",

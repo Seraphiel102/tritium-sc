@@ -650,3 +650,95 @@
 .v2 textarea::placeholder {
     color: var(--text-ghost);
 }
+
+
+/* ========================================
+   Light Theme Override
+   ======================================== */
+[data-theme="light"] {
+    --cyan: #0891b2;
+    --cyan-dim: #155e75;
+    --cyan-glow: rgba(8, 145, 178, 0.12);
+    --green: #059669;
+    --amber: #d97706;
+    --magenta: #db2777;
+    --void: #f8fafc;
+    --surface-1: #f1f5f9;
+    --surface-2: #e2e8f0;
+    --surface-3: #cbd5e1;
+    --border: rgba(8, 145, 178, 0.15);
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --text-dim: #94a3b8;
+    --text-ghost: #cbd5e1;
+}
+
+/* Light theme: remove scanline and grid-bg for readability */
+[data-theme="light"].v2::before,
+[data-theme="light"] .v2::before {
+    display: none;
+}
+
+[data-theme="light"].v2.grid-bg,
+[data-theme="light"] .v2.grid-bg {
+    background-image: none;
+}
+
+/* Light theme: adjust scrollbar */
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+    background: rgba(8, 145, 178, 0.25);
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(8, 145, 178, 0.4);
+}
+
+/* Notification bell button in header */
+.notif-bell-btn {
+    position: relative;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
+    line-height: 1;
+    font-size: 1rem;
+    filter: grayscale(1) brightness(1.5);
+    transition: filter var(--transition-fast, 0.15s);
+}
+.notif-bell-btn:hover {
+    filter: grayscale(0) brightness(1.2);
+}
+.notif-bell-count {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    font-size: 0.55rem;
+    font-weight: bold;
+    color: #fff;
+    background: #ff2a6d;
+    border-radius: 8px;
+    padding: 0 3px;
+    pointer-events: none;
+}
+
+/* Theme toggle button */
+.theme-toggle-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+    line-height: 1.4;
+}
+.theme-toggle-btn:hover {
+    border-color: var(--cyan);
+    color: var(--cyan);
+}

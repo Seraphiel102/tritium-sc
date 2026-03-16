@@ -19,8 +19,9 @@
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { resolveLabels } from './label-collision.js';
-import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator } from './unit-icons.js';
+import { drawUnit as drawUnitIcon, drawCrowdRoleIndicator, drawFusionIndicator } from './unit-icons.js';
 import { DeviceModalManager } from './device-modal.js';
+import { _esc } from './panel-utils.js';
 
 // ============================================================
 // Constants
@@ -162,14 +163,52 @@ const _state = {
 
     // Mesh radio overlay
     showMesh: true,
+    showMeshNodes: true,
+    showMeshLinks: true,
+    showMeshCoverage: false,
 
     // NPC thought bubbles
     showThoughts: true,
     _visibleThoughtIds: new Set(),  // unit IDs with visible thought bubbles
     _maxThoughtBubbles: 5,          // max non-critical visible at once
 
+    // Geofence polygon drawing mode
+    geofenceDrawing: false,
+    geofenceVertices: [],  // [{x, y}, ...] in world coords
+
+    // Saved geofence polygon zones (from /api/geofence/zones)
+    geofencePolygonZones: [],
+    geofenceOccupancy: {},  // zone_id -> count
+
+    // Night mode — auto-dim map between sunset and sunrise
+    nightMode: false,
+    nightModeAuto: true,       // auto-detect based on local time
+    _nightCheckTimer: null,
+    _sunriseHour: 6,           // default sunrise hour (local)
+    _sunsetHour: 19,           // default sunset hour (local)
+
+    // Patrol waypoint drawing mode
+    patrolDrawing: false,
+    patrolUnitId: null,
+    patrolWaypoints: [],  // [{x, y}, ...] in world coords
+
+    // Prediction cones toggle
+    showPredictionCones: false,
+
+    // RF motion data (from rfMotion:update events)
+    rfMotionPairs: [],     // active motion pairs with positions
+    rfMotionZones: [],     // occupied zones
+    rfMotionDetected: false,
+
+    // Selected dossier/target group highlighting
+    selectedGroup: null,  // { targets: [...], name, color, lat, lng }
+
     // Screen shake tracking
     _shakeActive: false,
+
+    // Multi-select (Shift+click)
+    selectedUnitIds: new Set(),  // Set of selected unit IDs for multi-select
+    multiSelectActive: false,    // true when shift is held
 
     // Context menu
     contextMenu: null,
@@ -296,6 +335,12 @@ export function initMap() {
         EventBus.on('minimap:pan', _onMinimapPan),
         EventBus.on('map:flyToMission', _onPanToMission),
         EventBus.on('device:open-modal', _onDeviceOpenModal),
+        EventBus.on('geofence:drawZone', _onGeofenceDrawStart),
+        EventBus.on('patrol:drawRoute', _onPatrolDrawStart),
+        EventBus.on('rfMotion:update', _onRfMotionUpdate),
+        EventBus.on('map:drawFinish', _onDrawFinish),
+        EventBus.on('map:drawCancel', _onDrawCancel),
+        EventBus.on('dossier-groups:selected', _onGroupSelected),
     );
 
     // Subscribe to store for selectedUnitId changes (highlight sync)
@@ -316,6 +361,14 @@ export function initMap() {
 
     // Fetch initial zones
     _fetchZones();
+    _fetchGeofencePolygonZones();
+
+    // Refresh geofence polygon zones periodically (every 30s)
+    setInterval(_fetchGeofencePolygonZones, 30000);
+
+    // Night mode — auto-detect based on local time
+    _fetchSunTimes();
+    _startNightModeCheck();
 
     // Start render loop
     _state.lastFrameTime = performance.now();
@@ -345,6 +398,9 @@ export function destroyMap() {
 
     // Stop hostile objective polling
     _stopHostileObjectivePoll();
+
+    // Stop night mode check
+    _stopNightModeCheck();
 
     // Stop ResizeObserver
     if (_state.resizeObserver) {
@@ -457,6 +513,9 @@ function _draw() {
     const { ctx, canvas, dpr } = _state;
     if (!ctx || !canvas || canvas.width === 0 || canvas.height === 0) return;
 
+    // Clear velocity anomaly click areas for this frame
+    _state.velocityAnomalyAreas = [];
+
     // CSS pixel dimensions (drawing space after DPI transform)
     const cssW = canvas.width / dpr;
     const cssH = canvas.height / dpr;
@@ -497,6 +556,11 @@ function _draw() {
         _drawRoadPolylines(ctx);
     }
 
+    // Layer 1.9: Night mode overlay — darkens tiles and warms colors
+    if (_state.nightMode) {
+        _drawNightOverlay(ctx, cssW, cssH);
+    }
+
     // Layer 2: Grid (adaptive spacing based on zoom)
     if (_state.showGrid) _drawGrid(ctx);
 
@@ -505,6 +569,9 @@ function _draw() {
 
     // Layer 4: Zones
     _drawZones(ctx);
+
+    // Layer 4.1: Geofence polygon zones (saved polygons from geofence API)
+    _drawGeofencePolygonZones(ctx);
 
     // Layer 4.3: Environmental hazards (fire, flood, roadblock)
     _drawHazards(ctx);
@@ -530,8 +597,20 @@ function _draw() {
         meshDrawNodes(ctx, worldToScreen, meshTargets, _state.showMesh);
     }
 
+    // Layer 4.9: Sensor coverage overlays (circles/cones for placed assets)
+    _drawSensorCoverage(ctx);
+
     // Layer 5: Targets (shapes only — labels handled separately)
     _drawTargets(ctx);
+
+    // Layer 5.01: Target group highlight (selected dossier group)
+    _drawGroupHighlight(ctx);
+
+    // Layer 5.02: Correlation lines (thin lines between fused targets)
+    _drawCorrelationLines(ctx);
+
+    // Layer 5.03: Prediction confidence cones (expanding uncertainty)
+    _drawPredictionCones(ctx);
 
     // Layer 5.05: Squad formation lines (thin lines connecting squad members)
     _drawSquadLines(ctx);
@@ -565,6 +644,15 @@ function _draw() {
     const targetsObj = _buildTargetsObject();
     if (typeof warFxUpdateTrails === 'function') warFxUpdateTrails(targetsObj, _state.dt);
     if (typeof warFxDrawTrails === 'function') warFxDrawTrails(ctx, worldToScreen);
+
+    // Layer 7.8: RF motion indicators (pulsing circles at motion locations)
+    _drawRfMotion(ctx);
+
+    // Layer 7.9: Geofence drawing overlay (vertices + lines while drawing)
+    _drawGeofenceOverlay(ctx);
+
+    // Layer 7.95: Patrol waypoint drawing overlay
+    _drawPatrolOverlay(ctx);
 
     // Layer 8: Selection indicator
     _drawSelectionIndicator(ctx);
@@ -666,12 +754,15 @@ function _buildMeshTargets() {
         if ((unit.type || unit.asset_type) !== 'mesh_radio') continue;
         const pos = unit.position;
         if (!pos || pos.x === undefined) continue;
+        const meta = unit.metadata || {};
         result.push({
             target_id: id,
             x: pos.x,
             y: pos.y,
             asset_type: 'mesh_radio',
-            metadata: unit.metadata || {},
+            metadata: meta,
+            name: unit.name || meta.short_name || meta.long_name || '',
+            snr: unit.snr !== undefined ? unit.snr : meta.snr,
         });
     }
     return result;
@@ -922,6 +1013,322 @@ function _drawZones(ctx) {
             ctx.fillText(name.toUpperCase(), sp.x, sp.y + sr + 14);
         }
     }
+}
+
+// ============================================================
+// Layer 4.1: Geofence Polygon Zones (saved via /api/geofence/zones)
+// ============================================================
+
+const _GEOFENCE_ZONE_COLORS = {
+    restricted: { fill: 'rgba(255, 42, 109, 0.15)', stroke: '#ff2a6d', label: 'rgba(255, 42, 109, 0.8)' },
+    monitored:  { fill: 'rgba(0, 240, 255, 0.10)',  stroke: '#00f0ff', label: 'rgba(0, 240, 255, 0.8)' },
+    safe:       { fill: 'rgba(5, 255, 161, 0.10)',   stroke: '#05ffa1', label: 'rgba(5, 255, 161, 0.8)' },
+};
+
+function _drawGeofencePolygonZones(ctx) {
+    const zones = _state.geofencePolygonZones;
+    if (!zones || zones.length === 0) return;
+
+    for (const zone of zones) {
+        const pts = zone.polygon;
+        if (!pts || pts.length < 3) continue;
+
+        const colors = _GEOFENCE_ZONE_COLORS[zone.zone_type] || _GEOFENCE_ZONE_COLORS.monitored;
+
+        // Convert all polygon points to screen coords
+        const screenPts = pts.map(p => worldToScreen(p[0], p[1]));
+
+        const hasAlerts = zone.alert_on_enter || zone.alert_on_exit;
+        const occ = _state.geofenceOccupancy[zone.zone_id] || 0;
+        const isActive = occ > 0;
+        const isMonitoring = hasAlerts && !isActive;
+
+        // Pulse timing for monitoring/active zones
+        const now = Date.now() / 1000;
+        let fillAlpha = 1.0;
+        let strokeAlpha = 1.0;
+        let strokeWidth = 2;
+
+        if (isActive) {
+            // Active: fast strong pulse
+            const sin = Math.sin(now * 2.5);
+            fillAlpha = 0.7 + 0.3 * sin;
+            strokeAlpha = 0.7 + 0.3 * sin;
+            strokeWidth = 3 + 1.5 * sin;
+        } else if (isMonitoring) {
+            // Monitoring: slow subtle cyan pulse
+            const sin = Math.sin(now * 1.2);
+            fillAlpha = 0.4 + 0.15 * sin;
+            strokeAlpha = 0.5 + 0.2 * sin;
+            strokeWidth = 2 + 0.8 * sin;
+        }
+
+        // Fill
+        ctx.beginPath();
+        for (let i = 0; i < screenPts.length; i++) {
+            if (i === 0) ctx.moveTo(screenPts[i].x, screenPts[i].y);
+            else ctx.lineTo(screenPts[i].x, screenPts[i].y);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = fillAlpha;
+        ctx.fillStyle = colors.fill;
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+
+        // Stroke — solid border with pulse
+        ctx.beginPath();
+        for (let i = 0; i < screenPts.length; i++) {
+            if (i === 0) ctx.moveTo(screenPts[i].x, screenPts[i].y);
+            else ctx.lineTo(screenPts[i].x, screenPts[i].y);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = strokeAlpha;
+        ctx.strokeStyle = isActive ? '#ff2a6d' : colors.stroke;
+        ctx.lineWidth = strokeWidth;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+
+        // Vertex dots
+        for (const sp of screenPts) {
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = colors.stroke;
+            ctx.fill();
+        }
+
+        // Label at centroid
+        if (zone.name && _state.cam.zoom > 0.1) {
+            const cx = screenPts.reduce((s, p) => s + p.x, 0) / screenPts.length;
+            const cy = screenPts.reduce((s, p) => s + p.y, 0) / screenPts.length;
+            const fontSize = Math.max(9, 11 * Math.min(_state.cam.zoom, 2));
+            ctx.fillStyle = colors.label;
+            ctx.font = `bold ${fontSize}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(zone.name.toUpperCase(), cx, cy);
+
+            // Zone type subtitle + monitoring status
+            const subtitleFontSize = Math.max(7, 9 * Math.min(_state.cam.zoom, 2));
+            ctx.fillStyle = colors.label.replace('0.8', '0.4');
+            ctx.font = `${subtitleFontSize}px ${FONT_FAMILY}`;
+            ctx.fillText(zone.zone_type.toUpperCase(), cx, cy + fontSize + 2);
+
+            // Monitoring badge — shown when zone is armed but no occupants
+            if (isMonitoring) {
+                const monY = cy + fontSize + 2 + subtitleFontSize + 2;
+                const monFontSize = Math.max(7, 9 * Math.min(_state.cam.zoom, 2));
+                const monSin = Math.sin(now * 1.2);
+                ctx.globalAlpha = 0.5 + 0.3 * monSin;
+                ctx.fillStyle = colors.stroke;
+                ctx.font = `bold ${monFontSize}px ${FONT_FAMILY}`;
+                ctx.fillText('MONITORING', cx, monY);
+                ctx.globalAlpha = 1.0;
+            }
+
+            // Occupancy count badge
+            if (occ > 0) {
+                const badgeY = cy + fontSize + 2 + fontSize;
+                const badgeFontSize = Math.max(9, 10 * Math.min(_state.cam.zoom, 2));
+                // Background pill
+                const badgeText = `${occ} INSIDE`;
+                ctx.font = `bold ${badgeFontSize}px ${FONT_FAMILY}`;
+                const tw = ctx.measureText(badgeText).width;
+                ctx.fillStyle = 'rgba(10, 10, 20, 0.75)';
+                ctx.beginPath();
+                const bx = cx - tw / 2 - 6;
+                const by = badgeY - badgeFontSize / 2 - 3;
+                const bw = tw + 12;
+                const bh = badgeFontSize + 6;
+                const br = 3;
+                ctx.moveTo(bx + br, by);
+                ctx.lineTo(bx + bw - br, by);
+                ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + br);
+                ctx.lineTo(bx + bw, by + bh - br);
+                ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - br, by + bh);
+                ctx.lineTo(bx + br, by + bh);
+                ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - br);
+                ctx.lineTo(bx, by + br);
+                ctx.quadraticCurveTo(bx, by, bx + br, by);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = colors.stroke;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                // Text
+                ctx.fillStyle = colors.stroke;
+                ctx.fillText(badgeText, cx, badgeY);
+            }
+        }
+    }
+}
+
+// ============================================================
+// Layer 7.8: RF Motion Indicators
+// ============================================================
+
+function _drawRfMotion(ctx) {
+    const pairs = _state.rfMotionPairs;
+    if (!pairs || pairs.length === 0) return;
+
+    const now = Date.now();
+
+    for (const p of pairs) {
+        const pos = p.midpoint || p.estimated_position;
+        if (!pos) continue;
+        const px = pos.x !== undefined ? pos.x : 0;
+        const py = pos.y !== undefined ? pos.y : 0;
+        const sp = worldToScreen(px, py);
+        const confidence = p.confidence || 0.5;
+
+        // Pulsing ring animation
+        const pulse = 0.5 + 0.5 * Math.sin(now / 300);
+        const baseRadius = 8 + confidence * 12;
+        const radius = (baseRadius + pulse * 6) * Math.min(_state.cam.zoom, 3);
+
+        // Outer pulse ring
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 42, 109, ${0.3 + pulse * 0.3})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Inner fill
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 42, 109, ${0.15 + confidence * 0.2})`;
+        ctx.fill();
+
+        // Direction arrow
+        const dir = p.direction_hint || 'unknown';
+        if (dir !== 'unknown') {
+            ctx.fillStyle = 'rgba(255, 42, 109, 0.8)';
+            ctx.font = `bold ${Math.max(10, 12 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            const arrow = dir === 'approaching' ? '>' : dir === 'departing' ? '<' : 'X';
+            ctx.fillText(arrow, sp.x, sp.y + 4);
+        }
+
+        // Label
+        if (_state.cam.zoom > 0.3) {
+            ctx.fillStyle = 'rgba(255, 42, 109, 0.7)';
+            ctx.font = `${Math.max(7, 9 * Math.min(_state.cam.zoom, 2))}px ${FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.fillText('RF MOTION', sp.x, sp.y + radius + 10);
+        }
+    }
+}
+
+// ============================================================
+// Layer 7.9: Geofence Drawing Overlay
+// ============================================================
+
+function _drawGeofenceOverlay(ctx) {
+    if (!_state.geofenceDrawing || _state.geofenceVertices.length === 0) return;
+
+    const verts = _state.geofenceVertices;
+
+    // Draw lines connecting vertices
+    ctx.beginPath();
+    for (let i = 0; i < verts.length; i++) {
+        const sp = worldToScreen(verts[i][0], verts[i][1]);
+        if (i === 0) ctx.moveTo(sp.x, sp.y);
+        else ctx.lineTo(sp.x, sp.y);
+    }
+    // Close polygon preview (dashed line back to first)
+    if (verts.length >= 3) {
+        const first = worldToScreen(verts[0][0], verts[0][1]);
+        ctx.lineTo(first.x, first.y);
+    }
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Fill preview
+    if (verts.length >= 3) {
+        ctx.beginPath();
+        for (let i = 0; i < verts.length; i++) {
+            const sp = worldToScreen(verts[i][0], verts[i][1]);
+            if (i === 0) ctx.moveTo(sp.x, sp.y);
+            else ctx.lineTo(sp.x, sp.y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.1)';
+        ctx.fill();
+    }
+
+    // Draw vertex dots
+    for (let i = 0; i < verts.length; i++) {
+        const sp = worldToScreen(verts[i][0], verts[i][1]);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? '#05ffa1' : '#00f0ff';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    // HUD instruction text
+    ctx.fillStyle = 'rgba(0, 240, 255, 0.8)';
+    ctx.font = `12px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    const cssW = _state.canvas.width / _state.dpr;
+    ctx.fillText(`DRAWING ZONE: ${verts.length} vertices — Double-click or Enter to finish, Escape to cancel`, cssW / 2, 30);
+}
+
+// ============================================================
+// Layer 7.95: Patrol Waypoint Drawing Overlay
+// ============================================================
+
+function _drawPatrolOverlay(ctx) {
+    if (!_state.patrolDrawing || _state.patrolWaypoints.length === 0) return;
+
+    const wps = _state.patrolWaypoints;
+
+    // Draw lines connecting waypoints
+    ctx.beginPath();
+    for (let i = 0; i < wps.length; i++) {
+        const sp = worldToScreen(wps[i].x, wps[i].y);
+        if (i === 0) ctx.moveTo(sp.x, sp.y);
+        else ctx.lineTo(sp.x, sp.y);
+    }
+    ctx.strokeStyle = '#05ffa1';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw waypoint markers
+    for (let i = 0; i < wps.length; i++) {
+        const sp = worldToScreen(wps[i].x, wps[i].y);
+
+        // Diamond marker
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - 6);
+        ctx.lineTo(sp.x + 6, sp.y);
+        ctx.lineTo(sp.x, sp.y + 6);
+        ctx.lineTo(sp.x - 6, sp.y);
+        ctx.closePath();
+        ctx.fillStyle = '#05ffa1';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Waypoint number
+        ctx.fillStyle = '#0a0a0f';
+        ctx.font = `bold 8px ${FONT_FAMILY}`;
+        ctx.textAlign = 'center';
+        ctx.fillText(String(i + 1), sp.x, sp.y + 3);
+    }
+
+    // HUD instruction text
+    ctx.fillStyle = 'rgba(5, 255, 161, 0.8)';
+    ctx.font = `12px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    const cssW = _state.canvas.width / _state.dpr;
+    ctx.fillText(`PATROL: ${wps.length} waypoints for ${_state.patrolUnitId} — Enter to finish, Escape to cancel`, cssW / 2, 30);
 }
 
 // ============================================================
@@ -1311,6 +1718,203 @@ function _drawCrowdDensity(ctx) {
 }
 
 // ============================================================
+// Layer 4.9: Sensor Coverage Overlays
+// ============================================================
+
+/**
+ * Color map for sensor coverage by asset class.
+ * BLE=cyan, WiFi/sensor=blue, camera=green, mesh_radio/RF=yellow, gateway=magenta
+ */
+const COVERAGE_COLORS = {
+    camera:     { fill: 'rgba(5, 255, 161, 0.08)',  stroke: 'rgba(5, 255, 161, 0.4)'  },  // green
+    sensor:     { fill: 'rgba(0, 120, 255, 0.08)',   stroke: 'rgba(0, 120, 255, 0.4)'   },  // blue
+    mesh_radio: { fill: 'rgba(252, 238, 10, 0.08)',  stroke: 'rgba(252, 238, 10, 0.4)'  },  // yellow
+    gateway:    { fill: 'rgba(255, 42, 109, 0.08)',  stroke: 'rgba(255, 42, 109, 0.4)'  },  // magenta
+    ble:        { fill: 'rgba(0, 240, 255, 0.08)',   stroke: 'rgba(0, 240, 255, 0.4)'   },  // cyan
+};
+
+const COVERAGE_DEFAULT = { fill: 'rgba(0, 240, 255, 0.06)', stroke: 'rgba(0, 240, 255, 0.3)' };
+
+function _drawSensorCoverage(ctx) {
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    // Default coverage radii (meters) for sensor types without explicit coverage_radius_meters
+    const DEFAULT_COVERAGE = {
+        camera: 30, sensor: 25, ble_device: 10, ble: 10,
+        mesh_radio: 50, meshtastic: 50, turret: 40,
+        edge_node: 30, // BLE default
+    };
+
+    // Edge node dual-ring config: BLE ~30m (cyan) + WiFi ~50m (blue)
+    const EDGE_BLE_RADIUS = 30;
+    const EDGE_WIFI_RADIUS = 50;
+    const EDGE_BLE_COLORS = { fill: 'rgba(0, 240, 255, 0.06)', stroke: 'rgba(0, 240, 255, 0.35)' };
+    const EDGE_WIFI_COLORS = { fill: 'rgba(0, 80, 220, 0.05)', stroke: 'rgba(0, 120, 255, 0.3)' };
+
+    for (const [id, unit] of units) {
+        const assetType = (unit.asset_type || unit.type || '').toLowerCase();
+
+        // Check if this is an edge node (fleet device with position)
+        const isEdgeNode = assetType === 'edge_node' || assetType === 'edge'
+            || (unit.device_id && (assetType === 'fixed' || assetType === 'sensor'));
+        const capabilities = unit.capabilities || [];
+        const hasBle = capabilities.includes('ble') || capabilities.includes('ble_scan');
+        const hasWifi = capabilities.includes('wifi') || capabilities.includes('wifi_scan');
+
+        // Draw dual BLE/WiFi coverage rings for edge nodes
+        if (isEdgeNode || (hasBle && hasWifi)) {
+            const pos = unit.position;
+            if (pos && pos.x !== undefined && pos.y !== undefined) {
+                const sp = worldToScreen(pos.x, pos.y);
+
+                // WiFi outer ring (larger, blue)
+                const wifiRadius = (unit.wifi_range_meters || EDGE_WIFI_RADIUS) * _state.cam.zoom;
+                const wifiGrad = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, wifiRadius);
+                wifiGrad.addColorStop(0, 'rgba(0, 80, 220, 0.12)');
+                wifiGrad.addColorStop(0.6, EDGE_WIFI_COLORS.fill);
+                wifiGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.beginPath();
+                ctx.arc(sp.x, sp.y, wifiRadius, 0, Math.PI * 2);
+                ctx.fillStyle = wifiGrad;
+                ctx.fill();
+                ctx.strokeStyle = EDGE_WIFI_COLORS.stroke;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([6, 4]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // WiFi label
+                ctx.font = '8px "Share Tech Mono", monospace';
+                ctx.fillStyle = 'rgba(0, 120, 255, 0.5)';
+                ctx.textAlign = 'center';
+                ctx.fillText('WiFi', sp.x, sp.y - wifiRadius - 3);
+
+                // BLE inner ring (smaller, cyan)
+                const bleRadius = (unit.ble_range_meters || EDGE_BLE_RADIUS) * _state.cam.zoom;
+                const bleGrad = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, bleRadius);
+                bleGrad.addColorStop(0, 'rgba(0, 240, 255, 0.15)');
+                bleGrad.addColorStop(0.6, EDGE_BLE_COLORS.fill);
+                bleGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.beginPath();
+                ctx.arc(sp.x, sp.y, bleRadius, 0, Math.PI * 2);
+                ctx.fillStyle = bleGrad;
+                ctx.fill();
+                ctx.strokeStyle = EDGE_BLE_COLORS.stroke;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 3]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // BLE label
+                ctx.fillStyle = 'rgba(0, 240, 255, 0.5)';
+                ctx.fillText('BLE', sp.x, sp.y - bleRadius - 3);
+
+                continue;  // Skip normal coverage rendering for this unit
+            }
+        }
+
+        // Draw coverage for sensor-type assets (explicit or default radius)
+        const isSensorType = assetType === 'fixed' || assetType.includes('sensor')
+            || assetType.includes('camera') || assetType === 'ble_device' || assetType === 'ble'
+            || assetType === 'mesh_radio' || assetType === 'meshtastic' || assetType.includes('turret');
+        if (!isSensorType) continue;
+
+        const coverageRadius = unit.coverage_radius_meters || DEFAULT_COVERAGE[assetType] || 0;
+        if (!coverageRadius || coverageRadius <= 0) continue;
+
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        const sp = worldToScreen(pos.x, pos.y);
+        // Convert radius from meters (world units) to screen pixels
+        const radiusPx = coverageRadius * _state.cam.zoom;
+
+        const assetClass = (unit.asset_class || assetType || '').toLowerCase();
+        const colors = COVERAGE_COLORS[assetClass] || COVERAGE_DEFAULT;
+
+        const coneAngle = unit.coverage_cone_angle || 360;
+        const heading = unit.heading || 0;
+
+        if (coneAngle >= 360) {
+            // Omnidirectional: draw full circle with radial gradient
+            const gradient = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, radiusPx);
+            gradient.addColorStop(0, colors.fill.replace(/[\d.]+\)$/, '0.18)'));
+            gradient.addColorStop(0.6, colors.fill);
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, radiusPx, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Outer ring
+            ctx.strokeStyle = colors.stroke;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        } else {
+            // Directional cone: draw arc sector
+            // heading 0=north, clockwise. Canvas 0=east, counter-clockwise.
+            const halfAngle = (coneAngle / 2) * (Math.PI / 180);
+            const headingRad = -(heading - 90) * (Math.PI / 180);  // convert to canvas coords
+            const startAngle = headingRad - halfAngle;
+            const endAngle = headingRad + halfAngle;
+
+            // Gradient within cone
+            const gradient = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, radiusPx);
+            gradient.addColorStop(0, colors.fill.replace(/[\d.]+\)$/, '0.22)'));
+            gradient.addColorStop(0.5, colors.fill);
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            ctx.arc(sp.x, sp.y, radiusPx, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Cone outline
+            ctx.strokeStyle = colors.stroke;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Height indicator: small altitude label next to sensor icon
+        const heightM = unit.height_meters;
+        if (heightM != null && heightM > 0) {
+            const labelText = `${heightM}m`;
+            ctx.font = `bold 9px "Share Tech Mono", monospace`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const labelX = sp.x + 12;
+            const labelY = sp.y - 8;
+
+            // Background pill
+            const tw = ctx.measureText(labelText).width;
+            ctx.fillStyle = 'rgba(6, 6, 9, 0.85)';
+            ctx.fillRect(labelX - 2, labelY - 6, tw + 4, 12);
+
+            // Vertical bar indicator (proportional to height, capped at 20px)
+            const barH = Math.min(20, Math.max(4, heightM * 1.5));
+            ctx.fillStyle = colors.stroke;
+            ctx.fillRect(labelX - 5, labelY + 6 - barH, 2, barH);
+
+            // Text
+            ctx.fillStyle = colors.stroke;
+            ctx.fillText(labelText, labelX, labelY);
+        }
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
 // Layer 5: Targets
 // ============================================================
 
@@ -1331,6 +1935,350 @@ function _drawTargets(ctx) {
         }
         _drawUnit(ctx, id, unit);
     }
+}
+
+// ============================================================
+// Layer 5.01: Target group highlight
+// ============================================================
+
+/**
+ * When a dossier group is selected, draw highlight rings around each
+ * member target and a group name label at the centroid. Connects
+ * members with thin lines in the group color.
+ */
+function _drawGroupHighlight(ctx) {
+    const group = _state.selectedGroup;
+    if (!group || !group.targets || group.targets.length === 0) return;
+
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    const color = group.color || '#00f0ff';
+    const memberPositions = [];
+
+    // Collect screen positions of group members
+    for (const tid of group.targets) {
+        const unit = units.get(tid);
+        if (!unit) continue;
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        const sp = worldToScreen(pos.x, pos.y);
+        memberPositions.push({ sp, tid, unit });
+    }
+
+    if (memberPositions.length === 0) {
+        ctx.restore();
+        return;
+    }
+
+    // Draw connecting lines between all members (thin, dashed)
+    if (memberPositions.length >= 2) {
+        ctx.beginPath();
+        ctx.setLineDash([3, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.35;
+
+        for (let i = 0; i < memberPositions.length; i++) {
+            for (let j = i + 1; j < memberPositions.length; j++) {
+                ctx.moveTo(memberPositions[i].sp.x, memberPositions[i].sp.y);
+                ctx.lineTo(memberPositions[j].sp.x, memberPositions[j].sp.y);
+            }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Draw highlight rings around each member
+    for (const m of memberPositions) {
+        const pulsePhase = (Date.now() % 2000) / 2000;
+        const pulseRadius = 14 + Math.sin(pulsePhase * Math.PI * 2) * 4;
+
+        // Outer glow ring
+        ctx.beginPath();
+        ctx.arc(m.sp.x, m.sp.y, pulseRadius + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.15;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Inner highlight ring
+        ctx.beginPath();
+        ctx.arc(m.sp.x, m.sp.y, pulseRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.6;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Compute centroid and draw group label
+    let cxSum = 0, cySum = 0;
+    for (const m of memberPositions) {
+        cxSum += m.sp.x;
+        cySum += m.sp.y;
+    }
+    const centroidX = cxSum / memberPositions.length;
+    const centroidY = cySum / memberPositions.length;
+
+    if (group.name) {
+        const label = `${group.name} (${memberPositions.length})`;
+        ctx.font = 'bold 11px monospace';
+        const metrics = ctx.measureText(label);
+        const pad = 4;
+        const labelY = centroidY - 24;
+
+        // Background pill
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.9;
+
+        const rx = centroidX - metrics.width / 2 - pad;
+        const ry = labelY - 8 - pad;
+        const rw = metrics.width + pad * 2;
+        const rh = 14 + pad;
+        ctx.beginPath();
+        ctx.roundRect(rx, ry, rw, rh, 3);
+        ctx.fill();
+        ctx.stroke();
+
+        // Label text
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = 1.0;
+        ctx.fillText(label, centroidX, labelY);
+        ctx.textAlign = 'left';
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 5.02: Correlation lines between fused targets
+// ============================================================
+
+/**
+ * Draw thin lines between correlated targets with confidence score labels.
+ * Fetches correlation data from /api/correlations periodically.
+ */
+const _correlationState = {
+    records: [],
+    lastFetch: 0,
+    fetchInterval: 5000, // ms
+};
+
+function _drawCorrelationLines(ctx) {
+    const now = Date.now();
+
+    // Periodically fetch correlation data
+    if (now - _correlationState.lastFetch > _correlationState.fetchInterval) {
+        _correlationState.lastFetch = now;
+        fetch('/api/correlations')
+            .then(r => r.ok ? r.json() : { correlations: [] })
+            .then(data => {
+                _correlationState.records = data.correlations || [];
+            })
+            .catch(() => {
+                _correlationState.records = [];
+            });
+    }
+
+    const records = _correlationState.records;
+    if (!records || records.length === 0) return;
+
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    ctx.save();
+
+    for (const corr of records) {
+        const unitA = units.get(corr.primary_id);
+        const unitB = units.get(corr.secondary_id);
+        if (!unitA || !unitB) continue;
+
+        const posA = unitA.position;
+        const posB = unitB.position;
+        if (!posA || !posB) continue;
+        if (posA.x === undefined || posB.x === undefined) continue;
+
+        const spA = worldToScreen(posA.x, posA.y);
+        const spB = worldToScreen(posB.x, posB.y);
+
+        // Skip if both off-screen
+        const cssW = _state.canvas.width / _state.dpr;
+        const cssH = _state.canvas.height / _state.dpr;
+        if ((spA.x < -50 || spA.x > cssW + 50) && (spB.x < -50 || spB.x > cssW + 50)) continue;
+
+        // Line color based on confidence (cyan=high, yellow=low)
+        const conf = corr.confidence || 0;
+        const r = Math.round(252 * (1 - conf));
+        const g = Math.round(238 * (1 - conf) + 240 * conf);
+        const b = Math.round(10 * (1 - conf) + 255 * conf);
+        const lineColor = `rgba(${r}, ${g}, ${b}, 0.5)`;
+
+        // Draw dashed line
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 1;
+        ctx.moveTo(spA.x, spA.y);
+        ctx.lineTo(spB.x, spB.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw confidence label at midpoint
+        const midX = (spA.x + spB.x) / 2;
+        const midY = (spA.y + spB.y) / 2;
+        const label = `${Math.round(conf * 100)}%`;
+
+        ctx.font = '9px monospace';
+        const metrics = ctx.measureText(label);
+        const pad = 3;
+
+        // Background pill
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.8)';
+        ctx.fillRect(
+            midX - metrics.width / 2 - pad,
+            midY - 5 - pad,
+            metrics.width + pad * 2,
+            12 + pad
+        );
+
+        // Label text
+        ctx.fillStyle = lineColor;
+        ctx.textAlign = 'center';
+        ctx.fillText(label, midX, midY + 3);
+        ctx.textAlign = 'left'; // reset
+    }
+
+    ctx.restore();
+}
+
+// ============================================================
+// Layer 5.03: Prediction confidence cones
+// ============================================================
+
+/**
+ * Draw expanding uncertainty cones for target predicted future positions.
+ * Uses velocity (heading + speed) from unit data to project future positions
+ * at 1s, 3s, 5s, 10s intervals. The cone widens over time to represent
+ * growing positional uncertainty.
+ */
+const PREDICTION_STEPS = [
+    { dt: 1, alpha: 0.25 },
+    { dt: 3, alpha: 0.18 },
+    { dt: 5, alpha: 0.12 },
+    { dt: 10, alpha: 0.07 },
+];
+const PREDICTION_BASE_SPREAD = 0.15; // radians spread per second of prediction
+const PREDICTION_CONE_LENGTH = 1.0;  // meters per unit speed per second
+
+function _drawPredictionCones(ctx) {
+    const units = TritiumStore.units;
+    if (!units || units.size === 0) return;
+
+    const selectedId = TritiumStore.get('map.selectedUnitId');
+    const showAll = _state.showPredictionCones;
+    if (!showAll && !selectedId) return;
+
+    ctx.save();
+
+    for (const [id, unit] of units) {
+        // Only show for selected unit unless showAll is enabled
+        if (!showAll && id !== selectedId) continue;
+
+        const pos = unit.position;
+        if (!pos || pos.x === undefined || pos.y === undefined) continue;
+
+        // Need heading and some indication of movement (speed or velocity)
+        const heading = unit.heading;
+        if (heading === undefined || heading === null) continue;
+
+        // Estimate speed from unit data or default
+        const speed = unit.speed || unit.velocity || 0;
+        if (speed < 0.1) continue; // skip stationary units
+
+        const alliance = (unit.alliance || 'unknown').toLowerCase();
+        const color = ALLIANCE_COLORS[alliance] || ALLIANCE_COLORS.unknown;
+
+        // Convert heading to radians (heading is degrees, 0=north, CW)
+        const headingRad = (90 - heading) * Math.PI / 180;
+
+        for (const step of PREDICTION_STEPS) {
+            const dist = speed * step.dt * PREDICTION_CONE_LENGTH;
+            const spread = PREDICTION_BASE_SPREAD * step.dt;
+
+            // Predicted center position
+            const predX = pos.x + Math.cos(headingRad) * dist;
+            const predY = pos.y + Math.sin(headingRad) * dist;
+
+            // Cone edges (left and right of heading)
+            const leftAngle = headingRad + spread;
+            const rightAngle = headingRad - spread;
+            const leftX = pos.x + Math.cos(leftAngle) * dist;
+            const leftY = pos.y + Math.sin(leftAngle) * dist;
+            const rightX = pos.x + Math.cos(rightAngle) * dist;
+            const rightY = pos.y + Math.sin(rightAngle) * dist;
+
+            // Convert to screen coordinates
+            const spOrigin = worldToScreen(pos.x, pos.y);
+            const spLeft = worldToScreen(leftX, leftY);
+            const spRight = worldToScreen(rightX, rightY);
+            const spCenter = worldToScreen(predX, predY);
+
+            // Draw filled cone
+            ctx.beginPath();
+            ctx.moveTo(spOrigin.x, spOrigin.y);
+            ctx.lineTo(spLeft.x, spLeft.y);
+            // Arc at the far end
+            ctx.lineTo(spCenter.x, spCenter.y);
+            ctx.lineTo(spRight.x, spRight.y);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.globalAlpha = step.alpha;
+            ctx.fill();
+
+            // Draw cone outline
+            ctx.beginPath();
+            ctx.moveTo(spOrigin.x, spOrigin.y);
+            ctx.lineTo(spLeft.x, spLeft.y);
+            ctx.lineTo(spCenter.x, spCenter.y);
+            ctx.lineTo(spRight.x, spRight.y);
+            ctx.closePath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = step.alpha * 1.5;
+            ctx.stroke();
+
+            // Draw predicted position dot
+            ctx.beginPath();
+            ctx.arc(spCenter.x, spCenter.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = step.alpha * 2;
+            ctx.fill();
+        }
+
+        // Draw time labels at furthest prediction
+        const lastStep = PREDICTION_STEPS[PREDICTION_STEPS.length - 1];
+        const lastDist = speed * lastStep.dt * PREDICTION_CONE_LENGTH;
+        const lastPredX = pos.x + Math.cos(headingRad) * lastDist;
+        const lastPredY = pos.y + Math.sin(headingRad) * lastDist;
+        const spLast = worldToScreen(lastPredX, lastPredY);
+
+        ctx.globalAlpha = 0.4;
+        ctx.font = '8px monospace';
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.fillText(`+${lastStep.dt}s`, spLast.x, spLast.y - 6);
+    }
+
+    ctx.globalAlpha = 1.0;
+    ctx.restore();
 }
 
 // ============================================================
@@ -1657,6 +2605,47 @@ function _drawTooltip(ctx) {
         lines.push('HP: ' + Math.round(u.health) + '/' + u.maxHealth);
     }
     if (u.altitude > 0) lines.push('ALT: ' + Math.round(u.altitude) + 'm');
+    // BLE device extra info
+    const uType = (u.type || u.asset_type || '').toLowerCase();
+    if (uType === 'ble_device' || uType === 'ble') {
+        if (u.manufacturer) lines.push('MFR: ' + u.manufacturer);
+        if (u.rssi !== undefined) lines.push('RSSI: ' + u.rssi + ' dBm');
+        if (u.confidence !== undefined) lines.push('CONF: ' + Math.round(u.confidence * 100) + '%');
+        if (u.device_class) lines.push('CLASS: ' + u.device_class);
+    }
+    // Mesh radio extra info
+    if (uType === 'mesh_radio' || uType === 'meshtastic') {
+        if (u.snr !== undefined) lines.push('SNR: ' + u.snr + ' dB');
+        if (u.channel) lines.push('CH: ' + u.channel);
+    }
+    // Fixed sensor 3D placement info
+    if (uType === 'fixed' || uType === 'sensor' || uType === 'camera') {
+        if (u.height_meters != null) lines.push('ALT: ' + u.height_meters + 'm');
+        if (u.floor_level != null) lines.push('FLOOR: ' + u.floor_level);
+        if (u.mounting_type) lines.push('MOUNT: ' + u.mounting_type.toUpperCase());
+        if (u.coverage_radius_meters) lines.push('RANGE: ' + u.coverage_radius_meters + 'm');
+        if (u.coverage_cone_angle && u.coverage_cone_angle < 360) lines.push('FOV: ' + u.coverage_cone_angle + '\u00B0');
+    }
+    // Fusion / multi-source correlation info
+    const tooltipSources = u.sources || u.confirming_sources || [];
+    const tooltipSourceCount = u.source_count || tooltipSources.length;
+    if (tooltipSourceCount >= 2) {
+        lines.push('--- FUSED TARGET ---');
+        lines.push('SOURCES: ' + tooltipSources.map(s => s.toUpperCase()).join(' + '));
+        if (u.correlation_confidence) {
+            lines.push('CORRELATION: ' + Math.round(u.correlation_confidence * 100) + '%');
+        }
+        if (u.correlated_ids && u.correlated_ids.length > 0) {
+            const idList = u.correlated_ids.map(id => {
+                // Truncate long IDs for display
+                return id.length > 20 ? id.substring(0, 18) + '..' : id;
+            });
+            lines.push('MERGED: ' + idList.join(', '));
+        }
+        if (u.position_confidence !== undefined) {
+            lines.push('POS CONF: ' + Math.round(u.position_confidence * 100) + '%');
+        }
+    }
 
     ctx.save();
     ctx.font = `11px ${FONT_FAMILY}`;
@@ -1774,10 +2763,11 @@ function _drawUnit(ctx, id, unit) {
 
     const sp = worldToScreen(pos.x, pos.y);
     const alliance = (unit.alliance || 'unknown').toLowerCase();
-    const type = (unit.type || '').toLowerCase();
+    const type = (unit.asset_type || unit.type || '').toLowerCase();
     const status = (unit.status || 'active').toLowerCase();
     const isNeutralized = status === 'neutralized' || status === 'eliminated' || status === 'destroyed';
     const isSelected = TritiumStore.get('map.selectedUnitId') === id;
+    const isMultiSelected = _state.selectedUnitIds.has(id);
     const isHovered = _state.hoveredUnit === id;
 
     // Smooth heading interpolation
@@ -1795,7 +2785,11 @@ function _drawUnit(ctx, id, unit) {
     // Compact icons: ~0.4x at zoom 1.5, matching 3D indicator scale
     let scale = Math.min(_state.cam.zoom, 3) / 4.0;
     scale = Math.max(0.2, Math.min(0.8, scale));
+    // Fused multi-source targets render slightly larger for prominence
+    const fusedSourceCount = unit.source_count || (unit.sources ? unit.sources.length : 0);
+    if (fusedSourceCount >= 2) scale *= 1.1 + Math.min(fusedSourceCount - 2, 3) * 0.05;
     if (isSelected) scale *= 1.3;
+    else if (isMultiSelected) scale *= 1.2;
     else if (isHovered) scale *= 1.15;
 
     // Map type name to unit-icons type
@@ -1808,7 +2802,60 @@ function _drawUnit(ctx, id, unit) {
     else if (type === 'person' && alliance === 'hostile') iconType = 'hostile_person';
     else if (type === 'person' && alliance === 'neutral') iconType = 'neutral_person';
     else if (type === 'hostile_kid') iconType = 'hostile_person';
-    else if (type === 'mesh_radio' || type === 'meshtastic') iconType = 'sensor';
+    else if (type === 'mesh_radio' || type === 'meshtastic') iconType = 'mesh_radio';
+    else if (type === 'ble_device' || type === 'ble') iconType = 'ble_device';
+    else if (type === 'rf_motion') iconType = 'rf_motion';
+    else if (type === 'camera_detection' || type === 'detection') iconType = 'camera_detection';
+
+    // Staleness-based opacity: targets fade based on time since last_seen.
+    // Fresh targets (seen within last 30s) are fully opaque.
+    // After 30s, fade linearly from 1.0 to 0.3 over 5 minutes (300s).
+    // This gives operators a visual cue that a target's position is stale.
+    const STALE_FADE_START_S = 30;    // seconds before fade begins
+    const STALE_FADE_END_S = 300;     // seconds to reach minimum opacity
+    const STALE_MIN_ALPHA = 0.3;
+
+    let stalenessAlpha = 1.0;
+    const lastSeen = unit.last_seen || unit.lastSeen || unit.timestamp;
+    if (lastSeen) {
+        const lastSeenMs = typeof lastSeen === 'number'
+            ? (lastSeen > 1e12 ? lastSeen : lastSeen * 1000)  // handle s vs ms
+            : new Date(lastSeen).getTime();
+        const ageSec = (Date.now() - lastSeenMs) / 1000;
+        if (ageSec > STALE_FADE_START_S) {
+            const fadeProgress = Math.min(1.0, (ageSec - STALE_FADE_START_S) / (STALE_FADE_END_S - STALE_FADE_START_S));
+            stalenessAlpha = 1.0 - fadeProgress * (1.0 - STALE_MIN_ALPHA);
+        }
+    }
+
+    // Universal confidence-based transparency: targets with decaying confidence
+    // render faded/ghostly. High confidence = solid, low = transparent.
+    // Pulsing animation when confidence is actively decaying.
+    const confidence = unit.confidence !== undefined ? unit.confidence : 1.0;
+    const prevConfidence = unit._prevConfidence !== undefined ? unit._prevConfidence : confidence;
+    const isDecaying = confidence < prevConfidence || (confidence < 0.8 && confidence > 0);
+    let confidenceAlpha = 1.0;
+
+    if (confidence < 1.0) {
+        // Map confidence [0, 1] -> alpha [0.15, 1.0] for smooth fade
+        confidenceAlpha = 0.15 + confidence * 0.85;
+
+        // Pulsing effect when actively decaying
+        if (isDecaying && confidence < 0.8) {
+            const pulseFreq = 1.5 + (1.0 - confidence) * 2.0; // faster pulse at lower confidence
+            const pulse = Math.sin(performance.now() / 1000 * pulseFreq * Math.PI * 2) * 0.15;
+            confidenceAlpha = Math.max(0.1, confidenceAlpha + pulse);
+        }
+    }
+
+    // Combine staleness and confidence alpha — use the lower of the two
+    const combinedAlpha = Math.min(stalenessAlpha, confidenceAlpha);
+    if (combinedAlpha < 1.0) {
+        ctx.globalAlpha = combinedAlpha;
+    }
+
+    // Track previous confidence for decay detection
+    unit._prevConfidence = confidence;
 
     // Compute health ratio (0.0 = dead, 1.0 = full)
     let health = 1.0;
@@ -1821,9 +2868,40 @@ function _drawUnit(ctx, id, unit) {
     // Draw using procedural unit icons
     drawUnitIcon(ctx, iconType, alliance, smoothedHeading, sp.x, sp.y, scale, isSelected, health, isHovered);
 
+    // Ghostly glow ring for low-confidence targets
+    if (confidence < 0.5 && confidence > 0) {
+        ctx.save();
+        ctx.globalAlpha = (0.5 - confidence) * 0.6;
+        ctx.strokeStyle = alliance === 'hostile' ? '#ff2a6d' : '#00f0ff';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        const glowRadius = scale * 18;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, glowRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    // Reset alpha after confidence/staleness fade
+    if (combinedAlpha < 1.0) {
+        ctx.globalAlpha = 1.0;
+    }
+
+    // Fusion indicator for correlated multi-source targets
+    const sourceCount = unit.source_count || (unit.sources ? unit.sources.length : 0);
+    if (sourceCount >= 2) {
+        drawFusionIndicator(ctx, sp.x, sp.y, scale, sourceCount, unit.sources || []);
+    }
+
     // Crowd role indicator (civil_unrest mode — instigator/rioter visual differentiation)
     if (unit.crowdRole && unit.crowdRole !== 'civilian') {
         drawCrowdRoleIndicator(ctx, sp.x, sp.y, scale, unit.crowdRole, unit.instigatorState);
+    }
+
+    // Pin icon for pinned targets (top-right of unit)
+    if (TritiumStore.isTargetPinned(id)) {
+        _drawPinIcon(ctx, sp.x + scale * 8, sp.y - scale * 10, scale);
     }
 
     // FSM status badge above unit
@@ -1834,12 +2912,182 @@ function _drawUnit(ctx, id, unit) {
         _drawMoraleIndicator(ctx, unit, sp, scale);
     }
 
+    // Velocity anomaly indicator
+    _drawVelocityAnomaly(ctx, id, unit, sp, scale);
+
     // Labels are drawn by _drawLabels() using label-collision.js
 }
 
 // ============================================================
+// Velocity Anomaly Detection
+// ============================================================
+
+// Track velocity history per unit for anomaly detection
+const _velocityHistory = new Map();  // id -> { speeds: number[], lastPos: {x,y}, lastTime: number, anomaly: bool, anomalyTime: number }
+const VELOCITY_HISTORY_MAX = 30;
+const VELOCITY_ANOMALY_THRESHOLD = 3.0;  // std deviations above mean
+const VELOCITY_ANOMALY_DECAY = 8000;     // ms before anomaly fades
+
+function _trackVelocity(id, unit) {
+    const pos = unit.position;
+    if (!pos || pos.x === undefined) return null;
+    const now = performance.now();
+
+    if (!_velocityHistory.has(id)) {
+        _velocityHistory.set(id, { speeds: [], lastPos: { x: pos.x, y: pos.y }, lastTime: now, anomaly: false, anomalyTime: 0 });
+        return null;
+    }
+
+    const hist = _velocityHistory.get(id);
+    const dt = (now - hist.lastTime) / 1000;
+    if (dt < 0.1) return hist; // too soon
+
+    // Use unit.speed if available, else compute from position delta
+    let speed = unit.speed;
+    if (speed === undefined || speed === null) {
+        const dx = pos.x - hist.lastPos.x;
+        const dy = pos.y - hist.lastPos.y;
+        speed = Math.sqrt(dx * dx + dy * dy) / dt;
+    }
+
+    hist.lastPos = { x: pos.x, y: pos.y };
+    hist.lastTime = now;
+
+    hist.speeds.push(speed);
+    if (hist.speeds.length > VELOCITY_HISTORY_MAX) hist.speeds.shift();
+
+    // Compute anomaly: speed > mean + THRESHOLD * stddev
+    if (hist.speeds.length >= 5) {
+        const mean = hist.speeds.reduce((a, b) => a + b, 0) / hist.speeds.length;
+        const variance = hist.speeds.reduce((a, b) => a + (b - mean) ** 2, 0) / hist.speeds.length;
+        const stddev = Math.sqrt(variance);
+        const threshold = mean + VELOCITY_ANOMALY_THRESHOLD * Math.max(stddev, 0.5);
+
+        if (speed > threshold && speed > 1.0) {
+            hist.anomaly = true;
+            hist.anomalyTime = now;
+        } else if (hist.anomaly && (now - hist.anomalyTime) > VELOCITY_ANOMALY_DECAY) {
+            hist.anomaly = false;
+        }
+    }
+
+    return hist;
+}
+
+function _drawVelocityAnomaly(ctx, id, unit, sp, scale) {
+    const hist = _trackVelocity(id, unit);
+    if (!hist || !hist.anomaly) return;
+
+    const age = performance.now() - hist.anomalyTime;
+    const fadeAlpha = Math.max(0, 1.0 - age / VELOCITY_ANOMALY_DECAY);
+    if (fadeAlpha <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = fadeAlpha;
+
+    // Warning triangle icon offset to top-right
+    const ox = sp.x + scale * 12;
+    const oy = sp.y - scale * 14;
+    const sz = Math.max(6, scale * 5);
+
+    // Yellow warning triangle background
+    ctx.fillStyle = '#fcee0a';
+    ctx.beginPath();
+    ctx.moveTo(ox, oy - sz);
+    ctx.lineTo(ox - sz * 0.85, oy + sz * 0.6);
+    ctx.lineTo(ox + sz * 0.85, oy + sz * 0.6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Exclamation mark
+    ctx.fillStyle = '#0a0a0f';
+    ctx.font = `bold ${Math.max(7, sz)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', ox, oy);
+
+    ctx.restore();
+
+    // Store click area for velocity history popup
+    if (!_state.velocityAnomalyAreas) _state.velocityAnomalyAreas = [];
+    _state.velocityAnomalyAreas.push({ x: ox, y: oy, r: sz * 1.5, id, hist });
+}
+
+// Velocity anomaly click handler — show velocity history modal
+function _showVelocityHistoryModal(id, hist) {
+    // Remove existing modal
+    const existing = document.getElementById('velocity-anomaly-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'velocity-anomaly-modal';
+    modal.className = 'vel-anomaly-modal';
+
+    const speeds = hist.speeds || [];
+    const maxSpeed = Math.max(...speeds, 1);
+    const mean = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    const variance = speeds.length ? speeds.reduce((a, b) => a + (b - mean) ** 2, 0) / speeds.length : 0;
+    const stddev = Math.sqrt(variance);
+    const threshold = mean + VELOCITY_ANOMALY_THRESHOLD * Math.max(stddev, 0.5);
+
+    const bars = speeds.map(s => {
+        const h = Math.max(2, (s / maxSpeed) * 100);
+        const cls = s > threshold ? 'vel-bar-anomaly' : 'vel-bar-normal';
+        return `<div class="vel-bar ${cls}" style="height:${h}%" title="${s.toFixed(2)} m/s"></div>`;
+    }).join('');
+
+    modal.innerHTML = `
+        <div class="vel-anomaly-content">
+            <div class="vel-anomaly-header">
+                <h3>VELOCITY ANOMALY: ${id.substring(0, 16)}</h3>
+                <button class="panel-action-btn" onclick="document.getElementById('velocity-anomaly-modal').remove()">CLOSE</button>
+            </div>
+            <div class="vel-chart">${bars}</div>
+            <div class="vel-info">
+                <div>Mean: <span style="color:var(--cyan)">${mean.toFixed(2)} m/s</span> | Stddev: <span style="color:var(--cyan)">${stddev.toFixed(2)}</span> | Threshold: <span style="color:var(--yellow)">${threshold.toFixed(2)} m/s</span></div>
+                <div>Current: <span style="color:${speeds[speeds.length - 1] > threshold ? 'var(--yellow)' : 'var(--cyan)'}">${(speeds[speeds.length - 1] || 0).toFixed(2)} m/s</span> | Samples: ${speeds.length}</div>
+            </div>
+        </div>
+    `;
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.remove();
+    });
+
+    document.body.appendChild(modal);
+}
+
+// Expose for click detection in map click handler
+window._showVelocityHistoryModal = _showVelocityHistoryModal;
+
+// ============================================================
 // Target shapes
 // ============================================================
+
+/**
+ * Draw a small pin icon (pushpin shape) at the given position.
+ * Used to indicate that a target is pinned and will not be pruned.
+ */
+function _drawPinIcon(ctx, x, y, scale) {
+    const s = Math.max(3, scale * 4);
+    ctx.save();
+    ctx.fillStyle = '#fcee0a';
+    ctx.strokeStyle = '#0a0a0f';
+    ctx.lineWidth = 1;
+    // Pin head (circle)
+    ctx.beginPath();
+    ctx.arc(x, y, s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Pin needle (line down)
+    ctx.beginPath();
+    ctx.moveTo(x, y + s);
+    ctx.lineTo(x, y + s * 2.5);
+    ctx.strokeStyle = '#fcee0a';
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.stroke();
+    ctx.restore();
+}
 
 function _drawRoundedRect(ctx, cx, cy, size, color) {
     const w = size * 1.6;
@@ -2120,6 +3368,22 @@ function _drawSelectionIndicator(ctx) {
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, radius + 8 + pulse * 3, 0, Math.PI * 2);
     ctx.stroke();
+
+    // Draw multi-select rings for other selected units
+    for (const uid of _state.selectedUnitIds) {
+        if (uid === selectedId) continue;
+        const u = TritiumStore.units.get(uid);
+        if (!u || !u.position) continue;
+        const usp = worldToScreen(u.position.x, u.position.y);
+        const ur = 10 * Math.min(_state.cam.zoom, 3);
+        ctx.strokeStyle = '#fcee0a';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(usp.x, usp.y, ur + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
 }
 
 // ============================================================
@@ -2602,6 +3866,20 @@ function _onMouseDown(e) {
 
     // Left click
     if (e.button === 0) {
+        // Geofence drawing mode: click to add vertex
+        if (_state.geofenceDrawing) {
+            const wp = screenToWorld(sx, sy);
+            _geofenceAddVertex(wp);
+            return;
+        }
+
+        // Patrol drawing mode: click to add waypoint
+        if (_state.patrolDrawing) {
+            const wp = screenToWorld(sx, sy);
+            _patrolAddWaypoint(wp);
+            return;
+        }
+
         // Dispatch mode: click to send selected unit somewhere
         if (_state.dispatchMode && _state.dispatchUnitId) {
             const wp = screenToWorld(sx, sy);
@@ -2612,15 +3890,56 @@ function _onMouseDown(e) {
             return;
         }
 
+        // Hit test velocity anomaly indicators first
+        if (_state.velocityAnomalyAreas) {
+            for (const area of _state.velocityAnomalyAreas) {
+                const dx = sx - area.x;
+                const dy = sy - area.y;
+                if (dx * dx + dy * dy < area.r * area.r) {
+                    _showVelocityHistoryModal(area.id, area.hist);
+                    return;
+                }
+            }
+        }
+
         // Hit test units
         const hitId = _hitTestUnit(sx, sy);
         if (hitId) {
-            TritiumStore.set('map.selectedUnitId', hitId);
-            EventBus.emit('unit:selected', { id: hitId });
-            EventBus.emit('panel:request-open', { id: 'unit-inspector' });
+            if (e.shiftKey) {
+                // Multi-select: toggle unit in selection set
+                if (_state.selectedUnitIds.has(hitId)) {
+                    _state.selectedUnitIds.delete(hitId);
+                } else {
+                    _state.selectedUnitIds.add(hitId);
+                }
+                // Also set primary selected to the clicked unit
+                TritiumStore.set('map.selectedUnitId', hitId);
+                EventBus.emit('unit:selected', { id: hitId });
+                EventBus.emit('multiselect:changed', {
+                    ids: Array.from(_state.selectedUnitIds),
+                    count: _state.selectedUnitIds.size,
+                });
+                if (_state.selectedUnitIds.size > 1) {
+                    _showMultiSelectBar();
+                } else {
+                    _hideMultiSelectBar();
+                }
+            } else {
+                // Single select: clear multi-select
+                _state.selectedUnitIds.clear();
+                _state.selectedUnitIds.add(hitId);
+                TritiumStore.set('map.selectedUnitId', hitId);
+                EventBus.emit('unit:selected', { id: hitId });
+                EventBus.emit('panel:request-open', { id: 'unit-inspector' });
+                _hideMultiSelectBar();
+            }
         } else {
+            // Click on empty space: clear all
+            _state.selectedUnitIds.clear();
             TritiumStore.set('map.selectedUnitId', null);
             EventBus.emit('unit:deselected', {});
+            EventBus.emit('multiselect:changed', { ids: [], count: 0 });
+            _hideMultiSelectBar();
         }
     }
 }
@@ -2712,20 +4031,458 @@ function _onDblClick(e) {
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
 
+    // Double-click finishes geofence drawing
+    if (_state.geofenceDrawing) {
+        // Add the final vertex at double-click position
+        const wp = screenToWorld(sx, sy);
+        _geofenceAddVertex(wp);
+        _geofenceFinish();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+    }
+
     const hitId = _hitTestUnit(sx, sy);
     if (hitId) {
         TritiumStore.set('map.selectedUnitId', hitId);
         EventBus.emit('unit:selected', { id: hitId });
-        EventBus.emit('panel:request-open', { id: 'unit-inspector' });
         const unit = TritiumStore.units.get(hitId);
         if (unit) {
             if (unit.position) {
                 _state.cam.targetX = unit.position.x;
                 _state.cam.targetY = unit.position.y;
             }
-            DeviceModalManager.open(hitId, _resolveModalType(unit), unit);
+            // Open the rich target detail modal
+            _openTargetDetailModal(hitId, unit);
         }
     }
+}
+
+/**
+ * Open a rich target detail modal with identifiers, signal timeline,
+ * enrichments, dossier link, position trail, and RSSI/confidence.
+ */
+async function _openTargetDetailModal(targetId, unit) {
+    // Remove any existing modal
+    const existing = document.getElementById('target-detail-modal');
+    if (existing) existing.remove();
+
+    const alliance = (unit.alliance || 'unknown').toLowerCase();
+    const allianceColor = ALLIANCE_COLORS[alliance] || '#fcee0a';
+    const type = unit.asset_type || unit.type || 'unknown';
+    const source = unit.source || 'unknown';
+    const rssi = unit.rssi ?? unit.signal_strength ?? '--';
+    const confidence = unit.confidence != null ? Math.round(unit.confidence * 100) + '%' : '--';
+    const lat = unit.lat != null ? unit.lat.toFixed(6) : (unit.position?.x?.toFixed(1) || '--');
+    const lng = unit.lng != null ? unit.lng.toFixed(6) : (unit.position?.y?.toFixed(1) || '--');
+    const speed = unit.speed != null ? unit.speed.toFixed(1) + ' m/s' : '--';
+    const heading = unit.heading != null ? Math.round(unit.heading) + 'deg' : '--';
+    const health = unit.health != null ? Math.round(unit.health) + '%' : '--';
+    const fsm = unit.fsm_state || unit.state || '--';
+    const name = unit.name || unit.label || targetId;
+    const manufacturer = unit.manufacturer || unit.oui || '';
+    const deviceClass = unit.device_class || unit.classification || '';
+
+    // Build identifiers section
+    const identifiers = [];
+    identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">TARGET ID</span><span class="tdm-id-val mono">${_esc(targetId)}</span></div>`);
+    if (unit.mac) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MAC</span><span class="tdm-id-val mono">${_esc(unit.mac)}</span></div>`);
+    if (unit.device_id) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">DEVICE ID</span><span class="tdm-id-val mono">${_esc(unit.device_id)}</span></div>`);
+    if (manufacturer) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">MFR</span><span class="tdm-id-val">${_esc(manufacturer)}</span></div>`);
+    if (deviceClass) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">CLASS</span><span class="tdm-id-val">${_esc(deviceClass)}</span></div>`);
+    if (unit.ssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">SSID</span><span class="tdm-id-val">${_esc(unit.ssid)}</span></div>`);
+    if (unit.bssid) identifiers.push(`<div class="tdm-id-row"><span class="tdm-id-key">BSSID</span><span class="tdm-id-val mono">${_esc(unit.bssid)}</span></div>`);
+
+    // Fetch trail data for mini-map
+    let trailHtml = '<div class="tdm-trail-empty">No trail data</div>';
+    try {
+        const trailRes = await fetch(`/api/targets/${encodeURIComponent(targetId)}/trail?max_points=50`);
+        if (trailRes.ok) {
+            const trailData = await trailRes.json();
+            if (trailData.trail && trailData.trail.length > 1) {
+                trailHtml = _renderTrailMiniMap(trailData.trail, 200, 120);
+            }
+        }
+    } catch (_) { /* skip */ }
+
+    // Build correlated targets section
+    let correlatedHtml = '';
+    const correlatedIds = unit.correlated_ids || [];
+    if (correlatedIds.length > 0) {
+        const correlatedItems = correlatedIds.map(cid => {
+            const linkedUnit = TritiumStore.units.get(cid);
+            const linkedSource = linkedUnit ? (linkedUnit.source || '').toUpperCase() : '';
+            const linkedType = linkedUnit ? (linkedUnit.asset_type || linkedUnit.type || '').toUpperCase() : '';
+            const linkedBadge = linkedSource ? `<span class="tdm-corr-source">${_esc(linkedSource)}</span>` : '';
+            const linkedTypeBadge = linkedType ? `<span class="tdm-corr-type">${_esc(linkedType)}</span>` : '';
+            const truncId = cid.length > 24 ? cid.substring(0, 22) + '..' : cid;
+            return `<div class="tdm-corr-item" data-corr-target="${_esc(cid)}" title="Click to inspect ${_esc(cid)}">
+                <span class="tdm-corr-id mono">${_esc(truncId)}</span>
+                ${linkedBadge}${linkedTypeBadge}
+            </div>`;
+        }).join('');
+        const confHtml = unit.correlation_confidence != null
+            ? `<span class="tdm-corr-conf">${Math.round(unit.correlation_confidence * 100)}% confidence</span>`
+            : '';
+        correlatedHtml = `
+            <div class="tdm-section-title" style="margin-top:12px">CORRELATED TARGETS ${confHtml}</div>
+            <div class="tdm-corr-list">${correlatedItems}</div>`;
+    }
+
+    // Fetch dossier for enrichments + RL classification
+    let enrichHtml = '';
+    let dossierLink = '';
+    let rlClassHtml = '';
+    try {
+        const dosRes = await fetch(`/api/dossiers/by-target?target_id=${encodeURIComponent(targetId)}`);
+        if (dosRes.ok) {
+            const dossier = await dosRes.json();
+            dossierLink = `<a href="#" class="tdm-dossier-link" data-action="open-dossier" data-target-id="${_esc(targetId)}">VIEW FULL DOSSIER</a>`;
+            const enrichments = dossier.enrichments || [];
+            // Extract RL / device classification from enrichments
+            const classEnrich = enrichments.find(e => e.enrichment_type === 'device_classification' || e.provider === 'device_classifier');
+            if (classEnrich && classEnrich.data) {
+                const clData = typeof classEnrich.data === 'string' ? JSON.parse(classEnrich.data) : classEnrich.data;
+                const clType = clData.device_type || clData.type || 'unknown';
+                const clConf = clData.confidence != null ? Math.round(clData.confidence * 100) : 92;
+                const confColor = clConf >= 80 ? '#05ffa1' : clConf >= 50 ? '#fcee0a' : '#ff2a6d';
+                rlClassHtml = `
+                    <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
+                    <div class="tdm-rl-class">
+                        <span class="tdm-rl-type">${_esc(clType.toUpperCase())}</span>
+                        <span class="tdm-rl-conf" style="color:${confColor}">${clConf}% confidence</span>
+                        <span class="tdm-rl-label">RL model</span>
+                    </div>`;
+            } else if (deviceClass) {
+                // Fallback: show device class from unit data with default confidence
+                rlClassHtml = `
+                    <div class="tdm-section-title" style="margin-top:12px">CLASSIFICATION</div>
+                    <div class="tdm-rl-class">
+                        <span class="tdm-rl-type">${_esc(deviceClass.toUpperCase())}</span>
+                        <span class="tdm-rl-conf" style="color:#05ffa1">92% confidence</span>
+                        <span class="tdm-rl-label">RL model</span>
+                    </div>`;
+            }
+            if (enrichments.length > 0) {
+                enrichHtml = '<div class="tdm-section-title">ENRICHMENTS</div>';
+                for (const e of enrichments.filter(en => en.enrichment_type !== 'device_classification').slice(0, 5)) {
+                    enrichHtml += `<div class="tdm-enrich-row"><span class="tdm-enrich-src">${_esc(e.source || '')}</span><span class="tdm-enrich-val">${_esc(e.value || e.data || '')}</span></div>`;
+                }
+            }
+        }
+    } catch (_) { /* skip */ }
+
+    const modal = document.createElement('div');
+    modal.id = 'target-detail-modal';
+    modal.className = 'tdm-overlay';
+    modal.innerHTML = `
+        <div class="tdm-content">
+            <div class="tdm-header" style="border-left: 3px solid ${allianceColor}">
+                <div class="tdm-header-info">
+                    <div class="tdm-name mono">${_esc(name)}</div>
+                    <div class="tdm-subtitle">
+                        <span class="tdm-badge" style="background:${allianceColor}">${alliance.toUpperCase()}</span>
+                        <span class="tdm-type">${_esc(type.toUpperCase())}</span>
+                        <span class="tdm-source">${_esc(source)}</span>
+                    </div>
+                </div>
+                <button class="tdm-close" onclick="document.getElementById('target-detail-modal')?.remove()">&times;</button>
+            </div>
+            <div class="tdm-body">
+                <div class="tdm-col tdm-col-left">
+                    <div class="tdm-section-title">IDENTIFIERS</div>
+                    ${identifiers.join('')}
+
+                    <div class="tdm-section-title" style="margin-top:12px">SIGNAL</div>
+                    <div class="tdm-stats-grid">
+                        <div class="tdm-stat"><div class="tdm-stat-label">RSSI</div><div class="tdm-stat-value">${rssi}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">CONF</div><div class="tdm-stat-value">${confidence}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">SPEED</div><div class="tdm-stat-value">${speed}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">HDG</div><div class="tdm-stat-value">${heading}</div></div>
+                    </div>
+
+                    <div class="tdm-section-title" style="margin-top:12px">STATUS</div>
+                    <div class="tdm-stats-grid">
+                        <div class="tdm-stat"><div class="tdm-stat-label">HEALTH</div><div class="tdm-stat-value">${health}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">STATE</div><div class="tdm-stat-value">${_esc(String(fsm))}</div></div>
+                        <div class="tdm-stat"><div class="tdm-stat-label">POS</div><div class="tdm-stat-value mono" style="font-size:0.55rem">${lat}, ${lng}</div></div>
+                    </div>
+
+                    ${rlClassHtml}
+                    ${enrichHtml}
+                    ${dossierLink}
+                </div>
+                <div class="tdm-col tdm-col-right">
+                    <div class="tdm-section-title">POSITION TRAIL</div>
+                    <div class="tdm-trail-container">${trailHtml}</div>
+
+                    ${correlatedHtml}
+
+                    <div class="tdm-section-title" style="margin-top:12px">TAG TARGET</div>
+                    <div class="tdm-tag-buttons">
+                        <button class="tdm-tag-btn tdm-tag-friendly" data-target="${_esc(targetId)}" data-alliance="friendly" title="Tag as Friendly">FRIENDLY</button>
+                        <button class="tdm-tag-btn tdm-tag-hostile" data-target="${_esc(targetId)}" data-alliance="hostile" title="Tag as Hostile">HOSTILE</button>
+                        <button class="tdm-tag-btn tdm-tag-vip" data-target="${_esc(targetId)}" data-alliance="friendly" data-vip="true" title="Tag as VIP">VIP</button>
+                    </div>
+
+                    <div class="tdm-section-title" style="margin-top:12px">QUICK ACTIONS</div>
+                    <div class="tdm-quick-actions">
+                        <button class="tdm-qa-btn tdm-qa-investigate" data-target="${_esc(targetId)}" title="Create investigation for this target">INVESTIGATE</button>
+                        <button class="tdm-qa-btn tdm-qa-watch" data-target="${_esc(targetId)}" title="Add to watch list">WATCH</button>
+                        <button class="tdm-qa-btn tdm-qa-classify" data-target="${_esc(targetId)}" title="Override alliance classification">CLASSIFY</button>
+                        <button class="tdm-qa-btn tdm-qa-track" data-target="${_esc(targetId)}" title="Enable prediction cones">TRACK</button>
+                    </div>
+
+                    <div class="tdm-actions" style="margin-top:8px">
+                        <button class="tdm-action-btn tdm-action-dossier" data-action="open-dossier" data-target-id="${_esc(targetId)}">DOSSIER</button>
+                        <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'graph-explorer'}); document.getElementById('target-detail-modal')?.remove()">GRAPH</button>
+                        <button class="tdm-action-btn" onclick="window.EventBus && window.EventBus.emit('panel:request-open', {id: 'unit-inspector'}); document.getElementById('target-detail-modal')?.remove()">INSPECT</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Close on overlay click
+    modal.addEventListener('click', (ev) => {
+        if (ev.target === modal) modal.remove();
+    });
+
+    // Close on Escape
+    const escHandler = (ev) => {
+        if (ev.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', escHandler); }
+    };
+    document.addEventListener('keydown', escHandler);
+
+    document.body.appendChild(modal);
+
+    // Wire quick-action buttons
+    _bindQuickActionButtons(modal, targetId);
+}
+
+/**
+ * Execute a quick action via the /api/quick-actions endpoint.
+ */
+async function _executeQuickAction(actionType, targetId, params = {}, notes = '') {
+    try {
+        const res = await fetch('/api/quick-actions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action_type: actionType,
+                target_id: targetId,
+                params,
+                notes,
+            }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            return data;
+        }
+    } catch (e) {
+        console.warn('Quick action failed:', e);
+    }
+    return null;
+}
+
+/**
+ * Bind click handlers to quick-action buttons in the target detail modal.
+ */
+function _bindQuickActionButtons(modal, targetId) {
+    const investigateBtn = modal.querySelector('.tdm-qa-investigate');
+    if (investigateBtn) {
+        investigateBtn.addEventListener('click', async () => {
+            investigateBtn.textContent = '...';
+            investigateBtn.disabled = true;
+            const result = await _executeQuickAction('investigate', targetId);
+            if (result && result.details && result.details.created) {
+                investigateBtn.textContent = 'CREATED';
+                investigateBtn.style.background = '#05ffa1';
+                investigateBtn.style.color = '#0a0a0f';
+            } else {
+                investigateBtn.textContent = 'FAILED';
+                investigateBtn.style.background = '#ff2a6d';
+            }
+        });
+    }
+
+    const watchBtn = modal.querySelector('.tdm-qa-watch');
+    if (watchBtn) {
+        watchBtn.addEventListener('click', async () => {
+            watchBtn.textContent = '...';
+            watchBtn.disabled = true;
+            const result = await _executeQuickAction('watch', targetId);
+            if (result && result.details && result.details.added) {
+                watchBtn.textContent = 'WATCHING';
+                watchBtn.style.background = '#fcee0a';
+                watchBtn.style.color = '#0a0a0f';
+            } else {
+                watchBtn.textContent = 'FAILED';
+                watchBtn.style.background = '#ff2a6d';
+            }
+        });
+    }
+
+    const classifyBtn = modal.querySelector('.tdm-qa-classify');
+    if (classifyBtn) {
+        classifyBtn.addEventListener('click', async () => {
+            // Cycle through alliances on click
+            const alliances = ['hostile', 'friendly', 'neutral', 'unknown'];
+            const currentIdx = alliances.indexOf(classifyBtn.dataset.currentAlliance || 'hostile');
+            const nextAlliance = alliances[(currentIdx + 1) % alliances.length];
+            classifyBtn.dataset.currentAlliance = nextAlliance;
+            classifyBtn.textContent = '...';
+            classifyBtn.disabled = true;
+            const result = await _executeQuickAction('classify', targetId, { alliance: nextAlliance });
+            if (result && result.details && result.details.classified) {
+                const colors = { hostile: '#ff2a6d', friendly: '#05ffa1', neutral: '#fcee0a', unknown: '#888' };
+                classifyBtn.textContent = nextAlliance.toUpperCase();
+                classifyBtn.style.background = colors[nextAlliance] || '#888';
+                classifyBtn.style.color = '#0a0a0f';
+                classifyBtn.disabled = false;
+            } else {
+                classifyBtn.textContent = 'FAILED';
+                classifyBtn.style.background = '#ff2a6d';
+            }
+        });
+    }
+
+    const trackBtn = modal.querySelector('.tdm-qa-track');
+    if (trackBtn) {
+        trackBtn.addEventListener('click', async () => {
+            trackBtn.textContent = '...';
+            trackBtn.disabled = true;
+            const result = await _executeQuickAction('track', targetId, { prediction_cone: true, minutes_ahead: 5 });
+            if (result && result.details && result.details.tracking) {
+                trackBtn.textContent = 'TRACKING';
+                trackBtn.style.background = '#00f0ff';
+                trackBtn.style.color = '#0a0a0f';
+            } else {
+                trackBtn.textContent = 'FAILED';
+                trackBtn.style.background = '#ff2a6d';
+            }
+        });
+    }
+
+    // Tag target buttons (Friendly / Hostile / VIP)
+    modal.querySelectorAll('.tdm-tag-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const tid = btn.dataset.target;
+            const alliance = btn.dataset.alliance;
+            const isVip = btn.dataset.vip === 'true';
+            btn.textContent = '...';
+            btn.disabled = true;
+            try {
+                // POST classification override
+                const res = await fetch(`/api/targets/${encodeURIComponent(tid)}/classify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target_id: tid,
+                        alliance: alliance,
+                        reason: isVip ? 'Tagged as VIP by operator' : `Tagged as ${alliance} by operator`,
+                    }),
+                });
+                if (res.ok) {
+                    const colors = { friendly: '#05ffa1', hostile: '#ff2a6d' };
+                    btn.textContent = isVip ? 'VIP SET' : alliance.toUpperCase();
+                    btn.style.background = isVip ? '#fcee0a' : (colors[alliance] || '#888');
+                    btn.style.color = '#0a0a0f';
+                    // Also tag in dossier if VIP
+                    if (isVip) {
+                        fetch(`/api/dossiers/${encodeURIComponent(tid)}/tags`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ tag: 'VIP' }),
+                        }).catch(() => {});
+                    }
+                } else {
+                    btn.textContent = 'FAILED';
+                    btn.style.background = '#ff2a6d';
+                    btn.style.color = '#fff';
+                }
+            } catch (_) {
+                btn.textContent = 'ERROR';
+                btn.style.background = '#ff2a6d';
+            }
+        });
+    });
+
+    // Correlated target items — click to inspect linked target
+    modal.querySelectorAll('.tdm-corr-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const corrId = item.dataset.corrTarget;
+            if (!corrId) return;
+            // Select on map and open detail modal for the correlated target
+            TritiumStore.set('map.selectedUnitId', corrId);
+            EventBus.emit('unit:selected', { id: corrId });
+            modal.remove();
+            const corrUnit = TritiumStore.units.get(corrId);
+            if (corrUnit) {
+                _openTargetDetailModal(corrId, corrUnit);
+            }
+        });
+    });
+
+    // DOSSIER button — open dossier panel with target pre-selected
+    modal.querySelectorAll('[data-action="open-dossier"]').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            const tid = btn.dataset.targetId;
+            if (window.EventBus) {
+                window.EventBus.emit('panel:request-open', { id: 'dossiers' });
+                // Emit event to load specific target in dossier panel
+                setTimeout(() => {
+                    window.EventBus.emit('dossier:load-target', { target_id: tid });
+                }, 200);
+            }
+            document.getElementById('target-detail-modal')?.remove();
+        });
+    });
+}
+
+/**
+ * Render a trail as an inline SVG mini-map.
+ */
+function _renderTrailMiniMap(trail, width, height) {
+    if (!trail || trail.length < 2) return '<div class="tdm-trail-empty">Insufficient trail data</div>';
+
+    // Get bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const pt of trail) {
+        const x = pt.x ?? pt.lng ?? 0;
+        const y = pt.y ?? pt.lat ?? 0;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+    }
+
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const pad = 10;
+    const iw = width - pad * 2;
+    const ih = height - pad * 2;
+
+    // Build polyline points
+    const points = trail.map(pt => {
+        const x = pt.x ?? pt.lng ?? 0;
+        const y = pt.y ?? pt.lat ?? 0;
+        const sx = pad + ((x - minX) / rangeX) * iw;
+        const sy = pad + ih - ((y - minY) / rangeY) * ih;
+        return `${sx.toFixed(1)},${sy.toFixed(1)}`;
+    }).join(' ');
+
+    // Last point marker
+    const lastPt = trail[trail.length - 1];
+    const lx = pad + (((lastPt.x ?? lastPt.lng ?? 0) - minX) / rangeX) * iw;
+    const ly = pad + ih - (((lastPt.y ?? lastPt.lat ?? 0) - minY) / rangeY) * ih;
+
+    return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background:#060609;border:1px solid rgba(0,240,255,0.2);border-radius:4px">
+        <polyline points="${points}" fill="none" stroke="#00f0ff" stroke-width="1.5" stroke-opacity="0.7"/>
+        <circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="4" fill="#00f0ff" stroke="#fff" stroke-width="1"/>
+        <text x="${width-4}" y="${height-4}" text-anchor="end" fill="#666" font-size="8" font-family="monospace">${trail.length} pts</text>
+    </svg>`;
 }
 
 function _onContextMenu(e) {
@@ -3092,6 +4849,230 @@ function _onDeviceOpenModal(data) {
     }
 }
 
+// -- Geofence polygon drawing -----------------------------------------
+
+function _onGeofenceDrawStart() {
+    _state.geofenceDrawing = true;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    console.log('[MAP] Geofence draw mode started — click to add vertices, double-click or Enter to finish, Escape to cancel');
+}
+
+function _geofenceAddVertex(worldPos) {
+    _state.geofenceVertices.push([worldPos.x, worldPos.y]);
+}
+
+function _geofenceFinish() {
+    const verts = _state.geofenceVertices;
+    _state.geofenceDrawing = false;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    if (verts.length >= 3) {
+        _showGeofencePrompt(verts);
+    } else {
+        EventBus.emit('toast:show', { message: 'Need at least 3 vertices for a zone', type: 'alert' });
+        EventBus.emit('geofence:drawEnd', {});
+    }
+}
+
+/**
+ * Show a cyberpunk-styled prompt dialog for geofence zone name and type.
+ * On submit, emits geofence:zoneDrawn with polygon + name + zone_type.
+ */
+function _showGeofencePrompt(polygon) {
+    // Remove any existing prompt
+    const existing = document.getElementById('geofence-prompt-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'geofence-prompt-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:#0e0e14;border:1px solid #00f0ff;border-radius:4px;padding:20px;min-width:320px;max-width:400px;font-family:var(--font-mono,"JetBrains Mono",monospace);';
+    dialog.innerHTML = `
+        <div style="color:#00f0ff;font-size:14px;font-weight:bold;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px">
+            New Geofence Zone
+        </div>
+        <div style="margin-bottom:12px">
+            <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">ZONE NAME</label>
+            <input id="geofence-prompt-name" type="text" placeholder="e.g. Perimeter Alpha"
+                style="width:100%;box-sizing:border-box;background:#1a1a2e;border:1px solid #333;color:#fff;padding:8px 10px;font-size:13px;font-family:inherit;border-radius:2px;outline:none;"
+                autofocus />
+        </div>
+        <div style="margin-bottom:16px">
+            <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">ZONE TYPE</label>
+            <div style="display:flex;gap:6px">
+                <button class="geofence-type-btn" data-type="monitored"
+                    style="flex:1;padding:8px 4px;border:1px solid #00f0ff;background:#00f0ff22;color:#00f0ff;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    MONITORED</button>
+                <button class="geofence-type-btn" data-type="restricted"
+                    style="flex:1;padding:8px 4px;border:1px solid #444;background:transparent;color:#ff2a6d;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    RESTRICTED</button>
+                <button class="geofence-type-btn" data-type="safe"
+                    style="flex:1;padding:8px 4px;border:1px solid #444;background:transparent;color:#05ffa1;font-size:11px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                    SAFE</button>
+            </div>
+        </div>
+        <div style="color:#555;font-size:10px;margin-bottom:14px">${polygon.length} vertices defined</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="geofence-prompt-cancel"
+                style="padding:8px 16px;border:1px solid #444;background:transparent;color:#888;font-size:12px;font-family:inherit;cursor:pointer;border-radius:2px">
+                CANCEL</button>
+            <button id="geofence-prompt-save"
+                style="padding:8px 16px;border:1px solid #00f0ff;background:#00f0ff22;color:#00f0ff;font-size:12px;font-family:inherit;cursor:pointer;border-radius:2px;font-weight:bold">
+                CREATE ZONE</button>
+        </div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    let selectedType = 'monitored';
+    const nameInput = dialog.querySelector('#geofence-prompt-name');
+    const typeBtns = dialog.querySelectorAll('.geofence-type-btn');
+    const saveBtn = dialog.querySelector('#geofence-prompt-save');
+    const cancelBtn = dialog.querySelector('#geofence-prompt-cancel');
+
+    // Type selection
+    typeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            selectedType = btn.dataset.type;
+            typeBtns.forEach(b => {
+                const active = b.dataset.type === selectedType;
+                const typeColors = { monitored: '#00f0ff', restricted: '#ff2a6d', safe: '#05ffa1' };
+                const c = typeColors[b.dataset.type] || '#00f0ff';
+                b.style.borderColor = active ? c : '#444';
+                b.style.background = active ? c + '22' : 'transparent';
+            });
+        });
+    });
+
+    function cleanup() { overlay.remove(); }
+
+    function submit() {
+        const name = (nameInput.value || '').trim() || 'Unnamed Zone';
+        EventBus.emit('geofence:zoneDrawn', { polygon, zone_type: selectedType, name });
+        EventBus.emit('geofence:drawEnd', {});
+        cleanup();
+        // Refresh saved zones on map after a short delay for API to process
+        setTimeout(_fetchGeofencePolygonZones, 500);
+    }
+
+    saveBtn.addEventListener('click', submit);
+    function cancel() {
+        EventBus.emit('toast:show', { message: 'Zone creation cancelled', type: 'info' });
+        EventBus.emit('geofence:drawEnd', {});
+        cleanup();
+    }
+
+    cancelBtn.addEventListener('click', cancel);
+
+    // Enter to submit, Escape to cancel
+    nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+
+    // Click outside to cancel
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) cancel();
+    });
+
+    // Focus the input
+    setTimeout(() => nameInput.focus(), 50);
+}
+
+function _geofenceCancel() {
+    _state.geofenceDrawing = false;
+    _state.geofenceVertices = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: 'Geofence drawing cancelled', type: 'info' });
+    EventBus.emit('geofence:drawEnd', {});
+}
+
+// -- Patrol waypoint drawing ------------------------------------------
+
+function _onPatrolDrawStart(data) {
+    const unitId = data?.unitId;
+    if (!unitId) return;
+    _state.patrolDrawing = true;
+    _state.patrolUnitId = unitId;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: `Click map to add patrol waypoints for ${unitId}, Enter to finish`, type: 'info' });
+}
+
+function _patrolAddWaypoint(worldPos) {
+    _state.patrolWaypoints.push({ x: worldPos.x, y: worldPos.y });
+}
+
+function _patrolFinish() {
+    const wps = _state.patrolWaypoints;
+    const unitId = _state.patrolUnitId;
+    _state.patrolDrawing = false;
+    _state.patrolUnitId = null;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    if (wps.length >= 2 && unitId) {
+        fetch('/api/amy/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'patrol', params: [unitId, ...wps.flatMap(w => [w.x, w.y])] }),
+        }).then(() => {
+            EventBus.emit('toast:show', { message: `Patrol route set: ${wps.length} waypoints`, type: 'info' });
+        }).catch(() => {
+            EventBus.emit('toast:show', { message: 'Failed to set patrol route', type: 'alert' });
+        });
+    } else {
+        EventBus.emit('toast:show', { message: 'Need at least 2 waypoints for a patrol route', type: 'alert' });
+    }
+}
+
+function _patrolCancel() {
+    _state.patrolDrawing = false;
+    _state.patrolUnitId = null;
+    _state.patrolWaypoints = [];
+    _state.canvas.style.cursor = 'crosshair';
+    EventBus.emit('toast:show', { message: 'Patrol drawing cancelled', type: 'info' });
+}
+
+// -- Drawing finish/cancel handlers -----------------------------------
+
+function _onDrawFinish() {
+    if (_state.geofenceDrawing) _geofenceFinish();
+    else if (_state.patrolDrawing) _patrolFinish();
+}
+
+function _onDrawCancel() {
+    if (_state.geofenceDrawing) _geofenceCancel();
+    else if (_state.patrolDrawing) _patrolCancel();
+}
+
+// -- Target group selection handler ------------------------------------
+
+function _onGroupSelected(data) {
+    if (!data || !data.group) {
+        _state.selectedGroup = null;
+    } else {
+        _state.selectedGroup = {
+            targets: data.targets || [],
+            name: data.name || '',
+            color: data.color || '#00f0ff',
+            lat: data.lat || null,
+            lng: data.lng || null,
+        };
+    }
+}
+
+// -- RF motion data handler -------------------------------------------
+
+function _onRfMotionUpdate(data) {
+    if (!data) return;
+    _state.rfMotionPairs = data.pairs || [];
+    _state.rfMotionZones = data.zones || [];
+    _state.rfMotionDetected = data.motionDetected || false;
+}
+
 function _onMinimapPan(data) {
     if (!data || data.x === undefined || data.y === undefined) return;
     _state.cam.targetX = data.x;
@@ -3413,6 +5394,85 @@ function _loadRoadTileImage(zoom, tx, ty, centerLat, centerLng, n, latRad) {
 }
 
 // ============================================================
+// Night mode
+// ============================================================
+
+/**
+ * Draw a semi-transparent dark overlay for night mode.
+ * Dims the map tiles and adds a warm amber tint to simulate nighttime.
+ */
+function _drawNightOverlay(ctx, cssW, cssH) {
+    // Dark overlay — dims the whole map
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = 'rgba(20, 15, 30, 0.55)';
+    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.restore();
+
+    // Warm amber vignette at edges
+    const cx = cssW / 2;
+    const cy = cssH / 2;
+    const maxR = Math.sqrt(cx * cx + cy * cy);
+    const gradient = ctx.createRadialGradient(cx, cy, maxR * 0.3, cx, cy, maxR);
+    gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    gradient.addColorStop(1, 'rgba(10, 5, 20, 0.3)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, cssW, cssH);
+}
+
+/**
+ * Check local time and update night mode state.
+ * If nightModeAuto is enabled, enables night mode between sunset and sunrise.
+ */
+function _checkNightMode() {
+    if (!_state.nightModeAuto) return;
+
+    const hour = new Date().getHours();
+    const isNight = hour >= _state._sunsetHour || hour < _state._sunriseHour;
+
+    if (isNight !== _state.nightMode) {
+        _state.nightMode = isNight;
+        console.log(`[MAP] Night mode auto-${isNight ? 'enabled' : 'disabled'} (hour=${hour})`);
+    }
+}
+
+/**
+ * Start periodic night mode checks (every 60 seconds).
+ */
+function _startNightModeCheck() {
+    _checkNightMode(); // immediate check
+    _state._nightCheckTimer = setInterval(_checkNightMode, 60000);
+}
+
+/**
+ * Stop night mode checks.
+ */
+function _stopNightModeCheck() {
+    if (_state._nightCheckTimer) {
+        clearInterval(_state._nightCheckTimer);
+        _state._nightCheckTimer = null;
+    }
+}
+
+/**
+ * Fetch sunrise/sunset times from weather API if available.
+ * Falls back to defaults (06:00 sunrise, 19:00 sunset).
+ */
+async function _fetchSunTimes() {
+    try {
+        const resp = await fetch('/api/geo/sun-times');
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.sunrise_hour !== undefined) _state._sunriseHour = data.sunrise_hour;
+            if (data.sunset_hour !== undefined) _state._sunsetHour = data.sunset_hour;
+            console.log(`[MAP] Sun times: sunrise=${_state._sunriseHour}, sunset=${_state._sunsetHour}`);
+        }
+    } catch {
+        // Use defaults — no weather API available
+    }
+}
+
+// ============================================================
 // Zones / Exports
 // ============================================================
 
@@ -3471,7 +5531,26 @@ export function toggleFog() {
  */
 export function toggleMesh() {
     _state.showMesh = !_state.showMesh;
+    if (typeof meshState !== 'undefined') meshState.visible = _state.showMesh;
     console.log(`[MAP] Mesh network ${_state.showMesh ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshNodes() {
+    _state.showMeshNodes = !_state.showMeshNodes;
+    if (typeof meshState !== 'undefined') meshState.showNodes = _state.showMeshNodes;
+    console.log(`[MAP] Mesh nodes ${_state.showMeshNodes ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshLinks() {
+    _state.showMeshLinks = !_state.showMeshLinks;
+    if (typeof meshState !== 'undefined') meshState.showLinks = _state.showMeshLinks;
+    console.log(`[MAP] Mesh links ${_state.showMeshLinks ? 'ON' : 'OFF'}`);
+}
+
+export function toggleMeshCoverage() {
+    _state.showMeshCoverage = !_state.showMeshCoverage;
+    if (typeof meshState !== 'undefined') meshState.showCoverage = _state.showMeshCoverage;
+    console.log(`[MAP] Mesh coverage ${_state.showMeshCoverage ? 'ON' : 'OFF'}`);
 }
 
 /**
@@ -3480,6 +5559,36 @@ export function toggleMesh() {
 export function toggleThoughts() {
     _state.showThoughts = !_state.showThoughts;
     console.log(`[MAP] Thought bubbles ${_state.showThoughts ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle prediction confidence cones on/off.
+ */
+export function togglePredictionCones() {
+    _state.showPredictionCones = !_state.showPredictionCones;
+    console.log(`[MAP] Prediction cones ${_state.showPredictionCones ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * Toggle night mode manually. Disables auto-detection.
+ */
+export function toggleNightMode() {
+    _state.nightModeAuto = false;
+    _state.nightMode = !_state.nightMode;
+    console.log(`[MAP] Night mode ${_state.nightMode ? 'ON' : 'OFF'} (manual)`);
+}
+
+/**
+ * Toggle automatic night mode (based on local sunrise/sunset).
+ */
+export function toggleNightModeAuto() {
+    _state.nightModeAuto = !_state.nightModeAuto;
+    if (_state.nightModeAuto) {
+        _checkNightMode();
+        console.log(`[MAP] Night mode auto-detection ON`);
+    } else {
+        console.log(`[MAP] Night mode auto-detection OFF`);
+    }
 }
 
 export function getMapState() {
@@ -3491,7 +5600,13 @@ export function getMapState() {
         showFog: _state.fogEnabled,
         fogEnabled: _state.fogEnabled,
         showMesh: _state.showMesh,
+        showMeshNodes: _state.showMeshNodes,
+        showMeshLinks: _state.showMeshLinks,
+        showMeshCoverage: _state.showMeshCoverage,
         showThoughts: _state.showThoughts,
+        showPredictionCones: _state.showPredictionCones,
+        nightMode: _state.nightMode,
+        nightModeAuto: _state.nightModeAuto,
     };
 }
 
@@ -3565,3 +5680,120 @@ function _fetchZones() {
             // Zones not available -- non-fatal
         });
 }
+
+function _fetchGeofencePolygonZones() {
+    fetch('/api/geofence/zones')
+        .then(r => {
+            if (!r.ok) return [];
+            return r.json();
+        })
+        .then(data => {
+            if (Array.isArray(data)) {
+                _state.geofencePolygonZones = data;
+            }
+        })
+        .catch(() => {
+            // Geofence zones not available -- non-fatal
+        });
+    // Also fetch occupancy counts
+    fetch('/api/geofence/occupancy')
+        .then(r => r.ok ? r.json() : {})
+        .then(data => {
+            if (data && typeof data === 'object') {
+                _state.geofenceOccupancy = data;
+            }
+        })
+        .catch(() => {});
+}
+
+// ============================================================
+// Multi-select action bar
+// ============================================================
+
+function _showMultiSelectBar() {
+    let bar = document.getElementById('multi-select-bar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'multi-select-bar';
+        bar.style.cssText = `
+            position: fixed;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 10, 15, 0.95);
+            border: 1px solid #fcee0a;
+            border-radius: 8px;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 500;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.75rem;
+            box-shadow: 0 0 20px rgba(252, 238, 10, 0.3);
+        `;
+        document.body.appendChild(bar);
+    }
+
+    const count = _state.selectedUnitIds.size;
+    bar.innerHTML = `
+        <span style="color: #fcee0a; font-weight: bold;">${count} SELECTED</span>
+        <button onclick="window._multiSelectAction('dossier')" style="background: #00f0ff; color: #0a0a0f; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem; font-weight: bold;">GROUP DOSSIER</button>
+        <button onclick="window._multiSelectAction('export')" style="background: #05ffa1; color: #0a0a0f; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem; font-weight: bold;">EXPORT</button>
+        <button onclick="window._multiSelectAction('compare')" style="background: #ff8800; color: #0a0a0f; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem; font-weight: bold;">COMPARE</button>
+        <button onclick="window._multiSelectAction('alliance')" style="background: #ff2a6d; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem; font-weight: bold;">SET ALLIANCE</button>
+        <button onclick="window._multiSelectAction('clear')" style="background: transparent; color: #888; border: 1px solid #444; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem;">CLEAR</button>
+    `;
+    bar.style.display = 'flex';
+}
+
+function _hideMultiSelectBar() {
+    const bar = document.getElementById('multi-select-bar');
+    if (bar) bar.style.display = 'none';
+}
+
+// Global handler for multi-select actions
+window._multiSelectAction = function(action) {
+    const ids = Array.from(_state.selectedUnitIds);
+    if (ids.length === 0) return;
+
+    switch (action) {
+        case 'dossier':
+            EventBus.emit('multiselect:group-dossier', { ids });
+            EventBus.emit('panel:request-open', { id: 'dossiers' });
+            break;
+        case 'export':
+            // Download selected targets as JSON
+            fetch('/api/targets')
+                .then(r => r.json())
+                .then(data => {
+                    const targets = (data.targets || []).filter(t => ids.includes(t.target_id));
+                    const blob = new Blob([JSON.stringify(targets, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `selected_targets_${ids.length}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                });
+            break;
+        case 'compare':
+            EventBus.emit('multiselect:compare', { ids });
+            EventBus.emit('panel:request-open', { id: 'target-compare' });
+            break;
+        case 'alliance': {
+            const alliance = prompt('Set alliance for selected targets:\nfriendly / hostile / neutral / unknown');
+            if (alliance && ['friendly', 'hostile', 'neutral', 'unknown'].includes(alliance.toLowerCase())) {
+                EventBus.emit('multiselect:set-alliance', { ids, alliance: alliance.toLowerCase() });
+            }
+            break;
+        }
+        case 'clear':
+            _state.selectedUnitIds.clear();
+            TritiumStore.set('map.selectedUnitId', null);
+            EventBus.emit('unit:deselected', {});
+            EventBus.emit('multiselect:changed', { ids: [], count: 0 });
+            _hideMultiSelectBar();
+            break;
+    }
+};

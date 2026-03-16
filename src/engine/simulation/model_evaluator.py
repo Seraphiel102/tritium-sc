@@ -20,6 +20,8 @@ import re
 import time
 from typing import Optional
 
+from tritium_lib.models import BenchmarkResult, BenchmarkSuite, BenchmarkUnit
+
 try:
     import requests
 except ImportError:
@@ -297,3 +299,35 @@ class ModelEvaluator:
     def get_cache(self) -> dict[str, dict]:
         """Get cached evaluation results."""
         return dict(self._cache)
+
+    def to_benchmark_suite(self) -> BenchmarkSuite:
+        """Export cached evaluation results as a BenchmarkSuite model.
+
+        Each model evaluation becomes two BenchmarkResult entries:
+        - response_time (lower is better, threshold 10s)
+        - quality_score (higher is better, threshold 0.5)
+        """
+        suite = BenchmarkSuite(
+            suite_name="model_evaluator",
+            environment={"ollama_host": self._host},
+        )
+        for model, data in self._cache.items():
+            suite.add(
+                test_name=model,
+                metric="response_time",
+                value=data.get("response_time", 999.0),
+                unit=BenchmarkUnit.SECONDS,
+                threshold=10.0,
+                higher_is_better=False,
+                metadata={"json_valid": data.get("json_valid", False)},
+            )
+            suite.add(
+                test_name=model,
+                metric="quality_score",
+                value=data.get("score", 0.0),
+                unit=BenchmarkUnit.PERCENT,
+                threshold=0.5,
+                higher_is_better=True,
+                metadata={"category": data.get("category", "unknown")},
+            )
+        return suite

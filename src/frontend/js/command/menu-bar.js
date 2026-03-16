@@ -11,14 +11,6 @@
 
 import { EventBus } from './events.js';
 
-/**
- * Get the currently selected battle scenario name.
- * Deprecated: always returns null. All missions route through MissionModal.
- * @returns {null}
- */
-export function getSelectedScenario() {
-    return null;
-}
 
 // ---------------------------------------------------------------------------
 // Menu definitions (data-driven)
@@ -64,13 +56,62 @@ function _fileMenuItems(layoutManager) {
     ];
 }
 
+// Panel categories — group all panels into logical sections
+const PANEL_CATEGORIES = {
+    'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'unified-alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks', 'annotations', 'watchlist', 'swarm-coordination', 'convoy'],
+    'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'dossier-timeline', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard', 'dwell-monitor', 'behavioral-intelligence', 'reid-matches', 'lpr', 'fusion-dashboard', 'acoustic-intelligence', 'activity-feed', 'trail-export'],
+    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'indoor-positioning', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector'],
+    'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets', 'command-history', 'federation', 'training-dashboard'],
+    'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs', 'voice-command'],
+    'Collaboration': ['operator-activity', 'operator-cursors', 'map-share', 'keyboard-macros'],
+    'Map & GIS':     ['map-layer-switcher', 'grid-overlay', 'floorplan', 'building-occupancy', 'weather-overlay', 'map-replay'],
+    'Simulation':    ['game', 'battle-stats', 'replay', 'scenarios'],
+    'System':        ['system', 'system-health', 'security-audit', 'deployment', 'testing', 'export-scheduler', 'events', 'videos', 'quick-start', 'setup-wizard'],
+};
+
 function _viewMenuItems(panelManager) {
-    const keyMap = { amy: '1', units: '2', alerts: '3', game: '4', mesh: '5', cameras: '6', search: '7', tak: '8', videos: '9', zones: '0' };
-    const items = panelManager.getRegisteredPanels().map(p => ({
-        label: p.title, shortcut: keyMap[p.id] || '', checkable: true,
-        checked: () => panelManager.isOpen(p.id),
-        action: () => panelManager.toggle(p.id),
-    }));
+    const keyMap = {
+        amy: '1', units: '2', alerts: '3', game: '4', mesh: '5',
+        cameras: '6', search: '7', tak: '8', videos: '9', zones: '0',
+        minimap: 'M', replay: 'R', sensors: 'E', 'battle-stats': 'P',
+        'unit-inspector': 'J', layers: 'L',
+    };
+    const allPanels = panelManager.getRegisteredPanels();
+    const panelMap = new Map(allPanels.map(p => [p.id, p]));
+    const categorized = new Set();
+    const items = [];
+
+    for (const [category, ids] of Object.entries(PANEL_CATEGORIES)) {
+        const catItems = [];
+        for (const id of ids) {
+            const p = panelMap.get(id);
+            if (!p) continue;
+            categorized.add(id);
+            catItems.push({
+                label: p.title, shortcut: keyMap[id] || '', checkable: true,
+                checked: () => panelManager.isOpen(id),
+                action: () => panelManager.toggle(id),
+            });
+        }
+        if (catItems.length > 0) {
+            items.push({ header: category });
+            items.push(...catItems);
+        }
+    }
+
+    // Any uncategorized panels go under "Other"
+    const uncategorized = allPanels.filter(p => !categorized.has(p.id));
+    if (uncategorized.length > 0) {
+        items.push({ header: 'Other' });
+        for (const p of uncategorized) {
+            items.push({
+                label: p.title, shortcut: keyMap[p.id] || '', checkable: true,
+                checked: () => panelManager.isOpen(p.id),
+                action: () => panelManager.toggle(p.id),
+            });
+        }
+    }
+
     items.push({ separator: true });
     items.push({ label: 'Show All', action: () => {
         for (const p of panelManager.getRegisteredPanels()) panelManager.open(p.id);
@@ -112,46 +153,26 @@ function _layoutMenuItems(layoutManager) {
 function _mapMenuItems(mapActions) {
     const s = () => mapActions.getMapState();
     return [
-        { label: 'Toggle All', action: () => mapActions.toggleAllLayers() },
+        // Layer browser opens the full panel with all 43 layers
+        { label: 'Layer Browser...', shortcut: 'L',
+          action: () => EventBus.emit('panel:request-open', { id: 'layers' }) },
+        { label: 'Toggle All Layers', action: () => mapActions.toggleAllLayers() },
         { separator: true },
-        // Base map layers
+        // Quick toggles for most-used layers
         { label: 'Satellite', shortcut: 'I', checkable: true, checked: () => s().showSatellite, action: () => mapActions.toggleSatellite() },
-        { label: 'Roads', shortcut: 'G', checkable: true, checked: () => s().showRoads, action: () => mapActions.toggleRoads() },
         { label: 'Buildings', shortcut: 'K', checkable: true, checked: () => s().showBuildings, action: () => mapActions.toggleBuildings() },
-        { label: 'Waterways', checkable: true, checked: () => s().showWaterways, action: () => mapActions.toggleWaterways() },
-        { label: 'Parks', checkable: true, checked: () => s().showParks, action: () => mapActions.toggleParks() },
+        { label: 'Roads', shortcut: 'G', checkable: true, checked: () => s().showRoads, action: () => mapActions.toggleRoads() },
         { label: 'Grid', checkable: true, checked: () => s().showGrid, action: () => mapActions.toggleGrid() },
-        { separator: true },
-        // Unit layers
         { label: 'Unit Markers', shortcut: 'U', checkable: true, checked: () => s().showUnits, action: () => mapActions.toggleUnits() },
-        { label: '3D Models', checkable: true, checked: () => s().showModels3d, action: () => mapActions.toggleModels() },
-        { label: 'Labels', checkable: true, checked: () => s().showLabels, action: () => mapActions.toggleLabels() },
-        { label: 'Mesh Network', checkable: true, checked: () => s().showMesh, action: () => mapActions.toggleMesh() },
-        { label: 'Thought Bubbles', checkable: true, checked: () => s().showThoughts, action: () => mapActions.toggleThoughts() },
+        { label: 'GIS Intelligence', checkable: true, checked: () => s().showGeoLayers, action: () => mapActions.toggleGeoLayers() },
         { separator: true },
-        // Combat FX layers
-        { label: 'Tracers', checkable: true, checked: () => s().showTracers, action: () => mapActions.toggleTracers() },
-        { label: 'Explosions', checkable: true, checked: () => s().showExplosions, action: () => mapActions.toggleExplosions() },
-        { label: 'Particles', checkable: true, checked: () => s().showParticles, action: () => mapActions.toggleParticles() },
-        { label: 'Hit Flashes', checkable: true, checked: () => s().showHitFlashes, action: () => mapActions.toggleHitFlashes() },
-        { label: 'Floating Text', checkable: true, checked: () => s().showFloatingText, action: () => mapActions.toggleFloatingText() },
-        { separator: true },
-        // Overlay layers
-        { label: 'Kill Feed', checkable: true, checked: () => s().showKillFeed, action: () => mapActions.toggleKillFeed() },
-        { label: 'Screen FX', checkable: true, checked: () => s().showScreenFx, action: () => mapActions.toggleScreenFx() },
-        { label: 'Banners', checkable: true, checked: () => s().showBanners, action: () => mapActions.toggleBanners() },
-        { label: 'Layer HUD', checkable: true, checked: () => s().showLayerHud, action: () => mapActions.toggleLayerHud() },
-        { separator: true },
-        // Unit decorations
-        { label: 'Health Bars', checkable: true, checked: () => s().showHealthBars, action: () => mapActions.toggleHealthBars() },
-        { label: 'Selection FX', checkable: true, checked: () => s().showSelectionFx, action: () => mapActions.toggleSelectionFx() },
-        { separator: true },
-        // Environment
-        { label: 'Fog', checkable: true, checked: () => s().showFog, action: () => mapActions.toggleFog() },
+        // View
+        { label: 'Fog of War', checkable: true, checked: () => s().showFog, action: () => mapActions.toggleFog() },
+        { label: 'Prediction Cones', checkable: true, checked: () => s().showPredictionCones, action: () => mapActions.togglePredictionCones() },
         { label: 'Terrain', shortcut: 'H', checkable: true, checked: () => s().showTerrain, action: () => mapActions.toggleTerrain() },
         { label: '3D Mode', checkable: true, checked: () => s().tiltMode === 'tilted', action: () => mapActions.toggleTilt() },
         { separator: true },
-        // Camera controls
+        // Camera
         { label: 'Center on Action', shortcut: 'F', action: () => mapActions.centerOnAction() },
         { label: 'Reset Camera', action: () => mapActions.resetCamera() },
         { label: 'Zoom In', shortcut: ']', action: () => mapActions.zoomIn() },
@@ -161,10 +182,34 @@ function _mapMenuItems(mapActions) {
 
 function _gameMenuItems(mapActions) {
     return [
-        { label: 'New Mission', shortcut: 'B',
+        { label: 'Start Demo', action: async () => {
+            try {
+                const res = await fetch('/api/demo/start', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    EventBus.emit('toast:show', { message: 'Demo mode started', type: 'info' });
+                } else {
+                    EventBus.emit('toast:show', { message: data.error || 'Failed to start demo', type: 'alert' });
+                }
+            } catch (e) {
+                EventBus.emit('toast:show', { message: 'Demo start failed: ' + e.message, type: 'alert' });
+            }
+        }},
+        { label: 'Stop Demo', action: async () => {
+            try {
+                const res = await fetch('/api/demo/stop', { method: 'POST' });
+                if (res.ok) {
+                    EventBus.emit('toast:show', { message: 'Demo mode stopped', type: 'info' });
+                }
+            } catch (e) {
+                EventBus.emit('toast:show', { message: 'Demo stop failed', type: 'alert' });
+            }
+        }},
+        { separator: true },
+        { label: 'Start Battle', shortcut: 'B',
           action: () => { if (mapActions.beginWar) mapActions.beginWar(); } },
         { separator: true },
-        { label: 'Reset Game', shortcut: 'R',
+        { label: 'Reset Game',
           action: () => { if (mapActions.resetGame) mapActions.resetGame(); } },
     ];
 }
@@ -175,6 +220,25 @@ function _helpMenuItems() {
             const overlay = document.getElementById('help-overlay');
             if (overlay) overlay.hidden = !overlay.hidden;
         }},
+        { type: 'separator' },
+        { label: 'Conductor Dashboard', action: () => {
+            window.open(`${window.location.protocol}//${window.location.hostname}:9000`, '_blank');
+        }},
+        { label: 'Submit Feedback...', action: () => {
+            const text = prompt('Enter feedback or concern for the development system:');
+            if (text) {
+                fetch(`${window.location.protocol}//${window.location.hostname}:9000/api/goals`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                }).then(() => {
+                    EventBus.emit('toast:show', { message: 'Feedback submitted to Conductor', type: 'info' });
+                }).catch(() => {
+                    EventBus.emit('toast:show', { message: 'Conductor not available (port 9000)', type: 'alert' });
+                });
+            }
+        }},
+        { type: 'separator' },
         { label: 'About TRITIUM-SC', action: () => {
             EventBus.emit('toast:show', { message: 'TRITIUM-SC v0.1.0 -- Tactical Battlefield Management', type: 'info' });
         }},
@@ -206,12 +270,12 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
     let hoverMode = false; // hover-switch enabled after first click
 
     const menus = [
-        { label: 'FILE',   getItems: () => _fileMenuItems(layoutManager) },
-        { label: 'VIEW',   getItems: () => _viewMenuItems(panelManager) },
-        { label: 'LAYOUT', getItems: () => _layoutMenuItems(layoutManager) },
-        { label: 'MAP',    getItems: () => _mapMenuItems(mapActions) },
-        { label: 'GAME',   getItems: () => _gameMenuItems(mapActions) },
-        { label: 'HELP',   getItems: () => _helpMenuItems() },
+        { label: 'FILE',   tip: 'Save and export workspace layouts', getItems: () => _fileMenuItems(layoutManager) },
+        { label: 'VIEW',   tip: 'Show or hide panels (Amy, Units, Alerts, etc.)', getItems: () => _viewMenuItems(panelManager) },
+        { label: 'LAYOUT', tip: 'Switch between saved workspace layouts', getItems: () => _layoutMenuItems(layoutManager) },
+        { label: 'MAP',    tip: 'Map layers, camera, and display settings', getItems: () => _mapMenuItems(mapActions) },
+        { label: 'GAME',   tip: 'Start battles and manage game state', getItems: () => _gameMenuItems(mapActions) },
+        { label: 'HELP',   tip: 'Keyboard shortcuts and about info', getItems: () => _helpMenuItems() },
     ];
 
     // Build menu triggers
@@ -223,6 +287,7 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
         const trigger = document.createElement('button');
         trigger.className = 'menu-trigger';
         trigger.textContent = menuDef.label;
+        if (menuDef.tip) trigger.title = menuDef.tip;
 
         const dropdown = document.createElement('div');
         dropdown.className = 'menu-dropdown';
@@ -244,19 +309,56 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
         left.appendChild(wrap);
     }
 
-    // Right side: quick-access panel toggle buttons
+    // Panel search input — filters the quick-access buttons as you type
+    const searchInput = document.createElement('input');
+    searchInput.className = 'command-bar-search';
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search panels...';
+    searchInput.maxLength = 32;
+    searchInput.title = 'Filter panels by name (Ctrl+/)';
+    searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        for (const [id, btn] of panelButtons) {
+            const def = panelManager._registry.get(id);
+            const title = def ? def.title.toLowerCase() : id;
+            btn.style.display = (!q || title.includes(q) || id.includes(q)) ? '' : 'none';
+        }
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            searchInput.value = '';
+            searchInput.dispatchEvent(new Event('input'));
+            searchInput.blur();
+        } else if (e.key === 'Enter') {
+            // Open the first visible panel
+            const q = searchInput.value.trim().toLowerCase();
+            if (q) {
+                for (const [id, btn] of panelButtons) {
+                    if (btn.style.display !== 'none') {
+                        panelManager.toggle(id);
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input'));
+                        searchInput.blur();
+                        break;
+                    }
+                }
+            }
+        }
+        e.stopPropagation();
+    });
+    right.appendChild(searchInput);
+
+    // Panel buttons map — only populated for pinned panels (not all 90+).
+    // Use VIEW menu to access panels by category instead.
     const panelButtons = new Map();
-    for (const p of panelManager.getRegisteredPanels()) {
-        const btn = document.createElement('button');
-        btn.className = 'command-bar-btn';
-        if (p.isOpen) btn.classList.add('active');
-        btn.dataset.panel = p.id;
-        btn.textContent = _shortLabel(p.title);
-        btn.title = `Toggle ${p.title} (${_panelKey(p.id)})`;
-        btn.addEventListener('click', () => panelManager.toggle(p.id));
-        right.appendChild(btn);
-        panelButtons.set(p.id, btn);
-    }
+
+    // Ctrl+/ shortcut to focus panel search
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
 
     // Hidden save input (activated by Save Layout... or Ctrl+Shift+S)
     const saveInput = document.createElement('input');
@@ -353,6 +455,13 @@ function _buildDropdown(dropdown, items, barEl, layoutManager, closeAll) {
             dropdown.appendChild(sep);
             continue;
         }
+        if (item.header) {
+            const hdr = document.createElement('div');
+            hdr.className = 'menu-category-header';
+            hdr.textContent = item.header;
+            dropdown.appendChild(hdr);
+            continue;
+        }
 
         const row = document.createElement('div');
         row.className = 'menu-item';
@@ -424,6 +533,11 @@ function _shortLabel(title) {
 }
 
 function _panelKey(id) {
-    const map = { amy: '1', units: '2', alerts: '3', game: '4', mesh: '5', cameras: '6', search: '7', tak: '8', videos: '9', zones: '0' };
+    const map = {
+        amy: '1', units: '2', alerts: '3', game: '4', mesh: '5',
+        cameras: '6', search: '7', tak: '8', videos: '9', zones: '0',
+        minimap: 'M', replay: 'R', sensors: 'E', 'battle-stats': 'P',
+        'unit-inspector': 'J', layers: 'L',
+    };
     return map[id] || '';
 }

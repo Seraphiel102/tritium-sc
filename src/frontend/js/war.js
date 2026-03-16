@@ -104,6 +104,11 @@ const warState = {
     // Last group key press (for double-tap center)
     _lastGroupKey: null,
     _lastGroupTime: 0,
+    // Measurement tool state
+    measuring: false,
+    measureStart: null,   // { x, y } in world coords
+    measureEnd: null,     // { x, y } in world coords (live cursor)
+    measurements: [],     // persisted lines: [{ start, end, distance }]
 };
 
 // Alliance colors
@@ -497,6 +502,7 @@ function render() {
         warCombatDrawEffects(ctx, worldToScreen, canvas.width, canvas.height);
     }
     drawBoxSelect(ctx);
+    drawMeasurements(ctx);
     drawPlacingGhost(ctx);
     // Editor overlays (FOV cones, ghost, selection) — drawn over targets
     if (typeof warEditorDraw === 'function') warEditorDraw(ctx);
@@ -673,6 +679,126 @@ function drawTarget(ctx, tid, t) {
         ctx.setLineDash([]);
     }
 
+    // BLE device: cyan ring with bluetooth indicator
+    const tAssetType = (t.asset_type || t.type || '').toLowerCase();
+    if (tAssetType === 'ble_device' || tAssetType === 'ble') {
+        const conf = t.confidence !== undefined ? t.confidence : 1.0;
+        ctx.globalAlpha = conf < 0.3 ? 0.3 : (conf < 0.6 ? 0.6 : 1.0);
+        const bleColor = '#00f0ff';
+        // Ring
+        ctx.strokeStyle = bleColor;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.8, 0, Math.PI * 2);
+        ctx.stroke();
+        // Center dot
+        ctx.fillStyle = bleColor;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Bluetooth rune
+        const bs = radius * 0.5;
+        ctx.strokeStyle = bleColor;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - bs);
+        ctx.lineTo(sp.x, sp.y + bs);
+        ctx.moveTo(sp.x - bs * 0.4, sp.y + bs * 0.55);
+        ctx.lineTo(sp.x + bs * 0.4, sp.y);
+        ctx.lineTo(sp.x - bs * 0.4, sp.y - bs * 0.55);
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+    } else if (tAssetType === 'mesh_radio' || tAssetType === 'meshtastic') {
+        const meshColor = '#05ffa1';
+        // Center dot
+        ctx.fillStyle = meshColor;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        // Radio wave arcs
+        ctx.strokeStyle = meshColor;
+        ctx.lineWidth = 1.2;
+        for (let i = 1; i <= 2; i++) {
+            const arcR = radius * (0.5 + i * 0.35);
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, arcR, -Math.PI / 4, Math.PI / 4);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, arcR, Math.PI - Math.PI / 4, Math.PI + Math.PI / 4);
+            ctx.stroke();
+        }
+    } else if (tAssetType === 'rf_motion') {
+        // RF motion: pulsing yellow concentric rings
+        const rfNow = performance.now();
+        const rfPulse = 0.4 + 0.6 * Math.abs(Math.sin(rfNow * 0.004));
+        const rfColor = '#fcee0a';
+        // Outer pulsing ring
+        ctx.strokeStyle = `rgba(252, 238, 10, ${rfPulse * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * (1.2 + rfPulse * 0.4), 0, Math.PI * 2);
+        ctx.stroke();
+        // Middle ring
+        ctx.strokeStyle = `rgba(252, 238, 10, ${rfPulse * 0.4})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.8, 0, Math.PI * 2);
+        ctx.stroke();
+        // Center dot
+        ctx.fillStyle = rfColor;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, radius * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Motion wave arcs
+        const wavePhase = (rfNow * 0.003) % (Math.PI * 2);
+        ctx.strokeStyle = `rgba(252, 238, 10, ${0.3 * rfPulse})`;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 3; i++) {
+            const waveR = radius * (1.8 + i * 0.5) * rfPulse;
+            const angleOff = wavePhase + i * (Math.PI * 2 / 3);
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, waveR, angleOff, angleOff + Math.PI / 3);
+            ctx.stroke();
+        }
+    } else if (tAssetType === 'camera_detection' || tAssetType === 'detection') {
+        // Camera detection: magenta diamond (hostile) or green circle (friendly)
+        if (alliance === 'hostile') {
+            const cdNow = performance.now();
+            const cdPulse = 0.5 + 0.5 * Math.sin(cdNow * 0.005);
+            ctx.fillStyle = `rgba(255, 42, 109, ${cdPulse * 0.25})`;
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y - radius * 1.3);
+            ctx.lineTo(sp.x + radius * 1.3, sp.y);
+            ctx.lineTo(sp.x, sp.y + radius * 1.3);
+            ctx.lineTo(sp.x - radius * 1.3, sp.y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#ff2a6d';
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y - radius);
+            ctx.lineTo(sp.x + radius, sp.y);
+            ctx.lineTo(sp.x, sp.y + radius);
+            ctx.lineTo(sp.x - radius, sp.y);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, radius * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // Eye icon
+        const eyeR = radius * 0.35;
+        ctx.strokeStyle = '#0a0a0f';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.ellipse(sp.x, sp.y, eyeR * 1.4, eyeR * 0.7, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#0a0a0f';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, eyeR * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+    } else
     // Use improved combat shapes if available
     if (typeof warCombatDrawTargetShape === 'function') {
         warCombatDrawTargetShape(ctx, sp, radius, t, alliance, warState.cam.zoom);
@@ -754,6 +880,42 @@ function drawTarget(ctx, tid, t) {
             ctx.textAlign = 'center';
             ctx.fillText(threat.threat_level.toUpperCase(), sp.x, sp.y + radius + 18);
         }
+    }
+
+    // Fusion indicator for correlated multi-source targets
+    const sourceCount = t.source_count || (t.sources ? t.sources.length : 0);
+    if (sourceCount >= 2) {
+        const fusionR = (radius + 4 + sourceCount * 2);
+        const fusionNow = performance.now();
+        const fusionRot = fusionNow * 0.0008;
+        // Rotating dashed ring
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.lineDashOffset = -fusionRot * 50;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, fusionR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Source count badge (top-right)
+        const badgeX = sp.x + fusionR * 0.7;
+        const badgeY = sp.y - fusionR * 0.7;
+        const badgeR = 6;
+        ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+        ctx.beginPath();
+        ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#00f0ff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#00f0ff';
+        ctx.font = `bold 9px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(sourceCount), badgeX, badgeY);
+        ctx.textBaseline = 'alphabetic';
     }
 
     // Label
@@ -881,6 +1043,72 @@ function drawBoxSelect(ctx) {
 
 function drawPlacingGhost(ctx) {
     // Ghost rendering handled by war-editor.js _drawGhost() via warEditorDraw(ctx)
+}
+
+function drawMeasurements(ctx) {
+    // Draw all persisted measurement lines
+    for (const m of warState.measurements) {
+        _drawMeasureLine(ctx, m.start, m.end, m.distance, 'rgba(252, 238, 10, 0.7)');
+    }
+    // Draw active measurement being drawn
+    if (warState.measuring && warState.measureStart && warState.measureEnd) {
+        const dx = warState.measureEnd.x - warState.measureStart.x;
+        const dy = warState.measureEnd.y - warState.measureStart.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        _drawMeasureLine(ctx, warState.measureStart, warState.measureEnd, dist, '#fcee0a');
+    }
+}
+
+function _drawMeasureLine(ctx, start, end, distance, color) {
+    const s1 = worldToScreen(start.x, start.y);
+    const s2 = worldToScreen(end.x, end.y);
+
+    // Line
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.moveTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // End markers
+    const markerR = 4;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(s1.x, s1.y, markerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(s2.x, s2.y, markerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Distance label at midpoint
+    const mx = (s1.x + s2.x) / 2;
+    const my = (s1.y + s2.y) / 2;
+    let label;
+    if (distance >= 1000) {
+        label = (distance / 1000).toFixed(2) + ' km';
+    } else {
+        label = distance.toFixed(1) + ' m';
+    }
+
+    ctx.font = '12px monospace';
+    const tw = ctx.measureText(label).width;
+    // Background
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.85)';
+    ctx.fillRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
+    // Border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
+    // Text
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, mx, my);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
 }
 
 function drawMinimap(ctx) {
@@ -1144,6 +1372,30 @@ function onCanvasMouseDown(e) {
     if (e.button === 0) {
         // Left click
 
+        // Measurement tool: first click sets start, second click sets end
+        if (warState.measuring) {
+            const wp = screenToWorld(sx, sy);
+            if (!warState.measureStart) {
+                warState.measureStart = wp;
+                warState.measureEnd = wp;
+            } else {
+                // Complete measurement
+                const dx = wp.x - warState.measureStart.x;
+                const dy = wp.y - warState.measureStart.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                warState.measurements.push({
+                    start: warState.measureStart,
+                    end: wp,
+                    distance: dist,
+                });
+                let label = dist >= 1000 ? (dist / 1000).toFixed(2) + ' km' : dist.toFixed(1) + ' m';
+                warAddAlert('Measured: ' + label, 'info');
+                warState.measureStart = null;
+                warState.measureEnd = null;
+            }
+            return;
+        }
+
         // Enhanced minimap click-to-pan (bottom-right, via war-fog.js)
         if (!warState.use3D && typeof fogMinimapHitTest === 'function') {
             const mmHit = fogMinimapHitTest(sx, sy, warState.canvas.width, warState.canvas.height, warState.mapMin, warState.mapMax);
@@ -1231,6 +1483,11 @@ function onCanvasMouseMove(e) {
         warState.boxSelect.endX = sx;
         warState.boxSelect.endY = sy;
         return;
+    }
+
+    // Live-update measurement end point
+    if (warState.measuring && warState.measureStart) {
+        warState.measureEnd = screenToWorld(sx, sy);
     }
 
     // Editor hover (placed asset overlays)
@@ -1392,6 +1649,19 @@ function warKeyHandler(e) {
 
     switch (e.key) {
         case 'Escape':
+            // Cancel active measurement or clear measurement mode
+            if (warState.measuring) {
+                if (warState.measureStart) {
+                    // Cancel current in-progress measurement
+                    warState.measureStart = null;
+                    warState.measureEnd = null;
+                } else {
+                    // Exit measurement mode entirely
+                    warState.measuring = false;
+                    warAddAlert('Measure: OFF', 'info');
+                }
+                break;
+            }
             // Editor handles ESC for placement cancel via warEditorKey()
             warState.selectedTargets = [];
             updateUnitInfo();
@@ -1415,6 +1685,11 @@ function warKeyHandler(e) {
             centerOnSelected();
             break;
         case 'Delete':
+            if (warState.measuring && warState.measurements.length > 0) {
+                warState.measurements = [];
+                warAddAlert('Measurements cleared', 'info');
+                break;
+            }
             if (warState.mode === 'setup') {
                 removeSelectedSetup();
             }
@@ -1455,6 +1730,20 @@ function warKeyHandler(e) {
                 }
             }
             break;
+        case 'x':
+        case 'X':
+            // Toggle measurement tool
+            warState.measuring = !warState.measuring;
+            if (!warState.measuring) {
+                warState.measureStart = null;
+                warState.measureEnd = null;
+            }
+            warAddAlert('Measure: ' + (warState.measuring ? 'ON (click two points)' : 'OFF'), 'info');
+            // Update cursor
+            if (warState._eventCanvas) {
+                warState._eventCanvas.style.cursor = warState.measuring ? 'crosshair' : 'default';
+            }
+            break;
         case 'n':
         case 'N':
             // Toggle minimap
@@ -1462,6 +1751,11 @@ function warKeyHandler(e) {
                 fogState.minimapEnabled = !fogState.minimapEnabled;
                 warAddAlert('Minimap: ' + (fogState.minimapEnabled ? 'ON' : 'OFF'), 'info');
             }
+            break;
+        case 'p':
+        case 'P':
+            // Capture tactical map as PNG screenshot
+            captureMapSnapshot();
             break;
         case '1': case '2': case '3': case '4': case '5':
         case '6': case '7': case '8': case '9':
@@ -2010,7 +2304,19 @@ function warHandleEliminationStreak(data) {
 
 function warHandleGameOver(data) {
     if (typeof warHudShowGameOver === 'function') {
-        warHudShowGameOver(data.result, data.final_score, data.waves_completed, data.total_eliminations || data.total_kills);
+        // Backend sends 'wave' (singular); support both for resilience
+        var wavesCompleted = data.waves_completed || data.waves || data.wave || 0;
+        var modeData = {
+            game_mode_type: data.game_mode_type,
+            reason: data.reason,
+            de_escalation_score: data.de_escalation_score,
+            civilian_harm_count: data.civilian_harm_count,
+            civilian_harm_limit: data.civilian_harm_limit,
+            weighted_total_score: data.weighted_total_score,
+            infrastructure_health: data.infrastructure_health,
+            infrastructure_max: data.infrastructure_max
+        };
+        warHudShowGameOver(data.result, data.final_score || data.score, wavesCompleted, data.total_eliminations || data.total_kills, modeData);
     }
 }
 
@@ -2498,6 +2804,32 @@ function _stopPipFeed() {
 }
 
 // ============================================================
+// Map snapshot (P key)
+// ============================================================
+
+function captureMapSnapshot() {
+    const canvas = warState.canvas;
+    if (!canvas) {
+        if (typeof warAddAlert === 'function') warAddAlert('No canvas to capture', 'warning');
+        return;
+    }
+    try {
+        const dataUrl = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        link.download = `tritium-map-${ts}.png`;
+        link.href = dataUrl;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        warAddAlert('Map snapshot saved', 'info');
+    } catch (err) {
+        console.error('[WAR] Map snapshot failed:', err);
+        warAddAlert('Snapshot failed: ' + err.message, 'warning');
+    }
+}
+
+// ============================================================
 // Expose globally
 // ============================================================
 
@@ -2533,8 +2865,11 @@ window.updateUnitInfo = updateUnitInfo;
 // Address bar + mode selector
 window.warLoadAddress = warLoadAddress;
 window.warSetSimMode = warSetSimMode;
+window.captureMapSnapshot = captureMapSnapshot;
 window.warHandleModeChange = warHandleModeChange;
 // Audio + PIP controls
 window.warToggleMute = warToggleMute;
 window.warSetVolume = warSetVolume;
 window.warTogglePip = warTogglePip;
+// Measurement tool
+window.drawMeasurements = drawMeasurements;
