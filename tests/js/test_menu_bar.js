@@ -232,6 +232,9 @@ const sandbox = {
     window: {},
     fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
     performance: { now: () => Date.now() },
+    // Stubs for adsb-overlay.js functions used in menu-bar.js
+    isAdsbOverlayActive: () => false,
+    toggleAdsbOverlay: () => {},
 };
 
 const ctx = vm.createContext(sandbox);
