@@ -12,7 +12,7 @@ import tempfile
 import os
 
 
-def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None) -> APIRouter:
+def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None, rtl433=None) -> APIRouter:
     """Create FastAPI router for HackRF addon endpoints.
 
     Args:
@@ -456,5 +456,60 @@ def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None
             "bands": len(continuous_scanner.bands),
             "band_names": [b.name for b in continuous_scanner.bands],
         }
+
+    # ── rtl_433 Device Decoder ─────────────────────────────────
+
+    @router.post("/rtl433/start")
+    async def rtl433_start(body: dict = None):
+        """Start rtl_433 ISM band device monitoring.
+
+        Decodes 200+ device protocols: TPMS, weather stations, remotes, etc.
+
+        Body: {
+            "freq_hz": 315000000 (default US TPMS),
+            "protocols": [59, 60] (optional — specific protocol numbers)
+        }
+        """
+        if rtl433 is None:
+            return {"error": "rtl_433 wrapper not available"}
+        body = body or {}
+        freq = int(body.get("freq_hz", 315000000))
+        protocols = body.get("protocols")
+        return await rtl433.start_monitoring(freq_hz=freq, protocols=protocols)
+
+    @router.post("/rtl433/stop")
+    async def rtl433_stop():
+        """Stop rtl_433 monitoring."""
+        if rtl433 is None:
+            return {"error": "rtl_433 wrapper not available"}
+        return await rtl433.stop_monitoring()
+
+    @router.get("/rtl433/events")
+    async def rtl433_events(limit: int = 50):
+        """Get recent decoded device events."""
+        if rtl433 is None:
+            return {"events": [], "error": "not available"}
+        return {"events": rtl433.get_events(limit=limit)}
+
+    @router.get("/rtl433/devices")
+    async def rtl433_devices():
+        """Get all unique devices detected by rtl_433."""
+        if rtl433 is None:
+            return {"devices": [], "error": "not available"}
+        return {"devices": rtl433.get_devices()}
+
+    @router.get("/rtl433/tpms")
+    async def rtl433_tpms():
+        """Get detected TPMS tire pressure sensors."""
+        if rtl433 is None:
+            return {"sensors": [], "error": "not available"}
+        return {"sensors": rtl433.get_tpms_sensors()}
+
+    @router.get("/rtl433/stats")
+    async def rtl433_stats():
+        """Get rtl_433 monitoring statistics."""
+        if rtl433 is None:
+            return {"error": "not available"}
+        return rtl433.get_stats()
 
     return router

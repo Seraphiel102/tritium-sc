@@ -15,6 +15,7 @@ from .receiver import FMReceiver
 from .signal_db import SignalDatabase
 from .router import create_router
 from .decoders import FMRadioDecoder, TPMSDecoder, ISMBandMonitor
+from .decoders.rtl433_wrapper import RTL433Wrapper
 from .continuous_scan import ContinuousScanner
 
 
@@ -41,6 +42,7 @@ class HackRFAddon(SensorAddon):
         self.tpms_decoder = TPMSDecoder()
         self.ism_monitor = ISMBandMonitor()
         self.continuous_scanner = ContinuousScanner(self.spectrum, self.signal_db)
+        self.rtl433 = RTL433Wrapper()
         self._poll_task = None
 
     async def register(self, app):
@@ -64,6 +66,7 @@ class HackRFAddon(SensorAddon):
             tpms_decoder=self.tpms_decoder,
             ism_monitor=self.ism_monitor,
             continuous_scanner=self.continuous_scanner,
+            rtl433=self.rtl433,
         )
         if hasattr(app, 'include_router'):
             app.include_router(router, prefix="/api/addons/hackrf", tags=["hackrf"])
@@ -75,6 +78,8 @@ class HackRFAddon(SensorAddon):
 
     async def unregister(self, app):
         # Stop all running operations
+        if self.rtl433.is_running:
+            await self.rtl433.stop_monitoring()
         if self.continuous_scanner.is_running:
             await self.continuous_scanner.stop()
         if self.spectrum.is_running:
