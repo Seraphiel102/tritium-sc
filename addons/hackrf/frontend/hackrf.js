@@ -244,6 +244,7 @@ export const HackRFPanelDef = {
                         const specCanvas = body.querySelector('[data-bind="spectrum-canvas"]');
                         const wfCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
                         const peakList = body.querySelector('[data-bind="peak-list"]');
+                        console.log(`[HRF] Draw spectrum: canvas=${!!specCanvas}, freqs=${sweepData?.freqs?.length}, powers=${sweepData?.powers?.length}`);
                         if (specCanvas) _drawSpectrum(specCanvas, sweepData);
                         if (wfCanvas) _drawWaterfall(wfCanvas, waterfallHistory);
                         if (peakList) _renderPeaks(peakList, sweepData);
@@ -279,6 +280,10 @@ export const HackRFPanelDef = {
                     sweepRunning = true;
                     _logCommand(`Sweep running: ${startMhz}-${endMhz} MHz`);
                     renderBody();
+                    // Force immediate data fetch after a short delay
+                    setTimeout(() => fetchSweepData(), 1000);
+                    setTimeout(() => fetchSweepData(), 2000);
+                    setTimeout(() => fetchSweepData(), 3000);
                 } else {
                     _logCommand(`Sweep start failed: HTTP ${r.status}`);
                 }
