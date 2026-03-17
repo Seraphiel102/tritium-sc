@@ -78,6 +78,12 @@ export const HackRFPanelDef = {
             </div>
             <div class="hrf-tabs">${tabHtml}</div>
             <div class="hrf-body" data-bind="body"></div>
+            <div class="hrf-status-bar" data-bind="status-bar">
+                <span class="hrf-status-activity" data-bind="activity">IDLE</span>
+                <span class="hrf-status-detail" data-bind="detail"></span>
+                <span style="flex:1"></span>
+                <span class="hrf-status-stats" data-bind="stats"></span>
+            </div>
         `;
 
         return el;
@@ -90,6 +96,10 @@ export const HackRFPanelDef = {
         const connFw = bodyEl.querySelector('[data-bind="conn-fw"]');
         const tabContainer = bodyEl.querySelector('.hrf-tabs');
         const body = bodyEl.querySelector('[data-bind="body"]');
+        const statusActivity = bodyEl.querySelector('[data-bind="activity"]');
+        const statusDetail = bodyEl.querySelector('[data-bind="detail"]');
+        const statusStats = bodyEl.querySelector('[data-bind="stats"]');
+        const commandLog = [];  // Recent commands/events for status bar
 
         let activeTab = 'radio';
         let connected = false;
@@ -146,6 +156,43 @@ export const HackRFPanelDef = {
             connFw.textContent = connected && deviceInfo.firmware_version ? 'FW ' + _esc(deviceInfo.firmware_version) : '';
         }
 
+        // ── Status bar update ────────────────────────────────────
+        function _updateStatusBar() {
+            if (!statusActivity) return;
+            const sweep = deviceStatus.sweep || {};
+            const recv = deviceStatus.receiver || {};
+
+            if (sweepRunning || sweep.running) {
+                statusActivity.textContent = 'SWEEPING';
+                statusActivity.className = 'hrf-status-activity sweep';
+                const freq = `${sweep.freq_start_mhz || '?'}-${sweep.freq_end_mhz || '?'} MHz`;
+                statusDetail.textContent = `${freq} | bin ${(sweep.bin_width || 0) / 1000}kHz | ${sweep.sweep_count || 0} sweeps`;
+                statusStats.textContent = `${(sweep.measurement_count || 0).toLocaleString()} measurements`;
+            } else if (recv.running) {
+                statusActivity.textContent = 'RECEIVING';
+                statusActivity.className = 'hrf-status-activity sweep';
+                statusDetail.textContent = `${recv.freq_mhz || '?'} MHz | ${recv.sample_rate / 1e6 || '?'} Msps`;
+                statusStats.textContent = `LNA:${recv.lna_gain}dB VGA:${recv.vga_gain}dB`;
+            } else if (connected) {
+                statusActivity.textContent = 'IDLE';
+                statusActivity.className = 'hrf-status-activity idle';
+                statusDetail.textContent = commandLog.length > 0 ? commandLog[commandLog.length - 1] : 'Ready — select a preset or start a sweep';
+                statusStats.textContent = deviceInfo.serial ? `SN:${deviceInfo.serial.slice(-8)}` : '';
+            } else {
+                statusActivity.textContent = 'OFFLINE';
+                statusActivity.className = 'hrf-status-activity error';
+                statusDetail.textContent = 'HackRF not detected';
+                statusStats.textContent = '';
+            }
+        }
+
+        function _logCommand(msg) {
+            const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+            commandLog.push(`[${ts}] ${msg}`);
+            if (commandLog.length > 50) commandLog.shift();
+            _updateStatusBar();
+        }
+
         // ── Data fetching ──────────────────────────────────────────
         async function fetchStatus() {
             try {
@@ -154,6 +201,7 @@ export const HackRFPanelDef = {
                     const d = await r.json();
                     deviceStatus = d;
                     updateConnection(null, d);
+                    _updateStatusBar();
                 }
             } catch (_) { /* network error */ }
         }
@@ -179,7 +227,10 @@ export const HackRFPanelDef = {
                     const freqs = rawData.map(p => p.freq_hz || p.freq || 0);
                     const powers = rawData.map(p => p.power_dbm || p.power || -100);
                     sweepData = { freqs, powers, count: rawData.length, status: d.status || {} };
-                    sweepRunning = (d.status && d.status.running) || d.running || false;
+                    // Trust data presence over status flag — backend status can lag
+                    const statusRunning = (d.status && d.status.running) || d.running || false;
+                    const hasNewData = rawData.length > 0;
+                    sweepRunning = statusRunning || hasNewData;
                     if (d.signals) signals = d.signals;
                     // Push new row into waterfall history
                     if (powers.length > 0) {
@@ -217,6 +268,7 @@ export const HackRFPanelDef = {
 
         // ── Actions ────────────────────────────────────────────────
         async function startSweep(startMhz, endMhz, binWidth) {
+            _logCommand(`Starting sweep ${startMhz}-${endMhz} MHz, bin ${binWidth/1000}kHz`);
             try {
                 const r = await fetch(API + '/sweep/start', {
                     method: 'POST',
@@ -225,19 +277,25 @@ export const HackRFPanelDef = {
                 });
                 if (r.ok) {
                     sweepRunning = true;
+                    _logCommand(`Sweep running: ${startMhz}-${endMhz} MHz`);
                     renderBody();
+                } else {
+                    _logCommand(`Sweep start failed: HTTP ${r.status}`);
                 }
-            } catch (_) { /* network error */ }
+            } catch (e) { _logCommand(`Sweep start error: ${e.message}`); }
         }
 
         async function stopSweep() {
+            _logCommand('Stopping sweep...');
             try {
                 const r = await fetch(API + '/sweep/stop', { method: 'POST' });
                 if (r.ok) {
+                    const d = await r.json();
                     sweepRunning = false;
+                    _logCommand(`Sweep stopped: ${d.sweep_count || 0} sweeps completed`);
                     renderBody();
                 }
-            } catch (_) { /* network error */ }
+            } catch (e) { _logCommand(`Stop error: ${e.message}`); }
         }
 
         async function flashFirmware(filePath) {
@@ -1088,6 +1146,15 @@ function _injectStyles() {
         @keyframes hrf-pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
         .hrf-live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#ff2a6d; animation:hrf-pulse 1s ease-in-out infinite; margin-right:4px; }
         .hrf-sweep-live { font-size:0.65rem; color:#ff2a6d; font-weight:bold; letter-spacing:1px; display:flex; align-items:center; }
+
+        /* ── Status bar (persistent bottom) ────────────────────── */
+        .hrf-status-bar { display:flex; align-items:center; gap:8px; padding:4px 10px; border-top:1px solid #1a1a2e; background:#08080d; flex-shrink:0; font-size:0.65rem; }
+        .hrf-status-activity { font-weight:bold; letter-spacing:1px; color:#b060ff; }
+        .hrf-status-activity.sweep { color:#05ffa1; }
+        .hrf-status-activity.idle { color:#666; }
+        .hrf-status-activity.error { color:#ff2a6d; }
+        .hrf-status-detail { color:#888; }
+        .hrf-status-stats { color:#555; }
 
         /* ── Connection bar ─────────────────────────────────────── */
         .hrf-conn-bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #1a1a2e; background:#0a0a0f; flex-shrink:0; }

@@ -153,7 +153,9 @@ class SpectrumAnalyzer:
     async def _read_output(self) -> None:
         """Background task: read and parse hackrf_sweep CSV output."""
         if not self._process or not self._process.stdout:
+            log.warning("Sweep reader: no process or stdout available")
             return
+        log.info("Sweep reader started, reading output...")
 
         try:
             while self._running:
@@ -173,10 +175,11 @@ class SpectrumAnalyzer:
                     self._last_sweep_time = time.time()
 
         except asyncio.CancelledError:
-            pass
+            log.info(f"Sweep reader cancelled after {self._sweep_count} sweeps")
         except Exception as e:
             log.error(f"Sweep reader error: {e}")
         finally:
+            log.info(f"Sweep reader exiting, {self._sweep_count} sweeps processed")
             self._running = False
 
     def _parse_sweep_line(self, line: str) -> list[dict] | None:
