@@ -112,7 +112,7 @@ class TestBLEScanGenerator:
         ble_events = [e for e in events if e.get("type") == "fleet.ble_presence"]
         assert len(ble_events) >= 1
         for dev in ble_events[0]["data"]["devices"]:
-            assert "addr" in dev
+            assert "mac" in dev
             assert "rssi" in dev
             assert isinstance(dev["rssi"], int)
             assert -90 <= dev["rssi"] <= -30

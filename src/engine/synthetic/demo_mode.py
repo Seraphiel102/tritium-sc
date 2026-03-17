@@ -132,11 +132,14 @@ class DemoController:
         except Exception as e:
             logger.debug("Could not update geo reference for demo: %s", e)
 
-        # BLE scanner
+        # BLE scanner — positioned at the demo neighborhood center so
+        # targets get geographic coordinates for position history tracking.
         self._ble_gen = BLEScanGenerator(
             interval=5.0,
             max_devices=self._ble_device_count,
             node_id="demo-scanner-01",
+            node_lat=37.7749,
+            node_lon=-122.4194,
         )
         self._ble_gen.start(self._event_bus)
 

@@ -354,14 +354,14 @@ function _initMaterials() {
     war3d.materials.zoneRestricted = new THREE.MeshBasicMaterial({
         color: 0xff2a6d,
         transparent: true,
-        opacity: 0.08,
+        opacity: 0.02,
         side: THREE.DoubleSide,
         depthWrite: false,
     });
     war3d.materials.zonePerimeter = new THREE.MeshBasicMaterial({
         color: 0x00f0ff,
         transparent: true,
-        opacity: 0.04,
+        opacity: 0.015,
         side: THREE.DoubleSide,
         depthWrite: false,
     });
@@ -662,14 +662,14 @@ function _updateZones() {
         const radius = (zone.properties && zone.properties.radius) || 10;
         const isRestricted = (zone.type || '').includes('restricted');
 
-        // Filled disc
-        const discGeo = new THREE.CircleGeometry(radius, 48);
-        const discMat = isRestricted ? war3d.materials.zoneRestricted : war3d.materials.zonePerimeter;
-        const disc = new THREE.Mesh(discGeo, discMat);
-        disc.rotation.x = -Math.PI / 2;
-        disc.position.set(wx, 0.02, -wy);
-        war3d.scene.add(disc);
-        war3d.zoneMeshes.push(disc);
+        // Filled disc — disabled (stacking discs become opaque and clutter the map)
+        // const discGeo = new THREE.CircleGeometry(radius, 48);
+        // const discMat = isRestricted ? war3d.materials.zoneRestricted : war3d.materials.zonePerimeter;
+        // const disc = new THREE.Mesh(discGeo, discMat);
+        // disc.rotation.x = -Math.PI / 2;
+        // disc.position.set(wx, 0.02, -wy);
+        // war3d.scene.add(disc);
+        // war3d.zoneMeshes.push(disc);
 
         // Border ring
         const ringPts = [];

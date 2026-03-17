@@ -253,7 +253,7 @@ console.log('\n--- menu-bar.js menu items ---');
 // NOTE: FX toggles moved to Layers panel (Layer Browser).
 // MAP menu now has simplified quick toggles only.
 const menuLabels = [
-    'Layer Browser...', 'Toggle All Layers',
+    'Open Layers Window...', 'Show All Layers', 'Hide All Layers',
     'Satellite', 'Buildings', 'Roads', 'Grid', 'Unit Markers',
     'GIS Intelligence', 'Fog of War', 'Terrain',
     'Center on Action', 'Reset Camera', 'Zoom In', 'Zoom Out',
@@ -876,12 +876,15 @@ console.log('\n--- setLayers allMapLayers state sync ---');
         // When allMapLayers=false, these state flags should be set to false
         const falseFlags = [
             'showSatellite', 'showBuildings', 'showRoads', 'showWaterways',
-            'showParks', 'showUnits', 'showLabels', 'showModels3d', 'showGeoLayers',
+            'showParks', 'showUnits', 'showLabels', 'showGeoLayers',
         ];
         for (const flag of falseFlags) {
             assert(slBody.includes(flag + ' = false'), `setLayers allMapLayers:false sets ${flag}=false`);
             assert(slBody.includes(flag + ' = true'), `setLayers allMapLayers:true sets ${flag}=true`);
         }
+        // showModels3d stays OFF even with allMapLayers:true (visual clutter fix —
+        // 3D models create large colored circles that stack around unit clusters)
+        assert(slBody.includes('showModels3d = false'), `setLayers allMapLayers:false sets showModels3d=false`);
     }
 })();
 

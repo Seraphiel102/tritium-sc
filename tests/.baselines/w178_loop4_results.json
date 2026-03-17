@@ -1,0 +1,9 @@
+{
+  "step1_map_load": "PASS",
+  "step2_battle_modal": "PASS",
+  "step3_launch": "FAIL",
+  "step4_battle_hud": "PASS",
+  "step5_battle_progress": "PASS",
+  "step6_completion": "PASS",
+  "errors_count": 0
+}

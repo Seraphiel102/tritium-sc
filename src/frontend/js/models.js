@@ -550,28 +550,7 @@ function createSensorModel() {
     domeRing.position.y = 0.6;
     g.add(domeRing);
 
-    // Detection radius disc on ground
-    const detectionRadius = 6;
-    const discGeo = new THREE.RingGeometry(detectionRadius - 0.15, detectionRadius, 32);
-    const discMat = new THREE.MeshBasicMaterial({
-        color: MODEL_COLORS.cyan, transparent: true, opacity: 0.08,
-        side: THREE.DoubleSide, depthWrite: false,
-    });
-    const disc = new THREE.Mesh(discGeo, discMat);
-    disc.rotation.x = -Math.PI / 2;
-    disc.position.y = 0.02;
-    g.add(disc);
-
-    // Inner fill disc
-    const fillGeo = new THREE.CircleGeometry(detectionRadius - 0.15, 32);
-    const fillMat = new THREE.MeshBasicMaterial({
-        color: MODEL_COLORS.cyan, transparent: true, opacity: 0.02,
-        side: THREE.DoubleSide, depthWrite: false,
-    });
-    const fill = new THREE.Mesh(fillGeo, fillMat);
-    fill.rotation.x = -Math.PI / 2;
-    fill.position.y = 0.01;
-    g.add(fill);
+    // Detection radius ring removed — was cluttering map with stacked cyan circles
 
     g.userData.unitType = 'sensor';
     return g;
@@ -607,7 +586,7 @@ function createSelectionRing() {
     // Ground glow disc
     const discGeo = new THREE.CircleGeometry(0.95, 32);
     const discMat = new THREE.MeshBasicMaterial({
-        color: MODEL_COLORS.cyan, transparent: true, opacity: 0.06,
+        color: MODEL_COLORS.cyan, transparent: true, opacity: 0.03,
         side: THREE.DoubleSide, depthWrite: false,
     });
     const disc = new THREE.Mesh(discGeo, discMat);

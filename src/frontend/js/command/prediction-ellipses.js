@@ -30,23 +30,23 @@ const ELLIPSE_FILL_LAYER_ID = 'tritium-prediction-ellipses-fill';
 const ELLIPSE_STROKE_LAYER_ID = 'tritium-prediction-ellipses-stroke';
 const UPDATE_INTERVAL_MS = 1000;     // Update at 1Hz (ellipses don't need 10Hz)
 const ELLIPSE_SEGMENTS = 36;         // Points per ellipse polygon
-const BASE_RADIUS_M = 15;            // Base uncertainty radius in meters
-const MIN_RADIUS_M = 3;              // Minimum radius even for high-confidence
-const MAX_RADIUS_M = 80;             // Max radius for very uncertain positions
+const BASE_RADIUS_M = 5;             // Base uncertainty radius in meters
+const MIN_RADIUS_M = 2;              // Minimum radius even for high-confidence
+const MAX_RADIUS_M = 20;             // Max radius for very uncertain positions
 const SPEED_COMPRESSION = 0.4;       // How much speed compresses the longitudinal axis (0-1)
 
 const ALLIANCE_FILL = {
-    friendly: 'rgba(5, 255, 161, 0.08)',
-    hostile:  'rgba(255, 42, 109, 0.12)',
-    neutral:  'rgba(0, 160, 255, 0.08)',
-    unknown:  'rgba(252, 238, 10, 0.08)',
+    friendly: 'rgba(5, 255, 161, 0.01)',
+    hostile:  'rgba(255, 42, 109, 0.02)',
+    neutral:  'rgba(0, 160, 255, 0.01)',
+    unknown:  'rgba(252, 238, 10, 0.01)',
 };
 
 const ALLIANCE_STROKE = {
-    friendly: 'rgba(5, 255, 161, 0.35)',
-    hostile:  'rgba(255, 42, 109, 0.45)',
-    neutral:  'rgba(0, 160, 255, 0.35)',
-    unknown:  'rgba(252, 238, 10, 0.35)',
+    friendly: 'rgba(5, 255, 161, 0.06)',
+    hostile:  'rgba(255, 42, 109, 0.08)',
+    neutral:  'rgba(0, 160, 255, 0.06)',
+    unknown:  'rgba(252, 238, 10, 0.06)',
 };
 
 /**
@@ -135,7 +135,7 @@ export class PredictionEllipseManager {
     constructor() {
         this._map = null;
         this._timer = null;
-        this._visible = true;
+        this._visible = false;
         this._layersAdded = false;
         // Trail data shared from TargetTrailManager via the store
         this._trailData = new Map(); // unitId -> [{ lng, lat, time }]
@@ -196,7 +196,7 @@ export class PredictionEllipseManager {
                 source: ELLIPSE_SOURCE_ID,
                 paint: {
                     'fill-color': ['get', 'fillColor'],
-                    'fill-opacity': 1.0,  // opacity is baked into the fillColor
+                    'fill-opacity': 0.5,  // further attenuates the low rgba alpha
                 },
             });
         }
@@ -209,8 +209,8 @@ export class PredictionEllipseManager {
                 source: ELLIPSE_SOURCE_ID,
                 paint: {
                     'line-color': ['get', 'strokeColor'],
-                    'line-width': 1.5,
-                    'line-opacity': 1.0,
+                    'line-width': 1,
+                    'line-opacity': 0.5,
                     'line-dasharray': [4, 3],
                 },
             });

@@ -562,10 +562,11 @@ console.log('\n--- createSensorModel ---');
     assert(g.children.length > 0, 'Sensor model requires no alliance arg');
 })();
 
-(function testSensorHasDetectionDisc() {
+(function testSensorDetectionDiscRemoved() {
+    // Detection radius ring was removed — it cluttered the map with stacked cyan circles
     const g = M.createSensorModel();
     const rings = g.children.filter(c => c.isMesh && c.geometry && c.geometry.type === 'RingGeometry');
-    assert(rings.length >= 1, 'Sensor has detection radius ring');
+    assert(rings.length === 0, 'Sensor detection radius ring removed (visual clutter fix)');
 })();
 
 (function testSensorHasNeonRing() {

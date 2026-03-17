@@ -137,13 +137,19 @@ class BLEScanGenerator(_BaseGenerator):
         max_devices: int = 12,
         known_ratio: float = 0.6,
         node_id: str = "synth-scanner-01",
+        node_lat: float | None = None,
+        node_lon: float | None = None,
     ) -> None:
         super().__init__(interval=interval)
         self._max_devices = max_devices
         self._known_ratio = known_ratio
         self._node_id = node_id
+        self._node_lat = node_lat
+        self._node_lon = node_lon
         self._active_devices: list[dict[str, str]] = []
         self._rng = random.Random(42)
+        # Per-device position offsets that drift over time (simulates movement)
+        self._device_offsets: dict[str, tuple[float, float]] = {}
 
     def _tick(self) -> None:
         assert self._event_bus is not None
@@ -151,17 +157,49 @@ class BLEScanGenerator(_BaseGenerator):
         devices = []
         for dev in self._active_devices:
             rssi = self._rng.randint(-90, -30)
-            devices.append({
-                "addr": dev["mac"],
+            mac = dev["mac"]
+
+            # Drift the device position offset slightly each tick
+            # to simulate targets moving around the scanner area
+            if mac not in self._device_offsets:
+                self._device_offsets[mac] = (
+                    self._rng.uniform(-0.0003, 0.0003),
+                    self._rng.uniform(-0.0003, 0.0003),
+                )
+            old_dlat, old_dlng = self._device_offsets[mac]
+            # Random walk: ~1-3 m per tick (walking speed)
+            old_dlat += self._rng.gauss(0, 0.000015)
+            old_dlng += self._rng.gauss(0, 0.000015)
+            # Clamp to ~50m radius around the scanner
+            old_dlat = max(-0.0005, min(0.0005, old_dlat))
+            old_dlng = max(-0.0005, min(0.0005, old_dlng))
+            self._device_offsets[mac] = (old_dlat, old_dlng)
+
+            dev_entry: dict = {
+                "mac": mac,
                 "name": dev["name"],
                 "rssi": rssi,
                 "type": dev["type"],
-            })
-        self._event_bus.publish("fleet.ble_presence", {
+            }
+            # Include per-device lat/lng so each target gets a unique
+            # moving position (scanner position + device offset).
+            if self._node_lat is not None and self._node_lon is not None:
+                dev_entry["lat"] = self._node_lat + old_dlat
+                dev_entry["lng"] = self._node_lon + old_dlng
+            devices.append(dev_entry)
+
+        payload: dict = {
             "node_id": self._node_id,
             "devices": devices,
             "count": len(devices),
-        })
+        }
+        # Include scanner position so edge_tracker registers it and
+        # targets get geographic coordinates for position history.
+        if self._node_lat is not None and self._node_lon is not None:
+            payload["node_lat"] = self._node_lat
+            payload["node_lon"] = self._node_lon
+
+        self._event_bus.publish("fleet.ble_presence", payload)
 
     def _rotate_devices(self) -> None:
         """Randomly add/remove devices to simulate movement."""

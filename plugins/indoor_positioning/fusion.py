@@ -433,23 +433,4 @@ class IndoorPositionFusion:
             self._positions.clear()
 
 
-def _point_in_polygon(lat: float, lon: float, polygon: list[dict]) -> bool:
-    """Ray-casting point-in-polygon test."""
-    n = len(polygon)
-    if n < 3:
-        return False
-
-    inside = False
-    j = n - 1
-    for i in range(n):
-        pi_lat = polygon[i].get("lat", 0)
-        pi_lon = polygon[i].get("lon", 0)
-        pj_lat = polygon[j].get("lat", 0)
-        pj_lon = polygon[j].get("lon", 0)
-
-        if ((pi_lon > lon) != (pj_lon > lon)) and (
-            lat < (pj_lat - pi_lat) * (lon - pi_lon) / (pj_lon - pi_lon) + pi_lat
-        ):
-            inside = not inside
-        j = i
-    return inside
+from tritium_lib.geo import point_in_polygon_latlng as _point_in_polygon  # noqa: E402

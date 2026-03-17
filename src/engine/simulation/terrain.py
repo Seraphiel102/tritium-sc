@@ -440,26 +440,8 @@ class TerrainMap:
         }
 
 
-# ---------------------------------------------------------------------------
-# Internal geometry helpers
-# ---------------------------------------------------------------------------
-
-def _point_in_polygon(px: float, py: float, polygon: list[tuple[float, float]]) -> bool:
-    """Ray-casting point-in-polygon test.
-
-    Casts a ray from (px, py) in the +X direction and counts
-    how many polygon edges it crosses.  Odd = inside, even = outside.
-    """
-    n = len(polygon)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
-            inside = not inside
-        j = i
-    return inside
+# Internal geometry helpers — consolidated into tritium-lib
+from tritium_lib.geo import point_in_polygon as _point_in_polygon  # noqa: E402
 
 
 def _bresenham(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:

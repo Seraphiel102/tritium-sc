@@ -10,6 +10,7 @@
 //   createMenuBar(containerEl, panelManager, layoutManager, mapActions);
 
 import { EventBus } from './events.js';
+import { toggleAdsbOverlay, isAdsbOverlayActive } from './adsb-overlay.js';
 
 
 // ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ function _fileMenuItems(layoutManager) {
 const PANEL_CATEGORIES = {
     'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'unified-alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks', 'annotations', 'watchlist', 'swarm-coordination', 'convoy'],
     'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'dossier-timeline', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard', 'dwell-monitor', 'behavioral-intelligence', 'reid-matches', 'lpr', 'fusion-dashboard', 'acoustic-intelligence', 'activity-feed', 'trail-export'],
-    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'indoor-positioning', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector'],
+    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'indoor-positioning', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector', 'radar-scope', 'sdr-waterfall', 'adsb-table'],
     'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets', 'command-history', 'federation', 'training-dashboard'],
     'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs', 'voice-command'],
     'Collaboration': ['operator-activity', 'operator-cursors', 'map-share', 'keyboard-macros'],
@@ -154,9 +155,11 @@ function _mapMenuItems(mapActions) {
     const s = () => mapActions.getMapState();
     return [
         // Layer browser opens the full panel with all 43 layers
-        { label: 'Layer Browser...', shortcut: 'L',
+        { label: 'Open Layers Window...', shortcut: 'L',
           action: () => EventBus.emit('panel:request-open', { id: 'layers' }) },
-        { label: 'Toggle All Layers', action: () => mapActions.toggleAllLayers() },
+        { separator: true },
+        { label: 'Show All Layers', action: () => mapActions.setAllLayers(true) },
+        { label: 'Hide All Layers', action: () => mapActions.setAllLayers(false) },
         { separator: true },
         // Quick toggles for most-used layers
         { label: 'Satellite', shortcut: 'I', checkable: true, checked: () => s().showSatellite, action: () => mapActions.toggleSatellite() },
@@ -169,6 +172,7 @@ function _mapMenuItems(mapActions) {
         // View
         { label: 'Fog of War', checkable: true, checked: () => s().showFog, action: () => mapActions.toggleFog() },
         { label: 'Prediction Cones', checkable: true, checked: () => s().showPredictionCones, action: () => mapActions.togglePredictionCones() },
+        { label: 'ADS-B Aircraft', checkable: true, checked: () => isAdsbOverlayActive(), action: () => toggleAdsbOverlay() },
         { label: 'Terrain', shortcut: 'H', checkable: true, checked: () => s().showTerrain, action: () => mapActions.toggleTerrain() },
         { label: '3D Mode', checkable: true, checked: () => s().tiltMode === 'tilted', action: () => mapActions.toggleTilt() },
         { separator: true },
@@ -271,7 +275,7 @@ export function createMenuBar(container, panelManager, layoutManager, mapActions
 
     const menus = [
         { label: 'FILE',   tip: 'Save and export workspace layouts', getItems: () => _fileMenuItems(layoutManager) },
-        { label: 'VIEW',   tip: 'Show or hide panels (Amy, Units, Alerts, etc.)', getItems: () => _viewMenuItems(panelManager) },
+        { label: 'WINDOWS', tip: 'Show or hide panels (Amy, Units, Alerts, etc.)', getItems: () => _viewMenuItems(panelManager) },
         { label: 'LAYOUT', tip: 'Switch between saved workspace layouts', getItems: () => _layoutMenuItems(layoutManager) },
         { label: 'MAP',    tip: 'Map layers, camera, and display settings', getItems: () => _mapMenuItems(mapActions) },
         { label: 'GAME',   tip: 'Start battles and manage game state', getItems: () => _gameMenuItems(mapActions) },

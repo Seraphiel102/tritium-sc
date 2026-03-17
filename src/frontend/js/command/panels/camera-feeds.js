@@ -193,6 +193,16 @@ export const CameraFeedsPanelDef = {
                 // Refresh the camera list and emit event for map markers
                 await fetchCameras();
                 EventBus.emit('cameras:changed', { cameras });
+
+                // If the camera was added without a position, automatically
+                // start the click-to-place flow so the user can drop it on
+                // the map right away (Loop 8 drag-to-place).
+                const hasPosition = payload.lat != null && payload.lng != null
+                    && !isNaN(payload.lat) && !isNaN(payload.lng);
+                if (!hasPosition) {
+                    startEditingPosition(sourceId);
+                    showPlacementBanner(name);
+                }
             } catch (ex) {
                 showAddError(ex.message || 'Network error');
             }
@@ -203,6 +213,50 @@ export const CameraFeedsPanelDef = {
                 addError.textContent = msg;
                 addError.style.display = '';
             }
+        }
+
+        // Placement banner — shown when a newly added camera needs a map position
+        let placementBannerEl = null;
+        function showPlacementBanner(cameraName) {
+            removePlacementBanner();
+            placementBannerEl = document.createElement('div');
+            placementBannerEl.className = 'cf-placement-banner';
+            placementBannerEl.innerHTML = `
+                <span class="mono" style="color:#fcee0a;font-size:12px">
+                    CLICK MAP TO PLACE <strong>${_esc(cameraName)}</strong>
+                </span>
+                <button class="panel-btn" style="margin-left:8px;font-size:10px;color:#888;border:1px solid #333;padding:1px 6px;cursor:pointer" data-action="cf-cancel-place">CANCEL</button>
+            `;
+            Object.assign(placementBannerEl.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '6px 10px',
+                background: 'rgba(252,238,10,0.08)',
+                borderTop: '1px solid #fcee0a33',
+                animation: 'cf-pulse-border 1.5s ease-in-out infinite',
+            });
+            // Insert at top of panel, before the grid
+            const toolbar = bodyEl.querySelector('.cf-toolbar');
+            if (toolbar && toolbar.nextSibling) {
+                toolbar.parentNode.insertBefore(placementBannerEl, toolbar.nextSibling);
+            } else {
+                bodyEl.prepend(placementBannerEl);
+            }
+            const cancelBtn = placementBannerEl.querySelector('[data-action="cf-cancel-place"]');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', () => {
+                    editingCamId = null;
+                    removePlacementBanner();
+                });
+            }
+        }
+
+        function removePlacementBanner() {
+            if (placementBannerEl && placementBannerEl.parentNode) {
+                placementBannerEl.parentNode.removeChild(placementBannerEl);
+            }
+            placementBannerEl = null;
         }
 
         if (addBtn) addBtn.addEventListener('click', showAddModal);
@@ -245,6 +299,7 @@ export const CameraFeedsPanelDef = {
             if (editingCamId) {
                 const camId = editingCamId;
                 editingCamId = null;
+                removePlacementBanner();
 
                 // Reset button style
                 const btn = bodyEl.querySelector(`.cf-set-pos-btn[data-cam-id="${camId}"]`);

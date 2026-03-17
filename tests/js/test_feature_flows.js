@@ -300,11 +300,12 @@ console.log('\n=== Unit Spread Contract ===\n');
 
 const enginePy = readSource('src/engine/simulation/engine.py');
 
-// Spawn radius should be 70-95% of bounds, NOT 30-40%
+// Spawn radius should NOT be too cramped (30-40% of bounds)
 assert(!enginePy.includes('random.uniform(0.30, 0.40)'),
     'spread: spawn radius NOT 30-40% (old cramped value)');
-assert(enginePy.includes('random.uniform(0.40, 0.65)'),
-    'spread: spawn radius is 40-65% of map bounds');
+// Uses absolute distances now (80-150m or 50-100m) instead of percentage
+assert(enginePy.includes('random.uniform(80.0, 150.0)') || enginePy.includes('random.uniform(50.0, 100.0)'),
+    'spread: spawn uses absolute distance (80-150m or 50-100m)');
 
 // Objectives should be spread across map, NOT just center
 assert(!enginePy.includes('map_bounds * 0.04'),

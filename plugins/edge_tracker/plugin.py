@@ -93,6 +93,8 @@ class EdgeTrackerPlugin(PluginInterface):
         self._gatt_profiles: dict[str, Any] = {}  # mac -> BleGATTProfile dict
         # Track all seen MACs for first-seen notification
         self._seen_macs: set[str] = set()
+        # Cache per-device lat/lng from BLE presence events (e.g. demo generators)
+        self._device_positions: dict[str, tuple[float, float]] = {}  # mac -> (lat, lng)
 
     # -- PluginInterface identity ------------------------------------------
 
@@ -265,7 +267,7 @@ class EdgeTrackerPlugin(PluginInterface):
 
         sightings = []
         for dev in devices:
-            sightings.append({
+            sighting = {
                 "mac": dev.get("mac", ""),
                 "name": dev.get("name", ""),
                 "rssi": dev.get("rssi", -100),
@@ -273,7 +275,15 @@ class EdgeTrackerPlugin(PluginInterface):
                 "node_ip": node_ip,
                 "is_known": dev.get("is_known", False),
                 "seen_count": dev.get("seen_count", 1),
-            })
+            }
+            sightings.append(sighting)
+
+            # Cache per-device lat/lng (e.g. from demo generators with position jitter)
+            dev_mac = dev.get("mac", "")
+            dev_lat = dev.get("lat")
+            dev_lng = dev.get("lng")
+            if dev_mac and dev_lat is not None and dev_lng is not None:
+                self._device_positions[dev_mac] = (dev_lat, dev_lng)
 
         if sightings:
             self._store.record_sightings_batch(sightings)
@@ -539,7 +549,19 @@ class EdgeTrackerPlugin(PluginInterface):
                     try:
                         np_data = self._store.get_node_position(node_id)
                         if np_data:
-                            node_pos = {"x": np_data.get("x", 0), "y": np_data.get("y", 0)}
+                            nx = np_data.get("x", 0)
+                            ny = np_data.get("y", 0)
+                            # If x/y are zero but lat/lon are set, convert geo to game coords
+                            if nx == 0 and ny == 0:
+                                nlat = np_data.get("lat")
+                                nlon = np_data.get("lon")
+                                if nlat is not None and nlon is not None:
+                                    try:
+                                        from engine.tactical.geo import latlng_to_local
+                                        nx, ny, _ = latlng_to_local(nlat, nlon)
+                                    except Exception:
+                                        pass
+                            node_pos = {"x": nx, "y": ny}
                     except Exception:
                         pass
 
@@ -568,12 +590,24 @@ class EdgeTrackerPlugin(PluginInterface):
                     if device_type is None and mac in self._edge_device_types:
                         device_type = self._edge_device_types[mac]
 
+                    # Per-device lat/lng (e.g. from demo generators with position jitter)
+                    # takes priority over node position for more accurate placement.
+                    dev_pos = None
+                    cached = self._device_positions.get(mac)
+                    if cached is not None:
+                        try:
+                            from engine.tactical.geo import latlng_to_local
+                            dx, dy, _ = latlng_to_local(cached[0], cached[1])
+                            dev_pos = {"x": dx, "y": dy}
+                        except Exception:
+                            pass
+
                     self._tracker.update_from_ble({
                         "mac": mac,
                         "name": dev.get("name", ""),
                         "rssi": dev.get("rssi", -100),
                         "node_id": node_id,
-                        "node_position": node_pos,
+                        "node_position": dev_pos or node_pos,
                         "trilateration": trilat_pos,
                         "device_type": device_type,
                     })

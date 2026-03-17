@@ -308,9 +308,14 @@ class TestFusionGeofence:
         time.sleep(0.3)
 
         zones = geofence.list_zones()
-        assert len(zones) == 1
-        assert zones[0].zone_id == "demo-restricted-01"
-        assert zones[0].zone_type == "restricted"
+        assert len(zones) == 2
+        zone_ids = {z.zone_id for z in zones}
+        assert "demo-restricted-01" in zone_ids
+        assert "demo-monitored-01" in zone_ids
+        restricted = next(z for z in zones if z.zone_id == "demo-restricted-01")
+        monitored = next(z for z in zones if z.zone_id == "demo-monitored-01")
+        assert restricted.zone_type == "restricted"
+        assert monitored.zone_type == "monitored"
 
         scenario.stop()
 

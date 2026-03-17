@@ -11,7 +11,7 @@ import { _esc } from './panel-utils.js';
 import { TritiumStore } from './store.js';
 import { EventBus } from './events.js';
 import { WebSocketManager } from './websocket.js';
-import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleMeshNodes, toggleMeshLinks, toggleMeshCoverage, toggleThoughts, toggleAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow, toggleGeoLayers, togglePatrolRoutes, toggleWeaponRange, toggleHeatmap, toggleSwarmHull, toggleHazardZones, toggleHostileObjectives, toggleCrowdDensity, toggleCoverPoints, toggleUnitSignals, toggleHostileIntel, togglePredictionCones, toggleCoverageOverlap, toggleGeofenceZones } from './map-maplibre.js';
+import { initMap, destroyMap, toggleSatellite, toggleRoads, toggleGrid, toggleBuildings, toggleFog, toggleTerrain, toggleUnits, toggleLabels, toggleModels, toggleWaterways, toggleParks, toggleMesh, toggleMeshNodes, toggleMeshLinks, toggleMeshCoverage, toggleThoughts, toggleAllLayers, setAllLayers, toggleTracers, toggleExplosions, toggleParticles, toggleHitFlashes, toggleFloatingText, toggleKillFeed, toggleScreenFx, toggleBanners, toggleLayerHud, toggleHealthBars, toggleSelectionFx, getMapState, centerOnAction, resetCamera, zoomIn, zoomOut, toggleTilt, setLayers, setMapMode, toggleSquadHulls, toggleAutoFollow, toggleGeoLayers, togglePatrolRoutes, toggleWeaponRange, toggleHeatmap, toggleSwarmHull, toggleHazardZones, toggleHostileObjectives, toggleCrowdDensity, toggleCoverPoints, toggleUnitSignals, toggleHostileIntel, togglePredictionCones, toggleCoverageOverlap, toggleGeofenceZones } from './map-maplibre.js';
 import { PanelManager } from './panel-manager.js';
 import { LayoutManager } from './layout-manager.js';
 import { createMenuBar, focusSaveInput } from './menu-bar.js';
@@ -107,6 +107,9 @@ import { MapLayerSwitcherPanelDef } from './panels/map-layer-switcher.js';
 import { CollaborationHubPanelDef } from './panels/collaboration-hub.js';
 import { IndoorPositioningPanelDef } from './panels/indoor-positioning-panel.js';
 import { UnifiedAlertsPanelDef } from './panels/alerts-panel.js';
+import { RadarScopePanelDef } from './panels/radar-scope.js';
+import { SdrWaterfallPanelDef } from './panels/sdr-waterfall.js';
+import { AdsbTablePanelDef } from './panels/adsb-table.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -118,6 +121,7 @@ import { createMapQuickToggles } from './map-quick-toggles.js';
 import { TargetTrailManager } from './target-trails.js';
 import { HandoffLineManager } from './handoff-lines.js';
 import { ConvoyOverlayManager } from './convoy-overlay.js';
+import { startAdsbOverlay, toggleAdsbOverlay } from './adsb-overlay.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -586,9 +590,9 @@ function init() {
     };
     document.addEventListener('click', _initAudio, { once: true });
     document.addEventListener('keydown', _initAudio, { once: true });
-    // Also init audio on game state changes (user has already clicked BEGIN WAR
-    // before game_state events arrive, so AudioContext will be unlocked)
-    EventBus.on('game:state', _initAudio);
+    // Audio init only on user gesture (click/keydown). Do NOT init on
+    // game:state events — WebSocket delivers state before user gesture,
+    // causing "AudioContext not allowed to start" browser warnings.
 
     // Demo start button — visible when no targets on map, hidden once targets appear
     const demoOverlay = document.getElementById('demo-start-overlay');
@@ -817,10 +821,16 @@ function initPanelSystem(container) {
     panelManager.register(CollaborationHubPanelDef);
     panelManager.register(IndoorPositioningPanelDef);
     panelManager.register(UnifiedAlertsPanelDef);
+    panelManager.register(RadarScopePanelDef);
+    panelManager.register(SdrWaterfallPanelDef);
+    panelManager.register(AdsbTablePanelDef);
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();
     predictionEllipses.start();
+
+    // Start ADS-B aircraft overlay (auto-polls /api/sdr/adsb)
+    startAdsbOverlay();
 
     // Start convoy bounding box overlay on the map
     const convoyOverlay = new ConvoyOverlayManager();
@@ -917,6 +927,7 @@ function initPanelSystem(container) {
             toggleMeshCoverage: () => (_activeMapModule ? _activeMapModule.toggleMeshCoverage() : toggleMeshCoverage()),
             toggleThoughts: () => (_activeMapModule ? _activeMapModule.toggleThoughts() : toggleThoughts()),
             toggleAllLayers: () => (_activeMapModule ? _activeMapModule.toggleAllLayers() : toggleAllLayers()),
+            setAllLayers: (v) => (_activeMapModule ? _activeMapModule.setAllLayers(v) : setAllLayers(v)),
             toggleTracers: () => (_activeMapModule ? _activeMapModule.toggleTracers() : toggleTracers()),
             toggleExplosions: () => (_activeMapModule ? _activeMapModule.toggleExplosions() : toggleExplosions()),
             toggleParticles: () => (_activeMapModule ? _activeMapModule.toggleParticles() : toggleParticles()),

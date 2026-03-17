@@ -618,28 +618,8 @@ class WorldModel:
 
 
 # ============================================================================
-# Geometry utilities
-# ============================================================================
-
-
-def _point_in_polygon(
-    px: float, py: float, polygon: list[tuple[float, float]]
-) -> bool:
-    """Ray-casting point-in-polygon test."""
-    n = len(polygon)
-    if n < 3:
-        return False
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > py) != (yj > py)) and (
-            px < (xj - xi) * (py - yi) / (yj - yi) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
+# Geometry utility — consolidated into tritium-lib
+from tritium_lib.geo import point_in_polygon as _point_in_polygon  # noqa: E402
 
 
 def _polygon_area(polygon: list[tuple[float, float]]) -> float:

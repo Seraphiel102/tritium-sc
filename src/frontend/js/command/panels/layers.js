@@ -87,6 +87,11 @@ const LAYER_CATEGORIES = [
                 { color: 'rgba(0,240,255,0.20)', shape: 'square', label: '2 sensors (redundant)' },
                 { color: 'rgba(252,238,10,0.30)', shape: 'square', label: '3+ sensors (strong)' },
             ]},
+            { id: 'correlationLines', label: 'Correlation Lines', description: 'Lines connecting targets that are likely the same entity across sensors', color: '#00f0ff', source: 'Target Correlator', key: 'showCorrelationLines' },
+            { id: 'predictionCones', label: 'Prediction Cones', description: 'Directional prediction ellipses showing estimated future target positions', color: '#fcee0a', source: 'Kalman Filter', key: 'showPredictionCones' },
+            { id: 'directionalThreats', label: 'Threat Direction Arrows', description: 'Arrows showing threat approach direction from hostile intel', color: '#ff2a6d', source: 'Threat Classifier', key: 'showDirectionalThreatArrows' },
+            { id: 'geofenceZones', label: 'Geofence Zones', description: 'User-defined monitored/restricted areas with entry/exit alerts', color: '#ff8800', source: 'Geofence Engine', key: 'showGeofenceZones' },
+            { id: 'coverage', label: 'Sensor Coverage', description: 'Detection radius circles around BLE/WiFi sensor nodes', color: '#05ffa166', source: 'Fleet Dashboard', key: 'showCoverage' },
             { id: 'trails', label: 'Target Movement Trails', description: 'Speed-colored movement trails for all active targets. Green = slow, Yellow = moderate, Red = fast. Fades with age.', color: '#05ffa1', source: 'Target Tracker', key: null, eventToggle: 'trails:toggle', legend: [
                 { color: '#05ffa1', shape: 'square', label: 'Slow (< 2 m/s, walking)' },
                 { color: '#fcee0a', shape: 'square', label: 'Moderate (2-8 m/s, jogging)' },
@@ -131,6 +136,12 @@ const LAYER_CATEGORIES = [
             { id: 'autoFollow', label: 'Auto-Follow Camera', description: 'Camera automatically follows combat action', color: null, source: 'UI', key: 'autoFollow' },
         ],
     },
+    {
+        name: 'TARGET FILTERS',
+        description: 'Filter which targets appear on the map by source, alliance, and device type',
+        targetFilters: true, // Flag for special rendering
+        layers: [],
+    },
 ];
 
 // GIS layer color/description mapping for dynamic layers from the catalog
@@ -158,6 +169,13 @@ export const LayersPanelDef = {
         const el = document.createElement('div');
         el.className = 'layers-panel-inner';
         el.innerHTML = `
+            <div class="layers-global-controls" style="display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid #00f0ff33;">
+                <span style="color:#00f0ff88;font-size:10px;margin-right:2px;">ALL</span>
+                <button class="layers-btn-show-all" style="flex:1;background:#1a1a2e;color:#05ffa1;border:1px solid #05ffa133;padding:3px 6px;cursor:pointer;font-family:inherit;font-size:10px;" title="Show all map layers">SHOW</button>
+                <button class="layers-btn-hide-all" style="flex:1;background:#1a1a2e;color:#ff2a6d;border:1px solid #ff2a6d33;padding:3px 6px;cursor:pointer;font-family:inherit;font-size:10px;" title="Hide all map layers">HIDE</button>
+                <button class="layers-btn-expand-all" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:3px 6px;cursor:pointer;font-family:inherit;font-size:10px;" title="Expand all categories">EXPAND</button>
+                <button class="layers-btn-collapse-all" style="flex:1;background:#1a1a2e;color:#fcee0a;border:1px solid #fcee0a33;padding:3px 6px;cursor:pointer;font-family:inherit;font-size:10px;" title="Collapse all categories">COLLAPSE</button>
+            </div>
             <div class="layers-search-bar">
                 <input type="text" class="layers-search" placeholder="Search layers..." data-bind="search" title="Type to filter layers by name, description, or data source" />
             </div>
@@ -177,6 +195,26 @@ export const LayersPanelDef = {
         EventBus.on('layers:set-map-actions', (actions) => { mapActions = actions; render(); });
         // Request map actions
         EventBus.emit('layers:request-map-actions');
+
+        // Global Show/Hide All buttons
+        const showAllBtn = bodyEl.querySelector('.layers-btn-show-all');
+        const hideAllBtn = bodyEl.querySelector('.layers-btn-hide-all');
+        if (showAllBtn) showAllBtn.addEventListener('click', () => {
+            if (mapActions && mapActions.setAllLayers) { mapActions.setAllLayers(true); render(); }
+        });
+        if (hideAllBtn) hideAllBtn.addEventListener('click', () => {
+            if (mapActions && mapActions.setAllLayers) { mapActions.setAllLayers(false); render(); }
+        });
+
+        // Collapse/Expand all categories
+        const expandBtn = bodyEl.querySelector('.layers-btn-expand-all');
+        const collapseBtn = bodyEl.querySelector('.layers-btn-collapse-all');
+        if (expandBtn) expandBtn.addEventListener('click', () => {
+            treeEl.querySelectorAll('.layer-category').forEach(c => c.classList.add('expanded'));
+        });
+        if (collapseBtn) collapseBtn.addEventListener('click', () => {
+            treeEl.querySelectorAll('.layer-category').forEach(c => c.classList.remove('expanded'));
+        });
 
         // Fetch GIS catalog for dynamic layer entries
         fetch('/api/geo/layers/catalog')
@@ -352,6 +390,10 @@ export const LayersPanelDef = {
                 html += `<span class="layer-cat-chevron">&#9660;</span>`;
                 html += `<span class="layer-cat-name">${_esc(cat.name)}</span>`;
                 html += `<span class="layer-cat-desc">${_esc(cat.description)}</span>`;
+                html += `<span class="layer-cat-actions" style="margin-left:auto;display:flex;gap:2px;">`;
+                html += `<button class="layer-cat-show-all" data-cat-action="show" data-cat-name="${_esc(cat.name)}" style="background:none;border:1px solid #05ffa133;color:#05ffa1;font-size:9px;padding:1px 4px;cursor:pointer;" title="Show all in ${_esc(cat.name)}">ALL</button>`;
+                html += `<button class="layer-cat-hide-all" data-cat-action="hide" data-cat-name="${_esc(cat.name)}" style="background:none;border:1px solid #ff2a6d33;color:#ff2a6d;font-size:9px;padding:1px 4px;cursor:pointer;" title="Hide all in ${_esc(cat.name)}">NONE</button>`;
+                html += `</span>`;
                 html += `</div>`;
                 html += `<div class="layer-cat-body">`;
 
@@ -428,6 +470,25 @@ export const LayersPanelDef = {
                     }
                 }
 
+                // Special: Target Filters category renders filter dropdowns
+                if (cat.targetFilters) {
+                    html += `<div class="layer-item" style="padding:6px 8px;">`;
+                    html += `<div style="display:flex;flex-direction:column;gap:6px;width:100%;">`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">SOURCE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="source" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All Sources</option><option value="ble">BLE</option><option value="wifi">WiFi</option><option value="yolo">Camera/YOLO</option><option value="mesh">Mesh/LoRa</option><option value="rf">RF</option><option value="radar">Radar</option><option value="simulation">Simulation</option></select></div>`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">ALLIANCE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="alliance" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All</option><option value="friendly">Friendly</option><option value="hostile">Hostile</option><option value="neutral">Neutral</option><option value="unknown">Unknown</option></select></div>`;
+                    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                    html += `<span style="color:#00f0ff;font-size:10px;min-width:50px;">DEVICE</span>`;
+                    html += `<select class="tfl-layers-select" data-tfl="assetType" style="flex:1;background:#1a1a2e;color:#00f0ff;border:1px solid #00f0ff33;padding:2px 4px;font-family:inherit;font-size:11px;">`;
+                    html += `<option value="all">All Types</option><option value="person">Person</option><option value="vehicle">Vehicle</option><option value="phone">Phone</option><option value="watch">Watch</option><option value="ble_device">BLE Device</option><option value="mesh_radio">Mesh Radio</option><option value="drone">Drone</option><option value="rover">Rover</option><option value="turret">Turret</option><option value="animal">Animal</option></select></div>`;
+                    html += `<button class="tfl-layers-reset" style="background:#1a1a2e;color:#fcee0a;border:1px solid #fcee0a33;padding:2px 8px;cursor:pointer;font-family:inherit;font-size:10px;">RESET FILTERS</button>`;
+                    html += `</div></div>`;
+                }
                 html += `</div></div>`;
             }
 
@@ -507,12 +568,51 @@ export const LayersPanelDef = {
                 });
             }
 
-            // Bind category collapse/expand
+            // Bind category collapse/expand (only on chevron/name, not action buttons)
             for (const hdr of treeEl.querySelectorAll('.layer-cat-header')) {
-                hdr.addEventListener('click', () => {
+                hdr.addEventListener('click', (e) => {
+                    // Don't collapse when clicking ALL/NONE buttons
+                    if (e.target.closest('.layer-cat-actions')) return;
                     hdr.parentElement.classList.toggle('expanded');
                 });
             }
+
+            // Bind per-category Show All / Hide All buttons
+            for (const btn of treeEl.querySelectorAll('.layer-cat-show-all, .layer-cat-hide-all')) {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const catName = btn.dataset.catName;
+                    const show = btn.dataset.catAction === 'show';
+                    // Find all layers in this category and toggle them
+                    const cat = LAYER_CATEGORIES.find(c => c.name === catName);
+                    if (!cat) return;
+                    for (const layer of cat.layers) {
+                        if (!layer.key) continue;
+                        const isOn = getState(layer.key);
+                        if ((show && !isOn) || (!show && isOn)) {
+                            toggleLayer(layer);
+                        }
+                    }
+                    render();
+                });
+            }
+        }
+
+        // Target filter dropdowns (in TARGET FILTERS category)
+        for (const sel of treeEl.querySelectorAll('.tfl-layers-select')) {
+            sel.addEventListener('change', () => {
+                const filterKey = sel.dataset.tfl;
+                if (filterKey) {
+                    EventBus.emit('target-filter:set', { [filterKey]: sel.value });
+                }
+            });
+        }
+        const resetBtn = treeEl.querySelector('.tfl-layers-reset');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                treeEl.querySelectorAll('.tfl-layers-select').forEach(s => { s.value = 'all'; });
+                EventBus.emit('target-filter:set', { source: 'all', alliance: 'all', assetType: 'all' });
+            });
         }
 
         // Search filter

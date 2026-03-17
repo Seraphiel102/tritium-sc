@@ -1,0 +1,43 @@
+{
+  "pass": 9,
+  "total": 9,
+  "results": {
+    "Step 1: Map loads": {
+      "status": "PASS",
+      "detail": "maplibregl-map: True, JS errors: 0"
+    },
+    "Step 2: Targets visible": {
+      "status": "PASS",
+      "detail": "TritiumStore.units.size=57, DOM markers=57"
+    },
+    "Step 3: Unit Inspector opens with target": {
+      "status": "PASS",
+      "detail": "select={\"ok\": true, \"id\": \"ble_aa1122334401\", \"total\": 54}, visible=True, text preview=<<\n1 / 61\n>>\nALL\nTURRET\nHEAVY_TURRET\nMISSILE_TURRET\nROVER\nDRONE\nSCOUT_DRONE\nTANK\nAPC\nSENSOR\nCAMERA\nP"
+    },
+    "Step 4: INVESTIGATE clicked": {
+      "status": "PASS",
+      "detail": "button found: True"
+    },
+    "Step 5: Dossier panel opens": {
+      "status": "PASS",
+      "detail": "info: {\"found\": true, \"visible\": true, \"textLen\": 6749, \"snippet\": \"DOSSIERS\\n\\u2500\\n\\u00d7\\nAll Types\\nPerson\\nVehicle\\nDevice\\nAnimal\\nUnknown\\nAll Threats\\nNone\\nLow\\nMedium\\nHigh\\nCritical\\nAll Alliances\\nFriendly\\nHostile\\nUnknown\\nLast Seen\\nConfidence\\nSignals\\nDEV\\nTrilat-Tag-C\\n32908 signals\\nju"
+    },
+    "Step 6: Signal history chart": {
+      "status": "PASS",
+      "detail": "info: {\"totalCanvases\": 6, \"sparklines\": 1, \"dossierCanvases\": 2}"
+    },
+    "Step 7: Behavioral profile": {
+      "status": "PASS",
+      "detail": "info: {\"found\": true, \"textLen\": 6690, \"snippet\": \"All Types\\nPerson\\nVehicle\\nDevice\\nAnimal\\nUnknown\\nAll Threats\\nNone\\nLow\\nMedium\\nHigh\\nCritical\\nAll Alliances\\nFriendly\\nHostile\\nUnknown\\nLast Seen\\nConfidence\\nSignals\\nDEV\\nDD:EE:FF:00:11:01\\n10738 signals\\n15s ago\\nDEV\\nGalaxy-Driver\\n7954 signal"
+    },
+    "Step 8: Tag target": {
+      "status": "PASS",
+      "detail": "result: {\"ok\": true, \"tag\": \"hostile\", \"total\": 3}"
+    },
+    "Step 9: Correlation display": {
+      "status": "PASS",
+      "detail": "info: {\"found\": true, \"snippet\": \"DOSSIERS\\n\\u2500\\n\\u00d7\\nAll Types\\nPerson\\nVehicle\\nDevice\\nAnimal\\nUnknown\\nAll Threats\\nNone\\nLow\\nMedium\\nHigh\\nCritical\\nAll Alliances\\nFriendly\\nHostile\\nUnknown\\nLast Seen\\nConfidence\\nSignals\\nDEV\\nDD:EE:FF:00:11:01\\n10748 signals\\n31s ago\\nDEV\\nGalaxy-Driver\\n79"
+    }
+  },
+  "js_errors": []
+}
