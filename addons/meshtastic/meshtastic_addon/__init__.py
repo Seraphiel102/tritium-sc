@@ -68,10 +68,21 @@ class MeshtasticAddon(SensorAddon):
             target_tracker=target_tracker,
         )
 
-        self.connection = ConnectionManager(
-            node_manager=self.node_manager,
-            event_bus=event_bus,
-        )
+        # Reuse existing connection from app.state if available (survives hot-reload)
+        existing_conn = getattr(getattr(app, 'state', None), 'meshtastic_connection', None)
+        if existing_conn and existing_conn.interface is not None:
+            log.info("Reusing existing Meshtastic connection from app.state")
+            self.connection = existing_conn
+            self.connection.node_manager = self.node_manager
+            self.connection.event_bus = event_bus
+        else:
+            self.connection = ConnectionManager(
+                node_manager=self.node_manager,
+                event_bus=event_bus,
+            )
+        # Store on app.state so it survives hot-reload
+        if hasattr(app, 'state'):
+            app.state.meshtastic_connection = self.connection
 
         # Device manager for config/firmware/control
         self.device_manager = DeviceManager(self.connection)
