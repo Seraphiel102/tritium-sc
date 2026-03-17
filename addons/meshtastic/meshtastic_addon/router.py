@@ -113,6 +113,7 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
                 "long_name": node.get("long_name", ""),
                 "short_name": node.get("short_name", ""),
                 "hw_model": node.get("hw_model", ""),
+                "role": node.get("role", ""),
                 "lat": node.get("lat"),
                 "lng": node.get("lng"),
                 "altitude": node.get("altitude"),
@@ -120,9 +121,15 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
                 "voltage": node.get("voltage"),
                 "snr": node.get("snr"),
                 "last_heard": node.get("last_heard"),
+                "hops_away": node.get("hops_away"),
                 "uptime": node.get("uptime"),
                 "channel_util": node.get("channel_util"),
                 "air_util": node.get("air_util"),
+                "temperature": node.get("temperature"),
+                "humidity": node.get("humidity"),
+                "pressure": node.get("pressure"),
+                "gps_sats": node.get("gps_sats"),
+                "neighbors": node.get("neighbors", []),
             })
         return {"nodes": nodes, "count": len(nodes)}
 
