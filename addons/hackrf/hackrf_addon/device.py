@@ -178,27 +178,38 @@ class HackRFDevice:
 
         return {"success": success, "output": output.strip(), "returncode": proc.returncode}
 
-    async def set_clock(self, freq_hz: int) -> dict:
-        """Set the HackRF clock frequency using hackrf_clock.
+    # ── Helper ──────────────────────────────────────────────────
+
+    async def _run_cmd(
+        self,
+        binary: str,
+        args: list[str],
+        timeout: float = 10.0,
+    ) -> dict:
+        """Run a hackrf_* command and return structured result.
 
         Args:
-            freq_hz: Clock frequency in Hz.
+            binary: Name of the binary (e.g. ``hackrf_clock``).
+            args: Command-line arguments.
+            timeout: Maximum seconds to wait.
 
         Returns:
-            Dict with success status and output.
+            Dict with ``success``, ``output``, ``returncode`` keys.
         """
-        if not shutil.which("hackrf_clock"):
-            return {"success": False, "error": "hackrf_clock not found on PATH"}
+        if not shutil.which(binary):
+            return {"success": False, "error": f"{binary} not found on PATH"}
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "hackrf_clock", "-o", str(freq_hz),
+                binary, *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            return {"success": False, "error": "hackrf_clock timed out"}
+            return {"success": False, "error": f"{binary} timed out ({timeout}s)"}
+        except FileNotFoundError:
+            return {"success": False, "error": f"{binary} binary not found"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -208,3 +219,261 @@ class HackRFDevice:
             "output": output.strip(),
             "returncode": proc.returncode,
         }
+
+    # ── Clock configuration ──────────────────────────────────────
+
+    async def get_clock_info(self) -> dict:
+        """Read current clock configuration via ``hackrf_clock -r``.
+
+        Returns:
+            Dict with success status and parsed clock info.
+        """
+        result = await self._run_cmd("hackrf_clock", ["-r"])
+        if result["success"]:
+            result["clock"] = self._parse_clock_output(result["output"])
+        return result
+
+    def _parse_clock_output(self, output: str) -> dict:
+        """Parse hackrf_clock -r output into structured dict."""
+        clock: dict = {}
+        m = re.search(r"CLKIN\s*[:=]\s*(\d+)", output, re.IGNORECASE)
+        if m:
+            clock["clkin_hz"] = int(m.group(1))
+        m = re.search(r"CLKOUT\s*[:=]\s*(\d+)", output, re.IGNORECASE)
+        if m:
+            clock["clkout_hz"] = int(m.group(1))
+        # Capture enabled/disabled state if present
+        if re.search(r"CLKOUT.*enabled", output, re.IGNORECASE):
+            clock["clkout_enabled"] = True
+        elif re.search(r"CLKOUT.*disabled", output, re.IGNORECASE):
+            clock["clkout_enabled"] = False
+        clock["raw"] = output
+        return clock
+
+    async def set_clkin(self, freq_hz: int) -> dict:
+        """Set external clock input (CLKIN) frequency.
+
+        Args:
+            freq_hz: CLKIN frequency in Hz (typically 10 MHz for GPS reference).
+
+        Returns:
+            Dict with success status and output.
+        """
+        log.info(f"Setting CLKIN to {freq_hz} Hz")
+        return await self._run_cmd("hackrf_clock", ["-i", str(freq_hz)])
+
+    async def set_clkout(self, freq_hz: int, enable: bool = True) -> dict:
+        """Set clock output (CLKOUT) frequency and enable/disable.
+
+        Args:
+            freq_hz: CLKOUT frequency in Hz.
+            enable: Whether to enable the clock output.
+
+        Returns:
+            Dict with success status and output.
+        """
+        log.info(f"Setting CLKOUT to {freq_hz} Hz, enable={enable}")
+        args = ["-o", str(freq_hz)]
+        if not enable:
+            args.append("-O")  # disable CLKOUT
+        return await self._run_cmd("hackrf_clock", args)
+
+    async def set_clock(self, freq_hz: int) -> dict:
+        """Set the HackRF clock output frequency using hackrf_clock.
+
+        Legacy method — prefer set_clkout() for new code.
+
+        Args:
+            freq_hz: Clock frequency in Hz.
+
+        Returns:
+            Dict with success status and output.
+        """
+        return await self.set_clkout(freq_hz)
+
+    # ── Opera Cake antenna switching ─────────────────────────────
+
+    async def get_operacake_boards(self) -> dict:
+        """List connected Opera Cake add-on boards.
+
+        Returns:
+            Dict with list of detected boards.
+        """
+        result = await self._run_cmd("hackrf_operacake", ["-l"])
+        if result["success"]:
+            result["boards"] = self._parse_operacake_list(result["output"])
+        return result
+
+    def _parse_operacake_list(self, output: str) -> list[dict]:
+        """Parse hackrf_operacake -l output."""
+        boards: list[dict] = []
+        for m in re.finditer(
+            r"(?:Board|Opera\s*Cake)\s*(\d+)\s*(?:at\s+address\s+)?(?:0x)?([0-9a-fA-F]+)?",
+            output, re.IGNORECASE,
+        ):
+            board: dict = {"index": int(m.group(1))}
+            if m.group(2):
+                board["address"] = m.group(2)
+            boards.append(board)
+        # If no structured entries but we got output, include raw
+        if not boards and output.strip():
+            boards.append({"index": 0, "raw": output.strip()})
+        return boards
+
+    async def set_antenna_port(self, port: str) -> dict:
+        """Set Opera Cake antenna port (e.g. A1, A2, B1, B2, etc.).
+
+        Args:
+            port: Antenna port identifier (A1-A4, B1-B4).
+
+        Returns:
+            Dict with success status and output.
+        """
+        port = port.upper().strip()
+        valid_ports = [f"{bank}{n}" for bank in "AB" for n in range(1, 5)]
+        if port not in valid_ports:
+            return {
+                "success": False,
+                "error": f"Invalid port '{port}'. Valid: {', '.join(valid_ports)}",
+            }
+        log.info(f"Setting Opera Cake antenna port to {port}")
+        return await self._run_cmd("hackrf_operacake", ["-a", port])
+
+    async def get_antenna_config(self) -> dict:
+        """Get current Opera Cake antenna routing configuration.
+
+        Returns:
+            Dict with current antenna config.
+        """
+        result = await self._run_cmd("hackrf_operacake", ["-l"])
+        if result["success"]:
+            result["boards"] = self._parse_operacake_list(result["output"])
+        return result
+
+    # ── Bias tee control ─────────────────────────────────────────
+
+    async def set_bias_tee(self, enabled: bool) -> dict:
+        """Enable or disable the bias tee (DC power on antenna port).
+
+        The bias tee provides ~3.3V DC on the antenna port for powering
+        active antennas and low-noise amplifiers (LNAs).
+
+        Args:
+            enabled: True to enable, False to disable.
+
+        Returns:
+            Dict with success status and output.
+        """
+        flag = "1" if enabled else "0"
+        log.info(f"Setting bias tee {'enabled' if enabled else 'disabled'}")
+        return await self._run_cmd("hackrf_transfer", ["-p", flag, "-R"], timeout=5.0)
+
+    # ── Device diagnostics ───────────────────────────────────────
+
+    async def get_debug_info(self) -> dict:
+        """Get PLL (Si5351C) status via hackrf_debug.
+
+        Returns:
+            Dict with PLL registers and status.
+        """
+        result = await self._run_cmd("hackrf_debug", ["--si5351c"])
+        if result["success"]:
+            result["pll"] = self._parse_debug_output(result["output"])
+        return result
+
+    def _parse_debug_output(self, output: str) -> dict:
+        """Parse hackrf_debug --si5351c output into structured dict."""
+        pll: dict = {"registers": {}}
+        for m in re.finditer(r"(\d+)\s*[:=]\s*(0x[0-9a-fA-F]+|\d+)", output):
+            pll["registers"][int(m.group(1))] = m.group(2)
+        pll["raw"] = output
+        return pll
+
+    async def get_board_id(self) -> dict:
+        """Get detailed board identification.
+
+        Combines hackrf_info board fields into a board identity dict.
+        """
+        info = self._info
+        if not info:
+            info = await self.detect()
+        if not info:
+            return {"success": False, "error": "HackRF not detected"}
+        return {
+            "success": True,
+            "board_id": info.get("board_id"),
+            "board_name": info.get("board_name"),
+            "serial": info.get("serial"),
+            "part_id": info.get("part_id"),
+            "hardware_revision": info.get("hardware_revision"),
+            "manufacturer": info.get("manufacturer"),
+        }
+
+    async def get_cpld_checksum(self) -> dict:
+        """Verify CPLD firmware checksum via hackrf_debug.
+
+        Returns:
+            Dict with CPLD checksum and verification status.
+        """
+        result = await self._run_cmd("hackrf_debug", ["--cpld-checksum"])
+        if result["success"]:
+            m = re.search(r"(?:checksum|CPLD)\s*[:=]?\s*(0x[0-9a-fA-F]+)", result["output"], re.IGNORECASE)
+            if m:
+                result["cpld_checksum"] = m.group(1)
+        return result
+
+    # ── Firmware management (enhanced) ───────────────────────────
+
+    async def get_firmware_info(self) -> dict:
+        """Get current firmware version and related info.
+
+        Returns:
+            Dict with firmware version, API version, tool versions.
+        """
+        info = self._info
+        if not info:
+            info = await self.detect()
+        if not info:
+            return {"success": False, "error": "HackRF not detected"}
+        return {
+            "success": True,
+            "firmware_version": info.get("firmware_version", ""),
+            "api_version": info.get("api_version", ""),
+            "tool_version": info.get("tool_version", ""),
+            "lib_version": info.get("lib_version", ""),
+            "hardware_revision": info.get("hardware_revision", ""),
+            "serial": info.get("serial", ""),
+        }
+
+    async def flash_cpld(self, firmware_path: str) -> dict:
+        """Flash CPLD firmware using hackrf_cpldjtag.
+
+        Args:
+            firmware_path: Path to the CPLD .xsvf firmware file.
+
+        Returns:
+            Dict with success status and output.
+        """
+        log.info(f"Flashing CPLD from {firmware_path}")
+        result = await self._run_cmd(
+            "hackrf_cpldjtag", ["-x", firmware_path], timeout=120.0,
+        )
+        if result["success"]:
+            log.info("CPLD firmware flashed successfully")
+            self._info = None  # Invalidate cache
+        else:
+            log.error(f"CPLD flash failed: {result.get('output', '')}")
+        return result
+
+    async def reset_device(self) -> dict:
+        """Reset HackRF into DFU mode for firmware recovery.
+
+        Returns:
+            Dict with success status and output.
+        """
+        log.warning("Resetting HackRF to DFU mode")
+        result = await self._run_cmd("hackrf_spiflash", ["-R"], timeout=15.0)
+        if result["success"]:
+            self._info = None  # Device will be in DFU mode
+            self._available = None  # Re-check availability after reset
+        return result

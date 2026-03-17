@@ -512,4 +512,130 @@ def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None
             return {"error": "not available"}
         return rtl433.get_stats()
 
+    # ── Clock Configuration ──────────────────────────────────────
+
+    @router.get("/clock")
+    async def clock_info():
+        """Get current clock configuration (CLKIN/CLKOUT)."""
+        return await device.get_clock_info()
+
+    @router.post("/clock/clkin")
+    async def set_clkin(body: dict):
+        """Set external clock input (CLKIN) frequency.
+
+        Body: {
+            "freq_hz": 10000000   // Frequency in Hz (e.g. 10 MHz GPS ref)
+        }
+        """
+        freq_hz = int(body.get("freq_hz", 10_000_000))
+        return await device.set_clkin(freq_hz)
+
+    @router.post("/clock/clkout")
+    async def set_clkout(body: dict):
+        """Set clock output (CLKOUT) frequency and enable/disable.
+
+        Body: {
+            "freq_hz": 10000000,  // Frequency in Hz
+            "enable": true        // Enable (default true) or disable
+        }
+        """
+        freq_hz = int(body.get("freq_hz", 10_000_000))
+        enable = bool(body.get("enable", True))
+        return await device.set_clkout(freq_hz, enable=enable)
+
+    # ── Opera Cake Antenna Switching ─────────────────────────────
+
+    @router.get("/operacake")
+    async def operacake_info():
+        """List connected Opera Cake boards and current antenna config."""
+        boards_result = await device.get_operacake_boards()
+        config_result = await device.get_antenna_config()
+        return {
+            "boards": boards_result.get("boards", []),
+            "config": config_result.get("boards", []),
+            "available": boards_result.get("success", False),
+        }
+
+    @router.post("/operacake/port")
+    async def set_antenna_port(body: dict):
+        """Set Opera Cake antenna port.
+
+        Body: {
+            "port": "A1"   // Antenna port: A1-A4, B1-B4
+        }
+        """
+        port = body.get("port", "A1")
+        return await device.set_antenna_port(port)
+
+    # ── Bias Tee Control ─────────────────────────────────────────
+
+    @router.post("/bias-tee")
+    async def set_bias_tee(body: dict):
+        """Enable or disable the bias tee (DC power on antenna port).
+
+        Body: {
+            "enabled": true   // true = enable 3.3V DC, false = disable
+        }
+        """
+        enabled = bool(body.get("enabled", False))
+        return await device.set_bias_tee(enabled)
+
+    # ── Device Diagnostics ───────────────────────────────────────
+
+    @router.get("/diagnostics")
+    async def diagnostics():
+        """Full device diagnostics: PLL status, CPLD checksum, board ID."""
+        board_id = await device.get_board_id()
+        debug = await device.get_debug_info()
+        cpld = await device.get_cpld_checksum()
+        return {
+            "board": board_id if board_id.get("success") else {"error": board_id.get("error")},
+            "pll": debug.get("pll") if debug.get("success") else {"error": debug.get("error", debug.get("output", ""))},
+            "cpld_checksum": cpld.get("cpld_checksum") if cpld.get("success") else None,
+            "cpld_error": cpld.get("error") if not cpld.get("success") else None,
+        }
+
+    # ── Firmware Management (enhanced) ───────────────────────────
+
+    @router.post("/firmware/flash")
+    async def flash_main_firmware(firmware: UploadFile = File(...)):
+        """Flash main SPI firmware to the HackRF.
+
+        Upload a .bin firmware file. Uses hackrf_spiflash -w.
+        WARNING: Destructive operation. Ensure the firmware file is correct.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+            content = await firmware.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            return await device.flash_firmware(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+    @router.post("/firmware/cpld")
+    async def flash_cpld_firmware(firmware: UploadFile = File(...)):
+        """Flash CPLD firmware to the HackRF.
+
+        Upload a .xsvf CPLD firmware file. Uses hackrf_cpldjtag -x.
+        WARNING: Destructive operation.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".xsvf", delete=False) as tmp:
+            content = await firmware.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            return await device.flash_cpld(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+    @router.post("/device/reset")
+    async def reset_device():
+        """Reset HackRF into DFU mode for firmware recovery.
+
+        WARNING: The device will disconnect and enter DFU bootloader mode.
+        A USB re-enumeration is required after reset.
+        """
+        return await device.reset_device()
+
     return router
