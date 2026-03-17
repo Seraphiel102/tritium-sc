@@ -170,6 +170,10 @@ class ConnectionManager:
                 # Disconnect any existing interface first
                 self._close_interface()
 
+                # Drain stale serial data to prevent protocol confusion
+                # (critical after rapid connect/disconnect cycles)
+                self._drain_serial(port)
+
                 loop = asyncio.get_event_loop()
 
                 # The SerialInterface ``timeout`` kwarg maps to
@@ -464,6 +468,35 @@ class ConnectionManager:
                 pass
             self.interface = None
 
+    @staticmethod
+    def _drain_serial(port: str):
+        """Drain stale data from serial port and toggle DTR to reset USB-CDC state.
+
+        After rapid connect/disconnect cycles, the serial buffer can have stale
+        protobuf data that confuses the meshtastic protocol handshake. This
+        drains the buffer and resets the connection state.
+        """
+        try:
+            import serial as _serial
+            import time as _time
+            s = _serial.Serial(port, 115200, timeout=0.5)
+            # Toggle DTR to reset USB-CDC
+            s.dtr = False
+            _time.sleep(0.1)
+            s.dtr = True
+            _time.sleep(0.5)
+            # Drain any queued data
+            drained = 0
+            while s.in_waiting:
+                data = s.read(s.in_waiting)
+                drained += len(data)
+                _time.sleep(0.05)
+            s.close()
+            if drained > 0:
+                log.info(f"Drained {drained} stale bytes from {port}")
+        except Exception as e:
+            log.debug(f"Serial drain on {port} failed (non-fatal): {e}")
+
     def _find_serial_device(self) -> str | None:
         """Scan /dev for Meshtastic-compatible serial devices."""
         # Check environment variable first
@@ -514,17 +547,19 @@ class ConnectionManager:
                 "hw_model": user.get("hwModel", ""),
                 "mac": user.get("macaddr", ""),
             }
-            # Read cached metadata only — do NOT call getMetadata() as it blocks
+            # Read cached metadata — fields are camelCase in protobuf
             metadata = getattr(self.interface, 'metadata', None)
             if metadata:
                 self.device_info["firmware"] = getattr(metadata, 'firmware_version', '')
-                self.device_info["has_wifi"] = getattr(metadata, 'has_wifi', False)
-                self.device_info["has_bluetooth"] = getattr(metadata, 'has_bluetooth', False)
+                self.device_info["has_wifi"] = getattr(metadata, 'hasWifi', False)
+                self.device_info["has_bluetooth"] = getattr(metadata, 'hasBluetooth', False)
+                self.device_info["has_ethernet"] = getattr(metadata, 'hasEthernet', False)
                 self.device_info["role"] = getattr(metadata, 'role', '')
 
-            # Read radio config from localConfig (already cached, no blocking)
+            # Read radio config from localNode.localConfig (NOT iface.localConfig which is None)
             try:
-                lc = self.interface.localConfig
+                node = getattr(self.interface, 'localNode', None)
+                lc = getattr(node, 'localConfig', None) if node else None
                 if lc:
                     lora = getattr(lc, 'lora', None)
                     if lora:

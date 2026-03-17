@@ -223,8 +223,8 @@ class DeviceManager:
             metadata = getattr(iface, "metadata", None)
             if metadata:
                 info.firmware_version = getattr(metadata, "firmware_version", "")
-                info.has_wifi = getattr(metadata, "has_wifi", False)
-                info.has_bluetooth = getattr(metadata, "has_bluetooth", False)
+                info.has_wifi = getattr(metadata, "hasWifi", False)
+                info.has_bluetooth = getattr(metadata, "hasBluetooth", False)
                 info.has_ethernet = getattr(metadata, "has_ethernet", False)
                 role_val = getattr(metadata, "role", None)
                 if role_val is not None:
@@ -240,7 +240,7 @@ class DeviceManager:
 
         # Local config for radio settings — already cached, no blocking
         try:
-            local_config = iface.localConfig if hasattr(iface, "localConfig") else None
+            local_config = getattr(getattr(iface, 'localNode', None), 'localConfig', None)
             if local_config:
                 lora = getattr(local_config, "lora", None)
                 if lora:
@@ -993,7 +993,7 @@ class DeviceManager:
         node = iface.localNode
 
         # Local config sections
-        local_config = iface.localConfig if hasattr(iface, "localConfig") else None
+        local_config = getattr(getattr(iface, 'localNode', None), 'localConfig', None)
         if local_config:
             for section_name in ["device", "lora", "position", "network",
                                   "bluetooth", "display", "power"]:
