@@ -60,6 +60,39 @@ async def disable_addon(addon_id: str, request: Request):
     return {"addon_id": addon_id, "disabled": ok}
 
 
+@router.post("/{addon_id}/reload")
+async def reload_addon(addon_id: str, request: Request):
+    """Hot-reload an addon: re-read manifest, purge module cache, re-enable.
+
+    This is the key endpoint for addon development. Change code, hit reload,
+    see changes without restarting the server.
+    """
+    loader = getattr(request.app.state, "addon_loader", None)
+    if not loader:
+        return {"error": "Addon loader not initialized"}
+    ok = await loader.reload(addon_id)
+    return {
+        "addon_id": addon_id,
+        "reloaded": ok,
+        # Return a version token the frontend can use to bust its JS module cache
+        "version": int(__import__("time").time()),
+    }
+
+
+@router.post("/rediscover")
+async def rediscover_addons(request: Request):
+    """Re-scan addon directories for new addons.
+
+    Call this after dropping a new addon folder into the addons/ directory.
+    Returns list of newly discovered addon IDs.
+    """
+    loader = getattr(request.app.state, "addon_loader", None)
+    if not loader:
+        return {"error": "Addon loader not initialized"}
+    new_ids = loader.rediscover()
+    return {"new_addons": new_ids, "total": len(loader.registry)}
+
+
 @router.get("/{addon_id}/health")
 async def addon_specific_health(addon_id: str, request: Request):
     """Health check for a specific addon."""

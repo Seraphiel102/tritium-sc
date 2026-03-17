@@ -197,6 +197,82 @@ class AddonLoader:
             })
         return result
 
+    async def reload(self, addon_id: str) -> bool:
+        """Hot-reload an addon: disable, purge Python module cache, re-import, re-enable.
+
+        This is the key operation for development — change addon code, call reload,
+        see changes without restarting the server.
+        """
+        entry = self.registry.get(addon_id)
+        if not entry:
+            log.error(f"Unknown addon: {addon_id}")
+            return False
+
+        was_enabled = addon_id in self.enabled
+
+        # 1. Disable if running
+        if was_enabled:
+            await self.disable(addon_id)
+
+        # 2. Re-read manifest (picks up TOML changes)
+        manifest_path = entry.path / "tritium_addon.toml"
+        if manifest_path.exists():
+            try:
+                new_manifest = load_manifest(manifest_path)
+                errors = validate_manifest(new_manifest)
+                if errors:
+                    log.warning(f"Invalid manifest after reload: {errors}")
+                else:
+                    entry.manifest = new_manifest
+                    log.info(f"Reloaded manifest for {addon_id}")
+            except Exception as e:
+                log.warning(f"Failed to reload manifest for {addon_id}: {e}")
+
+        # 3. Purge Python module cache for this addon
+        module_name = entry.manifest.module or f"{addon_id.replace('-', '_')}_addon"
+        to_remove = [k for k in sys.modules if k == module_name or k.startswith(module_name + ".")]
+        for k in to_remove:
+            del sys.modules[k]
+            log.debug(f"Purged module: {k}")
+
+        # 4. Re-enable if it was running
+        if was_enabled:
+            ok = await self.enable(addon_id)
+            if ok:
+                log.info(f"Hot-reloaded addon: {addon_id}")
+            else:
+                log.error(f"Failed to re-enable addon {addon_id} after reload")
+            return ok
+
+        log.info(f"Reloaded addon manifest: {addon_id} (not re-enabled)")
+        return True
+
+    def rediscover(self) -> list[str]:
+        """Re-scan addon directories for new or changed addons.
+
+        Finds new addons that weren't present at boot. Does NOT touch
+        already-loaded addons — use reload() for those.
+
+        Returns list of newly discovered addon IDs.
+        """
+        new_ids = []
+        for d in self.addon_dirs:
+            if not d.exists():
+                continue
+            for manifest_path in d.glob("*/tritium_addon.toml"):
+                try:
+                    manifest = load_manifest(manifest_path)
+                    errors = validate_manifest(manifest)
+                    if errors:
+                        continue
+                    if manifest.id not in self.registry:
+                        self.registry[manifest.id] = AddonEntry(manifest, manifest_path.parent)
+                        new_ids.append(manifest.id)
+                        log.info(f"Discovered new addon: {manifest.id}")
+                except Exception:
+                    pass
+        return new_ids
+
     def get_health(self) -> dict:
         """Overall addon system health."""
         return {

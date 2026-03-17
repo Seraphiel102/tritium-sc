@@ -9,6 +9,7 @@
 
 import { EventBus } from '../events.js';
 import { _esc } from '../panel-utils.js';
+import { reloadAddon, discoverAddons } from '../addon-loader.js';
 
 const POLL_INTERVAL_MS = 10000;
 
@@ -112,6 +113,7 @@ function _renderAddonCard(addon, manifest) {
         <div class="addmgr-card-footer">
             <span class="addmgr-badge" style="border-color:${catColor};color:${catColor}">${_esc(cat)}</span>
             ${layerInfo}
+            <button class="addmgr-reload-btn" data-reload="${id}" title="Hot-reload this addon (re-read code + manifest)">RELOAD</button>
             <button class="addmgr-open-all-btn" data-open-all="${id}" title="Open all panels for this addon"${enabled ? '' : ' disabled'}>OPEN ALL</button>
         </div>
     </div>`;
@@ -380,6 +382,25 @@ function _injectStyles() {
             color: #888;
             cursor: help;
         }
+        .addmgr-reload-btn {
+            font-size: 0.6rem;
+            font-family: inherit;
+            background: rgba(252, 238, 10, 0.08);
+            border: 1px solid rgba(252, 238, 10, 0.25);
+            border-radius: 2px;
+            color: #fcee0a;
+            padding: 2px 8px;
+            cursor: pointer;
+            transition: background 0.15s, box-shadow 0.15s;
+        }
+        .addmgr-reload-btn:hover {
+            background: rgba(252, 238, 10, 0.18);
+            box-shadow: 0 0 6px rgba(252, 238, 10, 0.2);
+        }
+        .addmgr-reload-btn:disabled {
+            opacity: 0.4;
+            cursor: wait;
+        }
         /* Footer link */
         .addmgr-footer {
             padding: 8px 12px;
@@ -428,7 +449,7 @@ export const AddonsManagerPanelDef = {
             </div>
             <div class="addmgr-list" data-bind="list"></div>
             <div class="addmgr-footer">
-                <a data-action="discover">Discover new addons...</a>
+                <a data-action="discover">Scan for new addons</a>
             </div>
         `;
         return el;
@@ -570,12 +591,40 @@ export const AddonsManagerPanelDef = {
                 return;
             }
 
-            // Discover link
-            if (e.target.closest('[data-action="discover"]')) {
+            // Reload addon (hot-reload backend + frontend)
+            const reloadBtn = e.target.closest('[data-reload]');
+            if (reloadBtn) {
+                const addonId = reloadBtn.dataset.reload;
+                reloadBtn.disabled = true;
+                reloadBtn.textContent = 'RELOADING...';
+                const ok = await reloadAddon(addonId);
                 EventBus.emit('toast:show', {
-                    message: 'Addon marketplace coming soon',
-                    type: 'info',
+                    message: ok ? `Addon "${addonId}" reloaded` : `Reload failed for "${addonId}"`,
+                    type: ok ? 'info' : 'alert',
                 });
+                reloadBtn.disabled = false;
+                reloadBtn.textContent = 'RELOAD';
+                await fetchAddons();
+                return;
+            }
+
+            // Discover new addons (scan directories)
+            if (e.target.closest('[data-action="discover"]')) {
+                e.target.textContent = 'Scanning...';
+                const newIds = await discoverAddons();
+                if (newIds.length > 0) {
+                    EventBus.emit('toast:show', {
+                        message: `Found ${newIds.length} new addon(s): ${newIds.join(', ')}`,
+                        type: 'info',
+                    });
+                } else {
+                    EventBus.emit('toast:show', {
+                        message: 'No new addons found',
+                        type: 'info',
+                    });
+                }
+                e.target.textContent = 'Scan for new addons';
+                await fetchAddons();
             }
         });
 
