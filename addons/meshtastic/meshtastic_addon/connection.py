@@ -152,6 +152,12 @@ class ConnectionManager:
             self.is_connected = False
             return
 
+        # If already connected to this port, return early
+        if self.interface is not None and self.port == port:
+            log.info(f"Already connected to {port}")
+            self.is_connected = True
+            return
+
         for attempt in range(1 + retries):
             try:
                 import meshtastic.serial_interface
