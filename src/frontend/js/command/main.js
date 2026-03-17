@@ -19,7 +19,8 @@ import { AmyPanelDef } from './panels/amy.js';
 import { UnitsPanelDef } from './panels/units.js';
 import { AlertsPanelDef } from './panels/alerts.js';
 import { GameHudPanelDef } from './panels/game-hud.js';
-import { MeshPanelDef } from './panels/mesh.js';
+// MeshPanelDef replaced by meshtastic addon's unified tabbed panel
+// import { MeshPanelDef } from './panels/mesh.js';
 import { AudioPanelDef } from './panels/audio.js';
 import { EscalationPanelDef } from './panels/escalation.js';
 import { EventsPanelDef } from './panels/events.js';
@@ -735,7 +736,7 @@ function initPanelSystem(container) {
     panelManager.register(UnitsPanelDef);
     panelManager.register(AlertsPanelDef);
     panelManager.register(GameHudPanelDef);
-    panelManager.register(MeshPanelDef);
+    // MeshPanelDef replaced by meshtastic addon — loaded dynamically via addon-loader
     panelManager.register(AudioPanelDef);
     panelManager.register(EscalationPanelDef);
     panelManager.register(EventsPanelDef);
@@ -1746,7 +1747,7 @@ function initKeyboard() {
                 if (panelManager) panelManager.toggle('game');
                 break;
             case '5':
-                if (panelManager) panelManager.toggle('mesh');
+                if (panelManager) panelManager.toggle('meshtastic');
                 break;
             case '6':
                 if (panelManager) panelManager.toggle('cameras');

@@ -44,10 +44,7 @@ mqtt_topics = [
 
 [frontend]
 panels = [
-    { id = "mesh-network", title = "MESHTASTIC", file = "mesh-network.js", tab_order = 1 },
-    { id = "mesh-nodes", title = "MESH NODES", file = "mesh-nodes.js", tab_order = 2 },
-    { id = "mesh-config", title = "DEVICE CONFIG", file = "mesh-config.js", tab_order = 3 },
-    { id = "mesh-messages", title = "MESH CHAT", file = "mesh-messages.js", tab_order = 4 },
+    { id = "meshtastic", title = "MESHTASTIC", file = "meshtastic.js", tab_order = 1 },
 ]
 layers = [
     { id = "meshNodes", label = "Mesh Nodes", category = "MESH NETWORK", color = "#00d4aa" },
