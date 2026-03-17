@@ -1104,6 +1104,37 @@ async def lifespan(app: FastAPI):
         if sim_engine is not None:
             sim_engine.set_plugin_manager(plugin_manager)
 
+    # Addon system — discover and enable addons from addons/ directory
+    try:
+        from engine.addons.loader import AddonLoader
+        addon_loader = AddonLoader(
+            addon_dirs=["addons/", str(Path.home() / ".tritium" / "addons")],
+            app=app,
+        )
+        found = addon_loader.discover()
+        if found:
+            logger.info(f"Discovered {len(found)} addon(s): {', '.join(found)}")
+            for addon_id in found:
+                try:
+                    ok = await addon_loader.enable(addon_id)
+                    if ok:
+                        logger.info(f"Enabled addon: {addon_id}")
+                    else:
+                        logger.warning(f"Failed to enable addon: {addon_id}")
+                except Exception as e:
+                    logger.warning(f"Addon enable error for {addon_id}: {e}")
+        app.state.addon_loader = addon_loader
+        logger.info(f"Addon system: {len(addon_loader.enabled)} addon(s) active")
+    except Exception as e:
+        logger.warning(f"Addon system init failed (non-fatal): {e}")
+
+    # Include addon API routes
+    try:
+        from app.routers.addons import router as addons_router
+        app.include_router(addons_router)
+    except Exception as e:
+        logger.warning(f"Addon routes failed (non-fatal): {e}")
+
     # RL auto-retrain scheduler — retrains correlation model every 6h or
     # after 50 new feedback entries. Pushes results to Amy's sensorium.
     try:
