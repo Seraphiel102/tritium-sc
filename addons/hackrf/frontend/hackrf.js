@@ -838,6 +838,28 @@ export const HackRFPanelDef = {
             }
 
             ctx.putImageData(imgData, 0, 0);
+
+            // Overlay frequency labels on waterfall
+            if (sweepData && sweepData.freqs && sweepData.freqs.length > 0) {
+                const fMin = sweepData.freqs[0];
+                const fMax = sweepData.freqs[sweepData.freqs.length - 1];
+                ctx.fillStyle = 'rgba(10,10,15,0.6)';
+                ctx.fillRect(0, h - 14, w, 14);
+                ctx.font = '9px monospace';
+                ctx.fillStyle = '#888';
+                const ticks = Math.min(6, Math.max(2, Math.floor(w / 80)));
+                for (let i = 0; i <= ticks; i++) {
+                    const frac = i / ticks;
+                    const x = frac * w;
+                    const freq = fMin + frac * (fMax - fMin);
+                    ctx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
+                    ctx.fillText(_fmtFreqShort(freq), x, h - 3);
+                }
+                // Time label
+                ctx.fillStyle = '#555';
+                ctx.textAlign = 'left';
+                ctx.fillText(`${visibleRows} rows`, 4, 10);
+            }
         }
 
         // ── SIGNALS tab ────────────────────────────────────────────
