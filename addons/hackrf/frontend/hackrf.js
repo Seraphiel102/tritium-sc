@@ -174,12 +174,16 @@ export const HackRFPanelDef = {
                 const r = await fetch(API + '/sweep/data');
                 if (r.ok) {
                     const d = await r.json();
-                    sweepData = d;
-                    sweepRunning = d.running || false;
+                    // Transform API format {data: [{freq_hz, power_dbm}]} to canvas format {freqs, powers}
+                    const rawData = d.data || d.points || [];
+                    const freqs = rawData.map(p => p.freq_hz || p.freq || 0);
+                    const powers = rawData.map(p => p.power_dbm || p.power || -100);
+                    sweepData = { freqs, powers, count: rawData.length, status: d.status || {} };
+                    sweepRunning = (d.status && d.status.running) || d.running || false;
                     if (d.signals) signals = d.signals;
                     // Push new row into waterfall history
-                    if (d.powers && d.powers.length > 0) {
-                        waterfallHistory.unshift(d.powers.slice());
+                    if (powers.length > 0) {
+                        waterfallHistory.unshift(powers.slice());
                         if (waterfallHistory.length > WATERFALL_MAX_ROWS) {
                             waterfallHistory.length = WATERFALL_MAX_ROWS;
                         }
