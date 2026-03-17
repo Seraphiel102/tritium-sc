@@ -514,11 +514,15 @@ class ConnectionManager:
                 "hw_model": user.get("hwModel", ""),
                 "mac": user.get("macaddr", ""),
             }
-            # Note: getMetadata() sends an admin request and blocks waiting
-            # for a reply, which can hang.  Only call it if we already have
-            # metadata cached from the initial config exchange.
-            if hasattr(self.interface, 'metadata') and self.interface.metadata:
-                metadata = self.interface.metadata
+            # Try cached metadata first, then request if not available
+            metadata = getattr(self.interface, 'metadata', None)
+            if metadata is None:
+                # metadata not cached yet — try requesting it (may take a few seconds)
+                try:
+                    metadata = self.interface.getMetadata()
+                except Exception:
+                    pass  # getMetadata can block/hang on some firmware versions
+            if metadata:
                 self.device_info["firmware"] = getattr(metadata, 'firmware_version', '')
                 self.device_info["has_wifi"] = getattr(metadata, 'has_wifi', False)
                 self.device_info["has_bluetooth"] = getattr(metadata, 'has_bluetooth', False)
