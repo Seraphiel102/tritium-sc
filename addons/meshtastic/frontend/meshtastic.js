@@ -1856,6 +1856,19 @@ function _injectStyles() {
         .msh-td-long { max-width:120px; }
         .msh-td-hw { font-size:0.65rem; color:#999; }
         .msh-tr:hover .msh-td { background:rgba(0,240,255,0.03); }
+        .msh-tr-selected .msh-td { background:rgba(0,240,255,0.08); }
+        .msh-fav-star { font-size:0.85rem; transition:color 0.15s; }
+        .msh-fav-star:hover { color:#fcee0a !important; }
+
+        /* ── Node detail overlay ───────────────────────────────── */
+        .msh-node-detail { border:1px solid #00f0ff33; border-radius:4px; margin:6px 10px; background:#0e0e14; flex-shrink:0; max-height:45%; overflow-y:auto; }
+        .msh-detail-header { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #1a1a2e; position:sticky; top:0; background:#0e0e14; z-index:1; }
+        .msh-detail-title { font-size:0.8rem; color:#00f0ff; font-weight:bold; letter-spacing:0.5px; }
+        .msh-detail-body { padding:4px 10px 8px; }
+        .msh-detail-row { display:flex; justify-content:space-between; padding:2px 0; border-bottom:1px solid #ffffff06; font-size:0.7rem; }
+        .msh-detail-lbl { color:#888; font-size:0.65rem; min-width:90px; }
+        .msh-detail-val { color:#ccc; text-align:right; }
+        .msh-detail-section { font-size:0.6rem; color:#00f0ff88; letter-spacing:1.5px; padding:6px 0 2px; text-transform:uppercase; font-weight:bold; }
 
         /* ── Messages tab ───────────────────────────────────────── */
         .msh-msg-header { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #1a1a2e; flex-shrink:0; }
