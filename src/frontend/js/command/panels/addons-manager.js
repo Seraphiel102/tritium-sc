@@ -566,7 +566,7 @@ export const AddonsManagerPanelDef = {
         });
 
         // Event delegation for clicks
-        bodyEl.addEventListener('click', (e) => {
+        bodyEl.addEventListener('click', async (e) => {
             // Open a single addon panel
             const panelBtn = e.target.closest('[data-open-panel]');
             if (panelBtn) {
