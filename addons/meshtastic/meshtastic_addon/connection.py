@@ -190,7 +190,10 @@ class ConnectionManager:
                 self.is_connected = True
                 self.transport_type = "serial"
                 self.port = port
-                self._read_device_info()
+                try:
+                    self._read_device_info()
+                except Exception as info_err:
+                    log.warning(f"Device info read failed (connection still OK): {info_err}")
                 log.info(f"Connected to {self.device_info.get('long_name', port)} via serial")
                 if self.event_bus:
                     self.event_bus.emit("meshtastic:connected", {
