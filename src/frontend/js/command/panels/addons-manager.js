@@ -589,7 +589,7 @@ export const AddonsManagerPanelDef = {
             // Open ALL panels for an addon
             const openAllBtn = e.target.closest('[data-open-addon]');
             if (openAllBtn) {
-                const addonId = openAllBtn.dataset.openAll;
+                const addonId = openAllBtn.dataset.openAddon;
                 const manifest = manifests[addonId];
                 if (manifest && manifest.panels) {
                     for (const p of manifest.panels) {
