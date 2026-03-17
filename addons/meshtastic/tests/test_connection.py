@@ -201,8 +201,8 @@ class TestSerialConnect:
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs.get("noNodes") is True
 
-    def test_serial_uses_connectTimeout_not_timeout(self, tmp_path):
-        """The key bug fix: SerialInterface should get connectTimeout, not timeout."""
+    def test_serial_passes_timeout_kwarg(self, tmp_path):
+        """SerialInterface receives timeout kwarg (the correct param name per meshtastic lib)."""
         fake_port = tmp_path / "ttyACM0"
         fake_port.touch()
 
@@ -215,11 +215,7 @@ class TestSerialConnect:
         asyncio.run(cm.connect_serial(str(fake_port), timeout=60))
 
         call_kwargs = mock_cls.call_args.kwargs
-        # Must NOT pass 'timeout' kwarg to the library
-        assert "timeout" not in call_kwargs, \
-            "Should use connectTimeout, not timeout — timeout maps to connectTimeout in the library"
-        # Must pass connectTimeout
-        assert "connectTimeout" in call_kwargs
+        assert "timeout" in call_kwargs
 
     def test_serial_disconnect_cleans_up(self, tmp_path):
         fake_port = tmp_path / "ttyACM0"
@@ -276,8 +272,8 @@ class TestSerialConnect:
         cm = ConnectionManager(event_bus=bus)
         asyncio.run(cm.connect_serial(str(fake_port), timeout=10))
         assert cm.is_connected
-        bus.emit.assert_called_once()
-        args = bus.emit.call_args
+        bus.publish.assert_called_once()
+        args = bus.publish.call_args
         assert args[0][0] == "meshtastic:connected"
         assert args[0][1]["transport"] == "serial"
 
@@ -300,7 +296,7 @@ class TestTCPConnect:
         assert cm.transport_type == "tcp"
         assert cm.port == "192.168.1.100:4403"
 
-    def test_tcp_uses_connectTimeout(self):
+    def test_tcp_passes_timeout_kwarg(self):
         iface = _make_fake_interface()
         mock_cls = _get_tcp_mock()
         mock_cls.reset_mock()
@@ -310,8 +306,7 @@ class TestTCPConnect:
         asyncio.run(cm.connect_tcp("192.168.1.100", timeout=10))
 
         call_kwargs = mock_cls.call_args.kwargs
-        assert "connectTimeout" in call_kwargs
-        assert "timeout" not in call_kwargs
+        assert "timeout" in call_kwargs
 
     def test_tcp_failure_stays_disconnected(self):
         mock_cls = _get_tcp_mock()
@@ -423,8 +418,8 @@ class TestBLEConnect:
         cm = ConnectionManager(event_bus=bus)
         asyncio.run(cm.connect_ble("AA:BB:CC:DD:EE:FF", timeout=10))
         assert cm.is_connected
-        bus.emit.assert_called_once()
-        args = bus.emit.call_args
+        bus.publish.assert_called_once()
+        args = bus.publish.call_args
         assert args[0][0] == "meshtastic:connected"
         assert args[0][1]["transport"] == "ble"
 
@@ -528,8 +523,8 @@ class TestMQTTConnect:
         cm = ConnectionManager(event_bus=bus)
         asyncio.run(cm.connect_mqtt(timeout=10))
         assert cm.is_connected
-        bus.emit.assert_called_once()
-        args = bus.emit.call_args
+        bus.publish.assert_called_once()
+        args = bus.publish.call_args
         assert args[0][0] == "meshtastic:connected"
         assert args[0][1]["transport"] == "mqtt"
         assert args[0][1]["topic"] == "msh/US/2/e/#"

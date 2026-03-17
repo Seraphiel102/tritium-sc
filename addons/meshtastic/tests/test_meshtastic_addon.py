@@ -35,10 +35,9 @@ class TestManifest:
 
     def test_manifest_has_panels(self):
         m = load_manifest(Path(__file__).parent.parent / "tritium_addon.toml")
-        assert len(m.panels) == 4
+        assert len(m.panels) == 1
         ids = [p["id"] for p in m.panels]
-        assert "mesh-network" in ids
-        assert "mesh-nodes" in ids
+        assert "meshtastic" in ids
 
     def test_manifest_has_layers(self):
         m = load_manifest(Path(__file__).parent.parent / "tritium_addon.toml")

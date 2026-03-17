@@ -20,6 +20,7 @@ const TABS = [
     { id: 'channels', label: 'CHANNELS' },
     { id: 'config',   label: 'CONFIG' },
     { id: 'modules',  label: 'MODULES' },
+    { id: 'firmware', label: 'FIRMWARE' },
 ];
 
 // ─── Node table columns ─────────────────────────────────────────────
@@ -332,6 +333,7 @@ export const MeshtasticPanelDef = {
                 case 'channels': renderChannels(); break;
                 case 'config':   renderConfig(); break;
                 case 'modules':  renderModules(); break;
+                case 'firmware': renderFirmware(); break;
             }
         }
 
@@ -1133,12 +1135,146 @@ export const MeshtasticPanelDef = {
             </div>`;
         }
 
+        // ─── FIRMWARE TAB ────────────────────────────────────────
+        let firmwareInfo = {};
+        let availableVersions = [];
+
+        async function fetchFirmwareInfo() {
+            try {
+                const [fwRes, verRes] = await Promise.all([
+                    fetch(API + '/device/firmware').then(r => r.ok ? r.json() : null),
+                    fetch(API + '/device/firmware/versions').then(r => r.ok ? r.json() : null),
+                ]);
+                if (fwRes) firmwareInfo = fwRes;
+                if (verRes) availableVersions = verRes.versions || [];
+            } catch (_) {}
+        }
+
+        function renderFirmware() {
+            const fw = firmwareInfo;
+            const current = fw.current_version || deviceInfo.firmware_version || '--';
+            const latest = fw.latest_version || '--';
+            const hwModel = fw.hw_model || deviceInfo.hw_model || '--';
+            const updateAvail = fw.update_available;
+            const hasEsptool = fw.esptool_available;
+            const hasCli = fw.meshtastic_cli_available;
+
+            body.innerHTML = `
+                <div class="msh-section-label">CURRENT FIRMWARE</div>
+                <div class="msh-config-grid">
+                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Version</span><span class="msh-cfg-val">${_esc(current)}</span></div>
+                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Hardware</span><span class="msh-cfg-val">${_esc(hwModel)}</span></div>
+                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Latest Available</span><span class="msh-cfg-val${updateAvail ? ' msh-cfg-warn' : ''}">${_esc(latest)}${updateAvail ? ' (UPDATE AVAILABLE)' : ''}</span></div>
+                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">esptool</span><span class="msh-cfg-val">${hasEsptool ? '<span style="color:#05ffa1">INSTALLED</span>' : '<span style="color:#ff2a6d">NOT FOUND</span>'}</span></div>
+                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">meshtastic CLI</span><span class="msh-cfg-val">${hasCli ? '<span style="color:#05ffa1">INSTALLED</span>' : '<span style="color:#ff2a6d">NOT FOUND</span>'}</span></div>
+                </div>
+
+                ${updateAvail ? `
+                <div style="padding:8px 10px;">
+                    <button class="msh-btn msh-btn-primary" data-action="flash-latest" style="width:100%;padding:8px;font-size:0.8rem;">
+                        FLASH LATEST FIRMWARE (${_esc(latest)})
+                    </button>
+                    <div style="font-size:0.65rem;color:#888;margin-top:4px;text-align:center;">
+                        This will erase settings and install a fresh copy. Back up your channels first.
+                    </div>
+                </div>` : ''}
+
+                <div class="msh-section-label" style="margin-top:12px">FLASH CUSTOM FIRMWARE</div>
+                <div style="padding:6px 10px;">
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+                        <input type="text" class="msh-input" data-bind="fw-path" placeholder="/path/to/firmware.bin or URL" style="flex:1" />
+                        <button class="msh-btn" data-action="flash-custom">FLASH</button>
+                    </div>
+                    <div style="font-size:0.65rem;color:#888;">
+                        Provide a local .bin path or upload from this machine. For ESP32-S3 boards, use the .factory.bin for full installs.
+                    </div>
+                </div>
+
+                ${availableVersions.length > 0 ? `
+                <div class="msh-section-label" style="margin-top:12px">AVAILABLE VERSIONS</div>
+                <div style="padding:0 6px 6px;max-height:200px;overflow-y:auto;">
+                    ${availableVersions.map(v => `
+                        <div class="msh-recent-row" style="cursor:pointer;" data-flash-version="${_esc(v.tag)}">
+                            <span style="color:${v.prerelease ? '#fcee0a' : '#05ffa1'};flex:0 0 100px">${_esc(v.tag)}</span>
+                            <span style="color:#888;flex:1;font-size:0.65rem">${_esc(v.name || '')}</span>
+                            <span style="color:#666;font-size:0.6rem">${v.prerelease ? 'PRE' : 'STABLE'}</span>
+                        </div>
+                    `).join('')}
+                </div>` : '<div style="padding:10px;color:#666;font-size:0.72rem;">Click REFRESH to load available versions from GitHub.</div>'}
+
+                <div style="padding:8px 10px;display:flex;gap:6px;">
+                    <button class="msh-btn" data-action="refresh-firmware">REFRESH</button>
+                </div>
+
+                <div class="msh-fw-progress" data-bind="fw-progress" style="display:none;padding:8px 10px;">
+                    <div style="font-size:0.72rem;color:#fcee0a;" data-bind="fw-status">Preparing...</div>
+                    <div style="height:4px;background:#1a1a2e;border-radius:2px;margin-top:4px;">
+                        <div data-bind="fw-bar" style="height:100%;background:#00f0ff;border-radius:2px;width:0%;transition:width 0.3s;"></div>
+                    </div>
+                </div>
+            `;
+
+            // Wire firmware actions
+            body.querySelector('[data-action="flash-latest"]')?.addEventListener('click', async () => {
+                if (!confirm('Flash latest firmware? This will ERASE all device settings. Back up channels first.')) return;
+                _showFwProgress('Downloading and flashing latest firmware...');
+                try {
+                    const r = await fetch(API + '/device/flash-latest', { method: 'POST' });
+                    const d = await r.json();
+                    _showFwProgress(d.success ? 'Flash complete! Device rebooting...' : `Flash failed: ${d.error || 'unknown'}`, d.success ? 100 : 0);
+                } catch (e) { _showFwProgress(`Error: ${e.message}`, 0); }
+            });
+
+            body.querySelector('[data-action="flash-custom"]')?.addEventListener('click', async () => {
+                const pathInput = body.querySelector('[data-bind="fw-path"]');
+                const fwPath = (pathInput?.value || '').trim();
+                if (!fwPath) { EventBus.emit('toast:show', { message: 'Enter a firmware path', type: 'alert' }); return; }
+                if (!confirm(`Flash ${fwPath}? This may erase settings.`)) return;
+                _showFwProgress(`Flashing ${fwPath}...`);
+                try {
+                    const r = await fetch(API + '/device/flash', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ firmware_path: fwPath }),
+                    });
+                    const d = await r.json();
+                    _showFwProgress(d.success ? 'Flash complete!' : `Failed: ${d.error || d.detail || 'unknown'}`, d.success ? 100 : 0);
+                } catch (e) { _showFwProgress(`Error: ${e.message}`, 0); }
+            });
+
+            body.querySelector('[data-action="refresh-firmware"]')?.addEventListener('click', async () => {
+                await fetchFirmwareInfo();
+                renderFirmware();
+            });
+
+            // Click a version to flash it
+            body.querySelectorAll('[data-flash-version]').forEach(el => {
+                el.addEventListener('click', async () => {
+                    const tag = el.dataset.flashVersion;
+                    if (!confirm(`Flash ${tag}? This will erase settings.`)) return;
+                    _showFwProgress(`Downloading ${tag}...`);
+                    // TODO: flash specific version via API
+                    EventBus.emit('toast:show', { message: `Flashing specific version (${tag}) not yet supported via API`, type: 'info' });
+                });
+            });
+        }
+
+        function _showFwProgress(msg, pct) {
+            const el = body.querySelector('[data-bind="fw-progress"]');
+            if (!el) return;
+            el.style.display = '';
+            const statusEl = el.querySelector('[data-bind="fw-status"]');
+            const barEl = el.querySelector('[data-bind="fw-bar"]');
+            if (statusEl) statusEl.textContent = msg;
+            if (barEl && pct !== undefined) barEl.style.width = pct + '%';
+        }
+
         // ── EventBus ────────────────────────────────────────────
         const unsubs = [
             EventBus.on('mesh:text', (d) => {
                 if (d) { messages.push(d); if (activeTab === 'messages') renderMessages(); }
             }),
-            EventBus.on('mesh:connected', () => { fetchAll(); fetchDeviceInfo(); fetchChannels(); fetchModuleConfig(); }),
+            EventBus.on('mesh:connected', () => { fetchAll(); fetchDeviceInfo(); fetchChannels(); fetchModuleConfig(); fetchFirmwareInfo(); }),
             EventBus.on('mesh:disconnected', fetchAll),
         ];
 
