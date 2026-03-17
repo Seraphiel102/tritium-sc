@@ -514,14 +514,8 @@ class ConnectionManager:
                 "hw_model": user.get("hwModel", ""),
                 "mac": user.get("macaddr", ""),
             }
-            # Try cached metadata first, then request if not available
+            # Read cached metadata only — do NOT call getMetadata() as it blocks
             metadata = getattr(self.interface, 'metadata', None)
-            if metadata is None:
-                # metadata not cached yet — try requesting it (may take a few seconds)
-                try:
-                    metadata = self.interface.getMetadata()
-                except Exception:
-                    pass  # getMetadata can block/hang on some firmware versions
             if metadata:
                 self.device_info["firmware"] = getattr(metadata, 'firmware_version', '')
                 self.device_info["has_wifi"] = getattr(metadata, 'has_wifi', False)
