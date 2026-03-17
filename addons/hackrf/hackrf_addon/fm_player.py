@@ -283,7 +283,7 @@ class FMPlayer:
         self,
         freq_start_mhz: float = 87.5,
         freq_end_mhz: float = 108.0,
-        threshold_dbm: float = -40.0,
+        threshold_dbm: float = -50.0,
     ) -> list[dict]:
         """Scan the FM broadcast band for active stations.
 
@@ -367,9 +367,13 @@ class FMPlayer:
 
         # Find peaks above threshold, snap to nearest 100 kHz (FM channels)
         channels: dict[int, float] = {}  # rounded freq -> max power
+        freq_lo = int(freq_start_mhz * 1e6)
+        freq_hi = int(freq_end_mhz * 1e6)
         for freq_hz, power_dbm in measurements.items():
             if power_dbm < threshold_dbm:
                 continue
+            if freq_hz < freq_lo or freq_hz > freq_hi:
+                continue  # Outside requested range (hackrf_sweep can overshoot)
             # Snap to nearest 200 kHz (FM channel spacing)
             rounded = round(freq_hz / 200_000) * 200_000
             if rounded not in channels or power_dbm > channels[rounded]:
