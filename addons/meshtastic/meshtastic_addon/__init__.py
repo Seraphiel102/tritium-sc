@@ -11,6 +11,7 @@ from tritium_lib.sdk import SensorAddon, AddonInfo
 
 from .connection import ConnectionManager
 from .device_manager import DeviceManager
+from .message_bridge import MessageBridge
 from .node_manager import NodeManager
 from .router import create_router, create_compat_router
 
@@ -32,6 +33,7 @@ class MeshtasticAddon(SensorAddon):
         super().__init__()
         self.connection: ConnectionManager | None = None
         self.device_manager: DeviceManager | None = None
+        self.message_bridge: MessageBridge | None = None
         self.node_manager: NodeManager | None = None
         self._poll_task = None
 
@@ -74,8 +76,22 @@ class MeshtasticAddon(SensorAddon):
         # Device manager for config/firmware/control
         self.device_manager = DeviceManager(self.connection)
 
+        # Message bridge — bidirectional mesh <-> Tritium messaging
+        mqtt_bridge = getattr(app, 'mqtt_bridge', None)
+        if mqtt_bridge is None:
+            mqtt_bridge = getattr(getattr(app, 'state', None), 'mqtt_bridge', None)
+        site_id = getattr(app, 'site_id', 'home')
+
+        self.message_bridge = MessageBridge(
+            connection=self.connection,
+            node_manager=self.node_manager,
+            event_bus=event_bus,
+            mqtt_bridge=mqtt_bridge,
+            site_id=site_id,
+        )
+
         # Add API routes
-        router = create_router(self.connection, self.node_manager)
+        router = create_router(self.connection, self.node_manager, self.message_bridge)
         if hasattr(app, 'include_router'):
             app.include_router(router, prefix="/api/addons/meshtastic", tags=["meshtastic"])
 
@@ -90,12 +106,18 @@ class MeshtasticAddon(SensorAddon):
         except Exception as e:
             log.warning(f"Meshtastic auto-connect failed (will retry via API): {e}")
 
+        # Register message bridge callbacks after connection attempt
+        self.message_bridge.register_callbacks()
+
         # Start polling loop
         import asyncio
         self._poll_task = asyncio.create_task(self._poll_loop())
         self._background_tasks.append(self._poll_task)
 
     async def unregister(self, app):
+        if self.message_bridge:
+            self.message_bridge.unregister_callbacks()
+            self.message_bridge = None
         if self.connection:
             await self.connection.disconnect()
             self.connection = None

@@ -41,8 +41,14 @@ class MockTargetTracker:
 
     def __init__(self):
         self.sim_updates: list[dict] = []
+        self.mesh_updates: list[dict] = []
 
     def update_from_simulation(self, data: dict) -> None:
+        self.sim_updates.append(data)
+
+    def update_from_mesh(self, data: dict) -> None:
+        self.mesh_updates.append(data)
+        # Also record in sim_updates for backward compat with existing tests
         self.sim_updates.append(data)
 
 
