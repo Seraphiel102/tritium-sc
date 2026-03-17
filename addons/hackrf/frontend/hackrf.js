@@ -485,16 +485,21 @@ export const HackRFPanelDef = {
                         const idx = Math.floor((x / w) * sweepData.freqs.length);
                         const freq = sweepData.freqs[Math.min(idx, sweepData.freqs.length - 1)];
                         const power = sweepData.powers[Math.min(idx, sweepData.powers.length - 1)];
-                        const freqMhz = (freq / 1e6).toFixed(2);
-                        const powerStr = power.toFixed(1);
-                        if (readout) readout.textContent = `${freqMhz} MHz | ${powerStr} dBm`;
+                        const freqStr = _fmtFreq(freq);
+                        const powerStr = power.toFixed(1) + ' dBm';
+                        if (readout) readout.textContent = `${freqStr} | ${powerStr}`;
 
                         // Draw value label at cursor
-                        ctx.fillStyle = 'rgba(10,10,15,0.85)';
-                        ctx.fillRect(x + 8, y - 20, 110, 18);
+                        const label = `${freqStr}  ${powerStr}`;
+                        const labelW = label.length * 7 + 12;
+                        const lx = Math.min(x + 8, w - labelW - 4);
+                        ctx.fillStyle = 'rgba(10,10,15,0.9)';
+                        ctx.fillRect(lx, y - 22, labelW, 20);
+                        ctx.strokeStyle = '#b060ff55';
+                        ctx.strokeRect(lx, y - 22, labelW, 20);
                         ctx.fillStyle = '#b060ff';
                         ctx.font = '10px monospace';
-                        ctx.fillText(`${freqMhz} MHz ${powerStr}dB`, x + 12, y - 7);
+                        ctx.fillText(label, lx + 6, y - 8);
                     }
                 });
                 canvasWrap.addEventListener('mouseleave', () => {
@@ -574,16 +579,15 @@ export const HackRFPanelDef = {
                 ctx.fillText(db + '', MARGIN_LEFT - 3, y + 3);
             }
 
-            // X-axis labels (frequency in MHz)
+            // X-axis labels (auto MHz/GHz)
             ctx.textAlign = 'center';
-            const freqSpan = (freqMax - freqMin) / 1e6;
-            const tickCount = Math.min(10, Math.max(3, Math.floor(plotW / 60)));
+            const tickCount = Math.min(8, Math.max(3, Math.floor(plotW / 70)));
             for (let i = 0; i <= tickCount; i++) {
                 const frac = i / tickCount;
                 const x = MARGIN_LEFT + frac * plotW;
                 const freq = freqMin + frac * (freqMax - freqMin);
                 ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); ctx.stroke();
-                ctx.fillText((freq / 1e6).toFixed(freqSpan > 100 ? 0 : 1), x, h - 3);
+                ctx.fillText(_fmtFreqShort(freq), x, h - 3);
             }
 
             // Spectrum fill (gradient bars)
@@ -622,9 +626,9 @@ export const HackRFPanelDef = {
             ctx.fillStyle = '#888';
             ctx.font = '9px monospace';
             ctx.textAlign = 'left';
-            ctx.fillText(freqs[0].toFixed(1) + ' MHz', 4, h - 4);
+            ctx.fillText(_fmtFreqShort(freqs[0]), 4, h - 4);
             ctx.textAlign = 'right';
-            ctx.fillText(freqs[n - 1].toFixed(1) + ' MHz', w - 4, h - 4);
+            ctx.fillText(_fmtFreqShort(freqs[n - 1]), w - 4, h - 4);
             ctx.textAlign = 'left';
             ctx.fillText(maxP.toFixed(0) + ' dBm', 4, 12);
             ctx.fillText(minP.toFixed(0) + ' dBm', 4, h - 14);
@@ -641,13 +645,14 @@ export const HackRFPanelDef = {
             indexed.sort((a, b) => b.power - a.power);
             const peaks = indexed.slice(0, 10);
 
-            container.innerHTML = peaks.map(pk =>
-                `<div class="hrf-peak-row">
-                    <span class="hrf-peak-freq">${pk.freq.toFixed(3)} MHz</span>
-                    <span class="hrf-peak-bar-wrap"><span class="hrf-peak-bar" style="width:${_powerPct(pk.power, data)}%"></span></span>
-                    <span class="hrf-peak-power">${pk.power.toFixed(1)} dBm</span>
-                </div>`
-            ).join('');
+            // Compact inline peak list (not a table — fits in small space)
+            container.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;">${
+                peaks.map(pk => {
+                    const pct = _powerPct(pk.power, data);
+                    const color = pct > 70 ? '#ff2a6d' : pct > 40 ? '#fcee0a' : '#05ffa1';
+                    return `<span class="hrf-peak-chip" style="border-color:${color}40;color:${color}" title="${pk.power.toFixed(1)} dBm">${_fmtFreqShort(pk.freq)} <b>${pk.power.toFixed(0)}</b></span>`;
+                }).join('')
+            }</div>`;
         }
 
         function _powerPct(power, data) {
@@ -662,6 +667,21 @@ export const HackRFPanelDef = {
         }
 
         // ── Waterfall helpers ──────────────────────────────────────
+        function _fmtFreq(hz) {
+            // Smart frequency formatting: Hz → kHz → MHz → GHz
+            if (hz >= 1e9) return (hz / 1e9).toFixed(hz % 1e8 === 0 ? 1 : 2) + ' GHz';
+            if (hz >= 1e6) return (hz / 1e6).toFixed(hz >= 1e8 ? 0 : hz % 1e5 === 0 ? 1 : 2) + ' MHz';
+            if (hz >= 1e3) return (hz / 1e3).toFixed(0) + ' kHz';
+            return hz + ' Hz';
+        }
+
+        function _fmtFreqShort(hz) {
+            // Compact: no space, fewer decimals
+            if (hz >= 1e9) return (hz / 1e9).toFixed(1) + 'G';
+            if (hz >= 1e6) return (hz / 1e6).toFixed(hz >= 1e8 ? 0 : 1) + 'M';
+            return (hz / 1e3).toFixed(0) + 'k';
+        }
+
         function _powerColor(norm) {
             // Blue (weak) -> Green -> Yellow -> Red (strong)
             if (norm < 0.25) {
@@ -755,7 +775,7 @@ export const HackRFPanelDef = {
                             ${filtered.length === 0
                                 ? '<tr><td colspan="5" class="hrf-td" style="text-align:center;color:#555;padding:20px">No signals detected</td></tr>'
                                 : filtered.map(s => `<tr class="hrf-tr">
-                                    <td class="hrf-td" style="text-align:right;color:#b060ff;font-weight:bold">${(s.freq_mhz || 0).toFixed(3)}</td>
+                                    <td class="hrf-td" style="text-align:right;color:#b060ff;font-weight:bold">${_fmtFreqShort((s.freq_mhz || 0) * 1e6)}</td>
                                     <td class="hrf-td" style="text-align:right;color:${_sigColor(s.power_dbm)}">${(s.power_dbm || 0).toFixed(1)}</td>
                                     <td class="hrf-td" style="text-align:right">${_esc(_timeStr(s.first_seen))}</td>
                                     <td class="hrf-td" style="text-align:right">${_esc(_timeStr(s.last_seen))}</td>
@@ -1305,12 +1325,8 @@ function _injectStyles() {
         .hrf-spectrum-canvas-wrap canvas { width:100%; border:1px solid #1a1a2e; border-radius:2px; }
 
         /* ── Peak list ──────────────────────────────────────────── */
-        .hrf-peak-list { padding:4px 10px; max-height:150px; overflow-y:auto; }
-        .hrf-peak-row { display:flex; align-items:center; gap:8px; padding:3px 0; border-bottom:1px solid #ffffff06; font-size:0.72rem; }
-        .hrf-peak-freq { color:#b060ff; min-width:110px; font-weight:bold; }
-        .hrf-peak-bar-wrap { flex:1; height:6px; background:#1a1a2e; border-radius:3px; overflow:hidden; }
-        .hrf-peak-bar { height:100%; background:linear-gradient(90deg,#05ffa1,#fcee0a,#ff2a6d); border-radius:3px; transition:width 0.3s; }
-        .hrf-peak-power { color:#ccc; min-width:70px; text-align:right; font-size:0.65rem; }
+        .hrf-peak-list { max-height:60px; overflow-y:auto; }
+        .hrf-peak-chip { display:inline-block; font-size:0.6rem; font-family:inherit; padding:1px 6px; border:1px solid; border-radius:3px; white-space:nowrap; cursor:help; }
 
         /* ── Signals tab ────────────────────────────────────────── */
         .hrf-signals-header { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #1a1a2e; flex-shrink:0; }
