@@ -165,9 +165,10 @@ export const HackRFPanelDef = {
             if (sweepRunning || sweep.running) {
                 statusActivity.textContent = 'SWEEPING';
                 statusActivity.className = 'hrf-status-activity sweep';
-                const freq = `${sweep.freq_start_mhz || '?'}-${sweep.freq_end_mhz || '?'} MHz`;
-                statusDetail.textContent = `${freq} | bin ${(sweep.bin_width || 0) / 1000}kHz | ${sweep.sweep_count || 0} sweeps`;
-                statusStats.textContent = `${(sweep.measurement_count || 0).toLocaleString()} measurements`;
+                const freq = `${_fmtFreqShort((sweep.freq_start_mhz || 0) * 1e6)}-${_fmtFreqShort((sweep.freq_end_mhz || 0) * 1e6)}`;
+                const binStr = _fmtFreqShort(sweep.bin_width || 0);
+                statusDetail.textContent = `${freq} | bin ${binStr} | ${(sweep.sweep_count || 0).toLocaleString()} sweeps`;
+                statusStats.textContent = `${(sweep.measurement_count || 0).toLocaleString()} pts`;
             } else if (recv.running) {
                 statusActivity.textContent = 'RECEIVING';
                 statusActivity.className = 'hrf-status-activity sweep';
@@ -236,6 +237,12 @@ export const HackRFPanelDef = {
                     const statusRunning = (d.status && d.status.running) || d.running || false;
                     const hasNewData = rawData.length > 0;
                     sweepRunning = statusRunning || hasNewData;
+                    // Update deviceStatus.sweep from the data response for status bar
+                    if (d.status) {
+                        if (!deviceStatus.sweep) deviceStatus.sweep = {};
+                        Object.assign(deviceStatus.sweep, d.status);
+                        _updateStatusBar();
+                    }
                     if (d.signals) signals = d.signals;
                     // Push new row into waterfall history
                     if (powers.length > 0) {
@@ -273,25 +280,44 @@ export const HackRFPanelDef = {
 
         // ── Actions ────────────────────────────────────────────────
         async function startSweep(startMhz, endMhz, binWidth) {
-            _logCommand(`Starting sweep ${startMhz}-${endMhz} MHz, bin ${binWidth/1000}kHz`);
+            _logCommand(`Starting sweep ${_fmtFreq(startMhz * 1e6)}-${_fmtFreq(endMhz * 1e6)}, bin ${binWidth}`);
+
+            // Clear old data immediately so axes update to new range
+            sweepData = null;
+            waterfallHistory.length = 0;
+
+            // Update status bar immediately
+            if (!deviceStatus.sweep) deviceStatus.sweep = {};
+            deviceStatus.sweep.freq_start_mhz = startMhz;
+            deviceStatus.sweep.freq_end_mhz = endMhz;
+            deviceStatus.sweep.bin_width = typeof binWidth === 'string' ? parseInt(binWidth) * 1000 : binWidth;
+            deviceStatus.sweep.sweep_count = 0;
+            deviceStatus.sweep.measurement_count = 0;
+            deviceStatus.sweep.running = true;
+            _updateStatusBar();
+
             try {
+                const bw = typeof binWidth === 'string' ? parseInt(binWidth) * 1000 : binWidth;
                 const r = await fetch(API + '/sweep/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ freq_start: startMhz, freq_end: endMhz, bin_width: binWidth }),
+                    body: JSON.stringify({ freq_start: startMhz, freq_end: endMhz, bin_width: bw }),
                 });
                 if (r.ok) {
                     sweepRunning = true;
-                    _logCommand(`Sweep running: ${startMhz}-${endMhz} MHz`);
+                    _logCommand(`Sweep running: ${_fmtFreq(startMhz * 1e6)}-${_fmtFreq(endMhz * 1e6)}`);
                     renderBody();
-                    // Force immediate data fetch after a short delay
-                    setTimeout(() => fetchSweepData(), 1000);
-                    setTimeout(() => fetchSweepData(), 2000);
-                    setTimeout(() => fetchSweepData(), 3000);
                 } else {
                     _logCommand(`Sweep start failed: HTTP ${r.status}`);
+                    sweepRunning = false;
+                    deviceStatus.sweep.running = false;
+                    _updateStatusBar();
                 }
-            } catch (e) { _logCommand(`Sweep start error: ${e.message}`); }
+            } catch (e) {
+                _logCommand(`Sweep error: ${e.message}`);
+                sweepRunning = false;
+                _updateStatusBar();
+            }
         }
 
         async function stopSweep() {
@@ -301,7 +327,9 @@ export const HackRFPanelDef = {
                 if (r.ok) {
                     const d = await r.json();
                     sweepRunning = false;
+                    if (deviceStatus.sweep) deviceStatus.sweep.running = false;
                     _logCommand(`Sweep stopped: ${d.sweep_count || 0} sweeps completed`);
+                    _updateStatusBar();
                     renderBody();
                 }
             } catch (e) { _logCommand(`Stop error: ${e.message}`); }
@@ -640,10 +668,19 @@ export const HackRFPanelDef = {
                 return;
             }
 
-            // Find top 10 peaks
+            // Find top peaks — deduplicate by rounding to nearest MHz
             const indexed = data.powers.map((p, i) => ({ freq: data.freqs[i], power: p }));
             indexed.sort((a, b) => b.power - a.power);
-            const peaks = indexed.slice(0, 10);
+            const seen = new Set();
+            const peaks = [];
+            for (const pk of indexed) {
+                const key = Math.round(pk.freq / 1e6);  // Round to nearest MHz
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    peaks.push(pk);
+                    if (peaks.length >= 10) break;
+                }
+            }
 
             // Compact inline peak list (not a table — fits in small space)
             container.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;">${
@@ -1280,20 +1317,27 @@ export const HackRFPanelDef = {
             _fetchInFlight = false;
         }
 
-        // rAF render loop — only draws when new data arrives
-        function _renderLoop() {
+        // rAF render loop — 30fps cap, only draws when new data arrives
+        let _lastRenderTime = 0;
+        const RENDER_INTERVAL = 33;  // ~30fps
+
+        function _renderLoop(timestamp) {
             if (!_alive) return;
 
             if (sweepRunning) _scheduleFetch();
 
-            if (_needsRender && activeTab === 'spectrum') {
-                const specCanvas = body.querySelector('[data-bind="spectrum-canvas"]');
-                const wfCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
-                const peakList = body.querySelector('[data-bind="peak-list"]');
-                if (specCanvas) _drawSpectrum(specCanvas, sweepData);
-                if (wfCanvas) _drawWaterfall(wfCanvas, waterfallHistory);
-                if (peakList) _renderPeaks(peakList, sweepData);
-                _needsRender = false;
+            // Throttle to 30fps
+            if (timestamp - _lastRenderTime >= RENDER_INTERVAL) {
+                if (_needsRender && activeTab === 'spectrum') {
+                    const specCanvas = body.querySelector('[data-bind="spectrum-canvas"]');
+                    const wfCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
+                    const peakList = body.querySelector('[data-bind="peak-list"]');
+                    if (specCanvas) _drawSpectrum(specCanvas, sweepData);
+                    if (wfCanvas) _drawWaterfall(wfCanvas, waterfallHistory);
+                    if (peakList) _renderPeaks(peakList, sweepData);
+                    _needsRender = false;
+                }
+                _lastRenderTime = timestamp;
             }
 
             requestAnimationFrame(_renderLoop);
