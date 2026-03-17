@@ -9,8 +9,10 @@ import asyncio
 import logging
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 log = logging.getLogger("meshtastic.device_manager")
@@ -198,7 +200,12 @@ class DeviceManager:
 
     @staticmethod
     def _read_device_info_sync(iface) -> DeviceInfo:
-        """Synchronous device info read — runs in executor thread."""
+        """Synchronous device info read — runs in executor thread.
+
+        Uses CACHED data from the initial config exchange only.
+        Never calls iface.getMetadata() which sends an admin request
+        and blocks waiting for a reply (hangs on many devices).
+        """
         my_info = iface.getMyNodeInfo() or {}
         user = my_info.get("user", {})
 
@@ -210,27 +217,46 @@ class DeviceManager:
             mac=user.get("macaddr", ""),
         )
 
-        # Metadata (firmware, capabilities)
+        # Metadata — use CACHED metadata from the initial config exchange.
+        # Do NOT call iface.getMetadata() which sends a blocking admin request.
         try:
-            metadata = iface.getMetadata() if hasattr(iface, "getMetadata") else None
+            metadata = getattr(iface, "metadata", None)
             if metadata:
                 info.firmware_version = getattr(metadata, "firmware_version", "")
                 info.has_wifi = getattr(metadata, "has_wifi", False)
                 info.has_bluetooth = getattr(metadata, "has_bluetooth", False)
                 info.has_ethernet = getattr(metadata, "has_ethernet", False)
-                info.role = str(getattr(metadata, "role", "CLIENT"))
+                role_val = getattr(metadata, "role", None)
+                if role_val is not None:
+                    # Convert protobuf enum int to name
+                    try:
+                        from meshtastic.protobuf.config_pb2 import Config
+                        info.role = Config.DeviceConfig.Role.Name(role_val)
+                    except (ImportError, ValueError):
+                        info.role = str(role_val)
                 info.reboot_count = getattr(metadata, "reboot_count", 0)
         except Exception as e:
-            log.debug(f"Metadata read failed (device may not support it): {e}")
+            log.debug(f"Cached metadata read failed: {e}")
 
-        # Local config for radio settings
+        # Local config for radio settings — already cached, no blocking
         try:
             local_config = iface.localConfig if hasattr(iface, "localConfig") else None
             if local_config:
                 lora = getattr(local_config, "lora", None)
                 if lora:
-                    info.region = str(getattr(lora, "region", ""))
-                    info.modem_preset = str(getattr(lora, "modem_preset", ""))
+                    # Convert protobuf enum ints to human-readable names
+                    region_val = getattr(lora, "region", 0)
+                    modem_val = getattr(lora, "modem_preset", 0)
+                    try:
+                        from meshtastic.protobuf.config_pb2 import Config
+                        info.region = Config.LoRaConfig.RegionCode.Name(region_val)
+                    except (ImportError, ValueError):
+                        info.region = str(region_val)
+                    try:
+                        from meshtastic.protobuf.config_pb2 import Config
+                        info.modem_preset = Config.LoRaConfig.ModemPreset.Name(modem_val)
+                    except (ImportError, ValueError):
+                        info.modem_preset = str(modem_val)
                     info.tx_power = getattr(lora, "tx_power", 0)
         except Exception as e:
             log.debug(f"Local config read failed: {e}")
@@ -275,10 +301,20 @@ class DeviceManager:
                 if ch is None:
                     continue
                 settings = getattr(ch, "settings", None)
+                # Convert role enum int to name (e.g. 1 -> "PRIMARY")
+                role_val = getattr(ch, "role", 0)
+                if isinstance(role_val, int):
+                    try:
+                        from meshtastic.protobuf.channel_pb2 import Channel
+                        role_name = Channel.Role.Name(role_val)
+                    except (ImportError, ValueError):
+                        role_name = str(role_val)
+                else:
+                    role_name = str(role_val)
                 channel = ChannelInfo(
                     index=i,
                     name=getattr(settings, "name", "") if settings else "",
-                    role=str(getattr(ch, "role", "DISABLED")),
+                    role=role_name,
                     psk=_bytes_to_base64(getattr(settings, "psk", b"")) if settings else "",
                     uplink_enabled=getattr(settings, "uplink_enabled", False) if settings else False,
                     downlink_enabled=getattr(settings, "downlink_enabled", False) if settings else False,
@@ -306,20 +342,34 @@ class DeviceManager:
 
     @staticmethod
     def _read_module_config_sync(iface) -> dict:
-        """Synchronous module config read — runs in executor thread."""
-        result = {}
-        try:
-            module_config = iface.moduleConfig if hasattr(iface, "moduleConfig") else None
-            if not module_config:
-                return result
+        """Synchronous module config read — runs in executor thread.
 
-            # Read known module configs
-            for module_name in [
-                "telemetry", "range_test", "store_forward", "serial",
-                "external_notification", "canned_message", "audio",
-                "remote_hardware", "neighbor_info", "detection_sensor",
-                "paxcounter", "ambient_lighting",
-            ]:
+        Tries iface.moduleConfig first (populated during full config exchange),
+        then falls back to localNode.moduleConfig (may work after noNodes connect).
+        """
+        result = {}
+        module_config = None
+        try:
+            module_config = getattr(iface, "moduleConfig", None)
+            # If moduleConfig is empty/default, try localNode's copy
+            if not module_config:
+                node = getattr(iface, "localNode", None)
+                if node:
+                    module_config = getattr(node, "moduleConfig", None)
+        except Exception as e:
+            log.debug(f"Module config access error: {e}")
+
+        if not module_config:
+            return result
+
+        # Read known module configs
+        for module_name in [
+            "telemetry", "range_test", "store_forward", "serial",
+            "external_notification", "canned_message", "audio",
+            "remote_hardware", "neighbor_info", "detection_sensor",
+            "paxcounter", "ambient_lighting",
+        ]:
+            try:
                 mod = getattr(module_config, module_name, None)
                 if mod is not None:
                     # Convert protobuf to dict-like structure
@@ -327,8 +377,8 @@ class DeviceManager:
                         result[module_name] = _proto_to_dict(mod)
                     except Exception:
                         result[module_name] = str(mod)
-        except Exception as e:
-            log.debug(f"Module config read error: {e}")
+            except Exception as e:
+                log.debug(f"Module {module_name} read error: {e}")
 
         return result
 
@@ -1132,9 +1182,24 @@ class DeviceManager:
 
     async def get_firmware_info(self) -> FirmwareInfo:
         """Check current firmware version and update availability."""
+        # Check for esptool in PATH, platformio packages, and venv
+        venv_bin = str(Path(sys.executable).parent)
+        pio_esptool = Path.home() / ".platformio" / "packages" / "tool-esptoolpy" / "esptool.py"
+        esptool_available = (
+            shutil.which("esptool.py") is not None
+            or shutil.which("esptool") is not None
+            or pio_esptool.exists()
+            or shutil.which("esptool", path=venv_bin) is not None
+            or shutil.which("esptool.py", path=venv_bin) is not None
+        )
+        # Check for meshtastic CLI in PATH and venv
+        meshtastic_cli_available = (
+            shutil.which("meshtastic") is not None
+            or shutil.which("meshtastic", path=venv_bin) is not None
+        )
         fw = FirmwareInfo(
-            esptool_available=shutil.which("esptool.py") is not None or shutil.which("esptool") is not None,
-            meshtastic_cli_available=shutil.which("meshtastic") is not None,
+            esptool_available=esptool_available,
+            meshtastic_cli_available=meshtastic_cli_available,
         )
 
         iface = self._interface

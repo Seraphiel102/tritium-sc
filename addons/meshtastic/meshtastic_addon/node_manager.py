@@ -134,7 +134,7 @@ class NodeManager:
         targets = []
         now = time.time()
         for node_id, node in self.nodes.items():
-            last_heard = node.get("last_heard", 0)
+            last_heard = node.get("last_heard") or 0
             age_s = now - last_heard if last_heard > 0 else float("inf")
 
             target = {
@@ -197,7 +197,7 @@ class NodeManager:
         total = len(self.nodes)
         with_gps = sum(1 for n in self.nodes.values() if n.get("lat") is not None)
         online = sum(1 for n in self.nodes.values()
-                     if n.get("last_heard", 0) > now - 600)
+                     if (n.get("last_heard") or 0) > now - 600)
         routers = sum(1 for n in self.nodes.values()
                       if n.get("role", "") in ("ROUTER", "ROUTER_CLIENT", "REPEATER"))
 

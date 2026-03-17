@@ -35,29 +35,46 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
         """Detect available Meshtastic serial ports.
 
         Scans /dev for USB serial devices matching known Meshtastic VID:PIDs.
-        Returns a list of available ports with device info.
+        Returns both matched (known Meshtastic VIDs) and all serial ports
+        so the frontend can display everything available.
         """
-        ports = []
+        matched_ports = []
+        all_ports = []
         try:
             import serial.tools.list_ports
             known_vids = {0x303a, 0x10c4, 0x1a86, 0x0403}  # Espressif, SiLabs, CH340, FTDI
             for p in serial.tools.list_ports.comports():
+                port_info = {
+                    "port": p.device,
+                    "description": p.description or "",
+                    "vid": f"{p.vid:04x}" if p.vid else "",
+                    "pid": f"{p.pid:04x}" if p.pid else "",
+                    "manufacturer": p.manufacturer or "",
+                    "serial_number": p.serial_number or "",
+                    "meshtastic_match": bool(p.vid and p.vid in known_vids),
+                }
+                all_ports.append(port_info)
                 if p.vid and p.vid in known_vids:
-                    ports.append({
-                        "port": p.device,
-                        "description": p.description or "",
-                        "vid": f"{p.vid:04x}",
-                        "pid": f"{p.pid:04x}" if p.pid else "",
-                        "manufacturer": p.manufacturer or "",
-                        "serial_number": p.serial_number or "",
-                    })
+                    matched_ports.append(port_info)
         except ImportError:
             # Fallback: check common paths
             from pathlib import Path
             for path in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/ttyUSB1"]:
                 if Path(path).exists():
-                    ports.append({"port": path, "description": "Serial device"})
-        return {"ports": ports, "count": len(ports)}
+                    port_info = {"port": path, "description": "Serial device", "meshtastic_match": True}
+                    matched_ports.append(port_info)
+                    all_ports.append(port_info)
+
+        # Also note which port we are currently connected to
+        current_port = connection.port if connection and connection.is_connected else ""
+
+        return {
+            "ports": matched_ports,
+            "all_ports": all_ports,
+            "current_port": current_port,
+            "count": len(matched_ports),
+            "total_count": len(all_ports),
+        }
 
     @router.get("/nodes")
     async def get_nodes():
@@ -250,7 +267,23 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
         """Network-level statistics (node counts, avg SNR, etc)."""
         if not node_manager:
             return {"error": "not_available"}
-        return node_manager.get_stats()
+        try:
+            return node_manager.get_stats()
+        except Exception as e:
+            import logging
+            logging.getLogger("meshtastic.router").warning(f"Stats error: {e}")
+            return {
+                "error": str(e),
+                "total_nodes": len(node_manager.nodes) if node_manager else 0,
+                "online_nodes": 0,
+                "offline_nodes": 0,
+                "with_gps": 0,
+                "routers": 0,
+                "avg_snr": None,
+                "avg_battery": None,
+                "link_count": 0,
+                "last_update": 0,
+            }
 
     @router.get("/health")
     async def health():

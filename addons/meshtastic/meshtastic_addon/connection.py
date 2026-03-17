@@ -530,8 +530,19 @@ class ConnectionManager:
                 if lc:
                     lora = getattr(lc, 'lora', None)
                     if lora:
-                        self.device_info['region'] = str(getattr(lora, 'region', ''))
-                        self.device_info['modem_preset'] = str(getattr(lora, 'modem_preset', ''))
+                        # Convert protobuf enum ints to human-readable names
+                        region_val = getattr(lora, 'region', 0)
+                        modem_val = getattr(lora, 'modem_preset', 0)
+                        try:
+                            from meshtastic.protobuf.config_pb2 import Config
+                            self.device_info['region'] = Config.LoRaConfig.RegionCode.Name(region_val)
+                        except (ImportError, ValueError):
+                            self.device_info['region'] = str(region_val)
+                        try:
+                            from meshtastic.protobuf.config_pb2 import Config
+                            self.device_info['modem_preset'] = Config.LoRaConfig.ModemPreset.Name(modem_val)
+                        except (ImportError, ValueError):
+                            self.device_info['modem_preset'] = str(modem_val)
                         self.device_info['tx_power'] = getattr(lora, 'tx_power', 0)
                         self.device_info['hop_limit'] = getattr(lora, 'hop_limit', 0)
             except Exception:

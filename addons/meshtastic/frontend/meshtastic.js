@@ -14,13 +14,13 @@ const MSG_CHAR_LIMIT = 228;
 
 // ─── Tab definitions ────────────────────────────────────────────────
 const TABS = [
-    { id: 'radio',    label: 'RADIO' },
-    { id: 'messages', label: 'MESSAGES' },
-    { id: 'nodes',    label: 'NODES' },
-    { id: 'channels', label: 'CHANNELS' },
-    { id: 'config',   label: 'CONFIG' },
-    { id: 'modules',  label: 'MODULES' },
-    { id: 'firmware', label: 'FIRMWARE' },
+    { id: 'radio',    label: 'RADIO',    tip: 'Radio connection and device overview' },
+    { id: 'messages', label: 'MESSAGES', tip: 'Send and receive mesh messages' },
+    { id: 'nodes',    label: 'NODES',    tip: 'All discovered mesh nodes' },
+    { id: 'channels', label: 'CHANNELS', tip: 'Configure channel slots and encryption' },
+    { id: 'config',   label: 'CONFIG',   tip: 'Device settings: user, LoRa, position, power' },
+    { id: 'modules',  label: 'MODULES',  tip: 'Module configuration: MQTT, telemetry, serial' },
+    { id: 'firmware', label: 'FIRMWARE', tip: 'Firmware version, updates, and flashing' },
 ];
 
 // ─── Node table columns ─────────────────────────────────────────────
@@ -65,7 +65,7 @@ export const MeshtasticPanelDef = {
         el.style.cssText = 'display:flex;flex-direction:column;height:100%;font-family:var(--font-mono,"JetBrains Mono",monospace);';
 
         const tabHtml = TABS.map((t, i) =>
-            `<button class="msh-tab${i === 0 ? ' msh-tab-active' : ''}" data-tab="${t.id}">${t.label}</button>`
+            `<button class="msh-tab${i === 0 ? ' msh-tab-active' : ''}" data-tab="${t.id}" title="${t.tip}">${t.label}</button>`
         ).join('');
 
         el.innerHTML = `
@@ -177,6 +177,7 @@ export const MeshtasticPanelDef = {
             connected = d.connected || false;
             status = d;
             dot.className = connected ? 'msh-dot msh-dot-on' : 'msh-dot';
+            dot.title = connected ? `Connected via ${_esc(d.transport || 'unknown')}` : 'Disconnected';
             connLabel.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
             connLabel.style.color = connected ? '#05ffa1' : '#888';
             const dev = d.device || {};
@@ -185,6 +186,10 @@ export const MeshtasticPanelDef = {
             connectBtn.style.display = connected ? 'none' : '';
             disconnectBtn.style.display = connected ? '' : 'none';
             portSelect.style.display = (connected || ports.length <= 1) ? 'none' : '';
+            // Save to saved radios if connected
+            if (connected && d.port) {
+                _saveRadioToHistory(d.port, d.transport || 'serial', dev.long_name || dev.short_name || '');
+            }
         }
 
         // ── Data fetching ───────────────────────────────────────
@@ -194,6 +199,42 @@ export const MeshtasticPanelDef = {
                     status, deviceInfo, nodes, timestamp: Date.now(),
                 }));
             } catch (_) {}
+        }
+
+        // ── Saved radios (localStorage) ───────────────────────────
+        function _getSavedRadios() {
+            try {
+                const raw = localStorage.getItem('tritium.meshtastic.saved_radios');
+                return raw ? JSON.parse(raw) : [];
+            } catch (_) { return []; }
+        }
+
+        function _saveRadioToHistory(port, transport, name) {
+            try {
+                const saved = _getSavedRadios();
+                const existing = saved.findIndex(r => r.port === port);
+                const entry = { port, transport, name, lastSeen: Date.now() };
+                if (existing >= 0) saved[existing] = entry;
+                else saved.unshift(entry);
+                // Keep max 10 entries
+                localStorage.setItem('tritium.meshtastic.saved_radios', JSON.stringify(saved.slice(0, 10)));
+            } catch (_) {}
+        }
+
+        function _removeSavedRadio(port) {
+            try {
+                const saved = _getSavedRadios().filter(r => r.port !== port);
+                localStorage.setItem('tritium.meshtastic.saved_radios', JSON.stringify(saved));
+            } catch (_) {}
+        }
+
+        // ── Loading state helper ──────────────────────────────────
+        function _loading(msg) {
+            const m = msg || 'Loading...';
+            return '<div style="display:flex;align-items:center;justify-content:center;padding:40px;gap:8px;">' +
+                '<div class="msh-spinner"></div>' +
+                '<span style="color:#888;font-size:0.75rem;">' + _esc(m) + '</span>' +
+            '</div>';
         }
 
         async function fetchAll() {
@@ -351,6 +392,7 @@ export const MeshtasticPanelDef = {
             const avgUtil = utils.length ? (utils.reduce((a, b) => a + b, 0) / utils.length).toFixed(1) : null;
             const airUtils = nodes.map(n => n.air_util_tx).filter(u => u != null);
             const avgAirUtil = airUtils.length ? (airUtils.reduce((a, b) => a + b, 0) / airUtils.length).toFixed(1) : null;
+            const savedRadios = _getSavedRadios();
 
             body.innerHTML = `
                 <div class="msh-radio-status">
@@ -360,50 +402,70 @@ export const MeshtasticPanelDef = {
                     </div>
                 </div>
                 ${connected ? `
+                <div class="msh-radio-disconnect-bar">
+                    <button class="msh-btn msh-btn-disconnect msh-btn-lg" data-action="radio-disconnect" style="width:100%;" title="Disconnect from current radio">DISCONNECT</button>
+                </div>
                 <div class="msh-section-label">DEVICE INFO</div>
                 <div class="msh-config-grid">
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Node ID</span><span class="msh-cfg-val">${_esc(di.node_id || di.nodeId || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Long Name</span><span class="msh-cfg-val">${_esc(di.long_name || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Short Name</span><span class="msh-cfg-val">${_esc(di.short_name || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Hardware</span><span class="msh-cfg-val">${_esc(di.hw_model || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Firmware</span><span class="msh-cfg-val">${_esc(di.firmware_version || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Role</span><span class="msh-cfg-val">${_esc(di.role || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Region</span><span class="msh-cfg-val">${_esc(di.region || '--')}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Modem Preset</span><span class="msh-cfg-val${_isModemPresetRecommended(di.modem_preset) ? '' : ' msh-cfg-warn'}">${_esc(di.modem_preset || '--')}</span></div>
-                    ${!_isModemPresetRecommended(di.modem_preset) && di.modem_preset && di.modem_preset !== '--' ? '<div class="msh-preset-warning">Bay Area Meshtastic recommends MEDIUM_FAST for this region</div>' : ''}
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">TX Power</span><span class="msh-cfg-val">${di.tx_power != null ? di.tx_power + ' dBm' : '--'}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Channels</span><span class="msh-cfg-val">${di.num_channels || channels.length || '--'}</span></div>
+                    <div class="msh-cfg-row" title="Unique node identifier on the mesh"><span class="msh-cfg-lbl">Node ID</span><span class="msh-cfg-val">${_esc(di.node_id || di.nodeId || '--')}</span></div>
+                    <div class="msh-cfg-row" title="Display name broadcast to the mesh"><span class="msh-cfg-lbl">Long Name</span><span class="msh-cfg-val">${_esc(di.long_name || '--')}</span></div>
+                    <div class="msh-cfg-row" title="Short 4-char name shown on device screens"><span class="msh-cfg-lbl">Short Name</span><span class="msh-cfg-val">${_esc(di.short_name || '--')}</span></div>
+                    <div class="msh-cfg-row" title="Hardware model of the radio"><span class="msh-cfg-lbl">Hardware</span><span class="msh-cfg-val">${_esc(di.hw_model || '--')}</span></div>
+                    <div class="msh-cfg-row" title="Meshtastic firmware version running on device"><span class="msh-cfg-lbl">Firmware</span><span class="msh-cfg-val">${_esc(di.firmware_version || '--')}</span></div>
+                    <div class="msh-cfg-row" title="Device role determines routing behavior"><span class="msh-cfg-lbl">Role</span><span class="msh-cfg-val">${_esc(di.role || '--')}</span></div>
+                    <div class="msh-cfg-row" title="LoRa frequency band region"><span class="msh-cfg-lbl">Region</span><span class="msh-cfg-val">${_esc(di.region || '--')}</span></div>
+                    <div class="msh-cfg-row" title="LoRa modem speed/range trade-off"><span class="msh-cfg-lbl">Modem Preset</span><span class="msh-cfg-val${_isModemPresetRecommended(di.modem_preset) ? '' : ' msh-cfg-warn'}">${_esc(di.modem_preset || '--')}</span></div>
+                    ${(_isModemPresetRecommended(di.modem_preset) === false) && di.modem_preset && di.modem_preset !== '--' ? '<div class="msh-preset-warning">Bay Area Meshtastic recommends MEDIUM_FAST for this region</div>' : ''}
+                    <div class="msh-cfg-row" title="Transmit power in decibel-milliwatts"><span class="msh-cfg-lbl">TX Power</span><span class="msh-cfg-val">${di.tx_power != null ? di.tx_power + ' dBm' : '--'}</span></div>
+                    <div class="msh-cfg-row" title="Number of configured channel slots"><span class="msh-cfg-lbl">Channels</span><span class="msh-cfg-val">${di.num_channels || channels.length || '--'}</span></div>
                 </div>
                 <div class="msh-section-label" style="margin-top:10px">MESH OVERVIEW</div>
                 <div class="msh-stats">
-                    <div class="msh-stat"><div class="msh-stat-val" style="color:#00f0ff">${nodes.length}</div><div class="msh-stat-lbl">NODES</div></div>
-                    <div class="msh-stat"><div class="msh-stat-val" style="color:#05ffa1">${withGps}</div><div class="msh-stat-lbl">WITH GPS</div></div>
-                    <div class="msh-stat"><div class="msh-stat-val" style="color:#fcee0a">${avgBat != null ? avgBat + '%' : '--'}</div><div class="msh-stat-lbl">AVG BATTERY</div></div>
-                    <div class="msh-stat"><div class="msh-stat-val" style="color:#ff2a6d">${avgUtil != null ? avgUtil + '%' : '--'}</div><div class="msh-stat-lbl">CH UTIL</div></div>
+                    <div class="msh-stat" title="Total nodes discovered on the mesh"><div class="msh-stat-val" style="color:#00f0ff">${nodes.length}</div><div class="msh-stat-lbl">NODES</div></div>
+                    <div class="msh-stat" title="Nodes reporting GPS coordinates"><div class="msh-stat-val" style="color:#05ffa1">${withGps}</div><div class="msh-stat-lbl">WITH GPS</div></div>
+                    <div class="msh-stat" title="Average battery level across all nodes"><div class="msh-stat-val" style="color:#fcee0a">${avgBat != null ? avgBat + '%' : '--'}</div><div class="msh-stat-lbl">AVG BATTERY</div></div>
+                    <div class="msh-stat" title="Average channel utilization (airtime usage)"><div class="msh-stat-val" style="color:#ff2a6d">${avgUtil != null ? avgUtil + '%' : '--'}</div><div class="msh-stat-lbl">CH UTIL</div></div>
                 </div>
                 <div class="msh-radio-actions">
-                    <button class="msh-btn" data-action="refresh-all">REFRESH</button>
-                    <button class="msh-btn msh-btn-warn" data-action="reboot">REBOOT DEVICE</button>
+                    <button class="msh-btn" data-action="refresh-all" title="Refresh all data from device">REFRESH</button>
+                    <button class="msh-btn msh-btn-warn" data-action="reboot" title="Reboot the connected radio">REBOOT DEVICE</button>
                 </div>
                 ` : `
                 <div class="msh-radio-ports">
-                    <div class="msh-section-label">AVAILABLE PORTS</div>
+                    <div class="msh-section-label">AVAILABLE RADIOS</div>
                     ${ports.length === 0 ? '<div class="msh-empty" style="padding:12px 10px">No serial ports detected. Plug in a Meshtastic radio via USB.</div>' :
                     `<div class="msh-port-list">
                         ${ports.map(p => {
                             const port = typeof p === 'string' ? p : (p.port || '');
                             const desc = typeof p === 'object' ? (p.description || p.manufacturer || '') : '';
-                            return `<div class="msh-port-row" data-port="${_esc(port)}">
-                                <span class="msh-port-name">${_esc(port)}</span>
-                                <span class="msh-port-desc">${_esc(desc)}</span>
-                                <button class="msh-btn msh-btn-connect msh-btn-sm" data-action="connect-port" data-port="${_esc(port)}">CONNECT</button>
-                            </div>`;
+                            return '<div class="msh-port-row" data-port="' + _esc(port) + '">' +
+                                '<span class="msh-port-name">' + _esc(port) + '</span>' +
+                                '<span class="msh-port-desc">' + _esc(desc) + '</span>' +
+                                '<button class="msh-btn msh-btn-connect msh-btn-sm" data-action="connect-port" data-port="' + _esc(port) + '" title="Connect to this radio via USB serial">CONNECT</button>' +
+                            '</div>';
                         }).join('')}
                     </div>`}
-                    <div style="padding:8px 10px">
-                        <button class="msh-btn" data-action="scan-ports">SCAN FOR RADIOS</button>
+                    <div style="padding:8px 10px;display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="msh-btn" data-action="scan-ports" title="Rescan USB serial ports">SCAN USB</button>
+                        <button class="msh-btn" data-action="scan-ble" title="Scan for Meshtastic radios via BLE">SCAN BLE</button>
                     </div>
                 </div>
+                ${savedRadios.length > 0 ? `
+                <div class="msh-radio-ports" style="margin-top:4px;">
+                    <div class="msh-section-label">SAVED RADIOS</div>
+                    <div class="msh-port-list">
+                        ${savedRadios.map(r => {
+                            const label = r.name ? (r.name + ' (' + _esc(r.port) + ')') : _esc(r.port);
+                            const ago = r.lastSeen ? _age(Math.floor((Date.now() - r.lastSeen) / 1000)) + ' ago' : '';
+                            return '<div class="msh-port-row msh-saved-row">' +
+                                '<span class="msh-port-name">' + _esc(label) + '</span>' +
+                                '<span class="msh-port-desc" style="color:#666;font-size:0.6rem">' + _esc(r.transport || 'serial') + (ago ? ' - ' + ago : '') + '</span>' +
+                                '<button class="msh-btn msh-btn-connect msh-btn-sm" data-action="connect-saved" data-port="' + _esc(r.port) + '" data-transport="' + _esc(r.transport || 'serial') + '" title="Reconnect to this saved radio">CONNECT</button>' +
+                                '<button class="msh-btn msh-btn-sm" data-action="remove-saved" data-port="' + _esc(r.port) + '" title="Remove from saved radios" style="color:#ff2a6d;border-color:rgba(255,42,109,0.2);padding:2px 4px;">X</button>' +
+                            '</div>';
+                        }).join('')}
+                    </div>
+                </div>` : ''}
                 `}
             `;
 
@@ -433,7 +495,48 @@ export const MeshtasticPanelDef = {
                     btn.textContent = 'CONNECT';
                 });
             });
+            body.querySelectorAll('[data-action="connect-saved"]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const port = btn.dataset.port;
+                    const transport = btn.dataset.transport || 'serial';
+                    btn.disabled = true;
+                    btn.textContent = 'CONNECTING...';
+                    try {
+                        const cr = await fetch(API + '/connect', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ transport, port, timeout: 60 }),
+                        });
+                        if (cr.ok) {
+                            const cd = await cr.json();
+                            updateConnection(cd);
+                            fetchAll();
+                            fetchDeviceInfo();
+                            fetchChannels();
+                            fetchModuleConfig();
+                            fetchFirmware();
+                        }
+                    } catch (_) { /* ok */ }
+                    btn.disabled = false;
+                    btn.textContent = 'CONNECT';
+                });
+            });
+            body.querySelectorAll('[data-action="remove-saved"]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    _removeSavedRadio(btn.dataset.port);
+                    renderRadio();
+                });
+            });
             body.querySelector('[data-action="scan-ports"]')?.addEventListener('click', async () => {
+                await fetchPorts();
+                renderRadio();
+            });
+            body.querySelector('[data-action="scan-ble"]')?.addEventListener('click', () => {
+                EventBus.emit('toast:show', { message: 'BLE scanning not yet available from server', type: 'info' });
+            });
+            body.querySelector('[data-action="radio-disconnect"]')?.addEventListener('click', async () => {
+                try { await fetch(API + '/disconnect', { method: 'POST' }); } catch (_) { /* ok */ }
+                updateConnection({ connected: false, transport: 'none', port: '', device: {} });
                 await fetchPorts();
                 renderRadio();
             });
@@ -460,6 +563,10 @@ export const MeshtasticPanelDef = {
         //  MESSAGES TAB
         // =====================================================================
         function renderMessages() {
+            if (messages.length === 0 && connected === false) {
+                body.innerHTML = '<div class="msh-empty" style="padding:40px;text-align:center">Connect a radio to see messages.</div>';
+                return;
+            }
             const now = Math.floor(Date.now() / 1000);
             const SYSTEM_TYPES = ['position', 'telemetry', 'nodeinfo', 'routing', 'admin'];
             // Filter messages by selected channel
@@ -593,6 +700,14 @@ export const MeshtasticPanelDef = {
         //  NODES TAB
         // =====================================================================
         function renderNodes() {
+            if (nodes.length === 0) {
+                if (connected) {
+                    body.innerHTML = _loading('Discovering nodes...');
+                } else {
+                    body.innerHTML = '<div class="msh-empty" style="padding:40px;text-align:center">Connect a radio to see nodes.</div>';
+                }
+                return;
+            }
             const sorted = [...nodes].sort((a, b) => {
                 let va = a[nodeSortKey], vb = b[nodeSortKey];
                 if (typeof va === 'string') return (va || '').localeCompare(vb || '') * nodeSortDir;
@@ -657,6 +772,14 @@ export const MeshtasticPanelDef = {
         //  CHANNELS TAB
         // =====================================================================
         function renderChannels() {
+            if (channels.length === 0 && connected === false) {
+                body.innerHTML = '<div class="msh-empty" style="padding:40px;text-align:center">Connect a radio to see channels.</div>';
+                return;
+            }
+            if (channels.length === 0 && connected) {
+                body.innerHTML = _loading('Loading channels...');
+                return;
+            }
             // Always show 8 channel slots
             const slots = [];
             for (let i = 0; i < 8; i++) {
@@ -789,6 +912,14 @@ export const MeshtasticPanelDef = {
         //  CONFIG TAB
         // =====================================================================
         function renderConfig() {
+            if (connected === false) {
+                body.innerHTML = '<div class="msh-empty" style="padding:40px;text-align:center">Connect a radio to configure settings.</div>';
+                return;
+            }
+            if (deviceInfoFetched === false) {
+                body.innerHTML = _loading('Loading device config...');
+                return;
+            }
             const di = deviceInfo;
 
             body.innerHTML = `
@@ -842,9 +973,17 @@ export const MeshtasticPanelDef = {
 
                     <div class="msh-section-label" style="margin-top:12px">NETWORK / WIFI</div>
                     <div class="msh-config-grid">
+                        <div class="msh-cfg-edit-row" style="border-bottom:none;padding-bottom:0;">
+                            <span class="msh-cfg-lbl" style="color:${di.wifi_enabled ? '#05ffa1' : '#888'}">${di.wifi_enabled ? 'WiFi: ENABLED' : 'WiFi: DISABLED'}</span>
+                            <span style="font-size:0.6rem;color:#666;">Configure WiFi to enable TCP mode for wireless connection</span>
+                        </div>
                         ${_cfgToggle('WiFi Enabled', 'cfg-wifi-enabled', di.wifi_enabled || false)}
                         ${_cfgInput('WiFi SSID', 'cfg-wifi-ssid', di.wifi_ssid || '', 'text', 'Network name')}
                         ${_cfgInput('WiFi Password', 'cfg-wifi-pass', di.wifi_password || '', 'password', 'Password')}
+                        <div class="msh-cfg-edit-row" style="border-bottom:none;">
+                            <span class="msh-cfg-lbl"></span>
+                            <button class="msh-btn msh-btn-sm" data-action="copy-wifi" title="Coming soon -- will detect this computer's WiFi network" style="font-size:0.6rem;">COPY FROM THIS PC</button>
+                        </div>
                         ${_cfgInput('NTP Server', 'cfg-ntp', di.ntp_server || '', 'text', 'e.g. 0.pool.ntp.org')}
                     </div>
 
@@ -887,6 +1026,9 @@ export const MeshtasticPanelDef = {
             body.querySelector('[data-action="refresh-config"]')?.addEventListener('click', async () => {
                 await fetchDeviceInfo();
                 renderConfig();
+            });
+            body.querySelector('[data-action="copy-wifi"]')?.addEventListener('click', () => {
+                EventBus.emit('toast:show', { message: 'Coming soon -- will detect this computer\'s WiFi network', type: 'info' });
             });
         }
 
@@ -934,6 +1076,10 @@ export const MeshtasticPanelDef = {
         //  MODULES TAB
         // =====================================================================
         function renderModules() {
+            if (connected === false) {
+                body.innerHTML = '<div class="msh-empty" style="padding:40px;text-align:center">Connect a radio to configure modules.</div>';
+                return;
+            }
             const mc = moduleConfig || {};
 
             body.innerHTML = `
@@ -1072,9 +1218,10 @@ export const MeshtasticPanelDef = {
         // ── Config/Module HTML helpers ────────────────────────────
         function _cfgInput(label, id, value, type, placeholder, maxlength) {
             const ml = maxlength ? ` maxlength="${maxlength}"` : '';
-            return `<div class="msh-cfg-edit-row">
+            const tip = placeholder ? _esc(label + ': ' + placeholder) : _esc(label);
+            return `<div class="msh-cfg-edit-row" title="${tip}">
                 <label class="msh-cfg-lbl">${label}</label>
-                <input class="msh-input msh-cfg-input" data-cfg="${id}" type="${type || 'text'}" value="${_esc(String(value))}" placeholder="${_esc(placeholder || '')}"${ml} />
+                <input class="msh-input msh-cfg-input" data-cfg="${id}" type="${type || 'text'}" value="${_esc(String(value))}" placeholder="${_esc(placeholder || '')}"${ml} title="${tip}" />
             </div>`;
         }
 
@@ -1082,16 +1229,16 @@ export const MeshtasticPanelDef = {
             const opts = options.map(o =>
                 `<option value="${_esc(o)}"${o === value ? ' selected' : ''}>${_esc(o)}</option>`
             ).join('');
-            return `<div class="msh-cfg-edit-row">
+            return `<div class="msh-cfg-edit-row" title="${_esc(label)}">
                 <label class="msh-cfg-lbl">${label}</label>
-                <select class="msh-input msh-cfg-input" data-cfg="${id}">${opts}</select>
+                <select class="msh-input msh-cfg-input" data-cfg="${id}" title="${_esc(label)}">${opts}</select>
             </div>`;
         }
 
         function _cfgToggle(label, id, value) {
-            return `<div class="msh-cfg-edit-row">
+            return `<div class="msh-cfg-edit-row" title="${_esc(label)}">
                 <label class="msh-cfg-lbl">${label}</label>
-                <label class="msh-toggle">
+                <label class="msh-toggle" title="Toggle ${_esc(label).toLowerCase()}">
                     <input type="checkbox" data-cfg="${id}" ${value ? 'checked' : ''} />
                     <span class="msh-toggle-slider"></span>
                 </label>
@@ -1139,6 +1286,8 @@ export const MeshtasticPanelDef = {
         let availableVersions = [];
 
         async function fetchFirmwareInfo() {
+            fwLoading = true;
+            if (activeTab === 'firmware') renderFirmware();
             try {
                 const [fwRes, verRes] = await Promise.all([
                     fetch(API + '/device/firmware').then(r => r.ok ? r.json() : null),
@@ -1147,25 +1296,43 @@ export const MeshtasticPanelDef = {
                 if (fwRes) firmwareInfo = fwRes;
                 if (verRes) availableVersions = verRes.versions || [];
             } catch (_) {}
+            fwLoading = false;
+            if (activeTab === 'firmware') renderFirmware();
         }
 
+        let fwLoading = false;
+
         function renderFirmware() {
+            if (fwLoading) {
+                body.innerHTML = _loading('Checking firmware info...');
+                return;
+            }
             const fw = firmwareInfo;
             const current = fw.current_version || deviceInfo.firmware_version || '--';
             const latest = fw.latest_version || '--';
             const hwModel = fw.hw_model || deviceInfo.hw_model || '--';
             const updateAvail = fw.update_available;
             const hasEsptool = fw.esptool_available;
+            const esptoolPio = fw.esptool_platformio;
             const hasCli = fw.meshtastic_cli_available;
+            // Build esptool display: check platformio path too
+            let esptoolHtml;
+            if (hasEsptool) {
+                esptoolHtml = '<span style="color:#05ffa1">INSTALLED</span>';
+            } else if (esptoolPio) {
+                esptoolHtml = '<span style="color:#05ffa1">INSTALLED</span> <span style="color:#888;font-size:0.6rem">(via PlatformIO)</span>';
+            } else {
+                esptoolHtml = '<span style="color:#ff2a6d">NOT FOUND</span>';
+            }
 
             body.innerHTML = `
                 <div class="msh-section-label">CURRENT FIRMWARE</div>
                 <div class="msh-config-grid">
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Version</span><span class="msh-cfg-val">${_esc(current)}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Hardware</span><span class="msh-cfg-val">${_esc(hwModel)}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">Latest Available</span><span class="msh-cfg-val${updateAvail ? ' msh-cfg-warn' : ''}">${_esc(latest)}${updateAvail ? ' (UPDATE AVAILABLE)' : ''}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">esptool</span><span class="msh-cfg-val">${hasEsptool ? '<span style="color:#05ffa1">INSTALLED</span>' : '<span style="color:#ff2a6d">NOT FOUND</span>'}</span></div>
-                    <div class="msh-cfg-row"><span class="msh-cfg-lbl">meshtastic CLI</span><span class="msh-cfg-val">${hasCli ? '<span style="color:#05ffa1">INSTALLED</span>' : '<span style="color:#ff2a6d">NOT FOUND</span>'}</span></div>
+                    <div class="msh-cfg-row" title="Firmware version currently running on the device"><span class="msh-cfg-lbl">Version</span><span class="msh-cfg-val">${_esc(current)}</span></div>
+                    <div class="msh-cfg-row" title="Hardware model of the connected radio"><span class="msh-cfg-lbl">Hardware</span><span class="msh-cfg-val">${_esc(hwModel)}</span></div>
+                    <div class="msh-cfg-row" title="Latest firmware version available from GitHub"><span class="msh-cfg-lbl">Latest Available</span><span class="msh-cfg-val${updateAvail ? ' msh-cfg-warn' : ''}">${_esc(latest)}${updateAvail ? ' (UPDATE AVAILABLE)' : ''}</span></div>
+                    <div class="msh-cfg-row" title="esptool.py is required for flashing ESP32 devices"><span class="msh-cfg-lbl">esptool</span><span class="msh-cfg-val">${esptoolHtml}</span></div>
+                    <div class="msh-cfg-row" title="Meshtastic Python CLI for advanced operations"><span class="msh-cfg-lbl">meshtastic CLI</span><span class="msh-cfg-val">${hasCli ? '<span style="color:#05ffa1">INSTALLED</span>' : '<span style="color:#ff2a6d">NOT FOUND</span>'}</span></div>
                 </div>
 
                 ${updateAvail ? `
@@ -1340,9 +1507,13 @@ function _injectStyles() {
     const s = document.createElement('style');
     s.id = 'msh-styles';
     s.textContent = `
+        /* ── Spinner ────────────────────────────────────────────── */
+        @keyframes msh-spin { to { transform:rotate(360deg); } }
+        .msh-spinner { width:16px; height:16px; border:2px solid #333; border-top-color:#00f0ff; border-radius:50%; animation:msh-spin 0.8s linear infinite; flex-shrink:0; }
+
         /* ── Connection bar ─────────────────────────────────────── */
         .msh-conn-bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #1a1a2e; background:#0a0a0f; flex-shrink:0; }
-        .msh-dot { width:10px; height:10px; border-radius:50%; background:#444; flex-shrink:0; transition:background 0.3s; }
+        .msh-dot { width:10px; height:10px; border-radius:50%; background:#444; flex-shrink:0; transition:background 0.3s; cursor:help; }
         .msh-dot-on { background:#05ffa1; box-shadow:0 0 8px #05ffa188; }
         .msh-conn-label { font-size:0.72rem; color:#888; font-weight:bold; letter-spacing:1px; }
         .msh-conn-device { font-size:0.72rem; color:#ccc; }
@@ -1351,17 +1522,17 @@ function _injectStyles() {
 
         /* ── Tab bar ────────────────────────────────────────────── */
         .msh-tabs { display:flex; border-bottom:1px solid #1a1a2e; flex-shrink:0; background:#0e0e14; }
-        .msh-tab { flex:1; padding:7px 2px; background:none; border:none; border-bottom:2px solid transparent; color:#666; font-family:inherit; font-size:0.65rem; cursor:pointer; letter-spacing:0.5px; transition:color 0.15s,border-color 0.15s; white-space:nowrap; }
-        .msh-tab:hover { color:#aaa; }
+        .msh-tab { flex:1; padding:7px 2px; background:none; border:none; border-bottom:2px solid transparent; color:#666; font-family:inherit; font-size:0.65rem; cursor:pointer; letter-spacing:0.5px; transition:color 0.15s,border-color 0.15s,background 0.15s; white-space:nowrap; }
+        .msh-tab:hover { color:#aaa; background:rgba(0,240,255,0.04); }
         .msh-tab-active { color:#00f0ff; border-bottom-color:#00f0ff; }
 
         /* ── Body ───────────────────────────────────────────────── */
         .msh-body { flex:1; overflow-y:auto; min-height:0; display:flex; flex-direction:column; }
 
         /* ── Buttons ────────────────────────────────────────────── */
-        .msh-btn { font-family:inherit; font-size:0.7rem; padding:4px 10px; background:rgba(0,240,255,0.06); border:1px solid rgba(0,240,255,0.2); color:#00f0ff; border-radius:3px; cursor:pointer; transition:background 0.15s; }
-        .msh-btn:hover { background:rgba(0,240,255,0.15); }
-        .msh-btn:disabled { opacity:0.4; cursor:not-allowed; }
+        .msh-btn { font-family:inherit; font-size:0.7rem; padding:4px 10px; background:rgba(0,240,255,0.06); border:1px solid rgba(0,240,255,0.2); color:#00f0ff; border-radius:3px; cursor:pointer; transition:background 0.15s,filter 0.15s,box-shadow 0.15s; }
+        .msh-btn:hover { background:rgba(0,240,255,0.15); filter:brightness(1.2); box-shadow:0 0 6px rgba(0,240,255,0.15); }
+        .msh-btn:disabled { opacity:0.4; cursor:not-allowed; filter:none; box-shadow:none; }
         .msh-btn-sm { font-size:0.65rem; padding:2px 6px; }
         .msh-btn-lg { font-size:0.75rem; padding:6px 16px; }
         .msh-btn-connect { background:rgba(5,255,161,0.1); border-color:rgba(5,255,161,0.3); color:#05ffa1; }
@@ -1373,6 +1544,8 @@ function _injectStyles() {
         .msh-btn-save:hover { background:rgba(5,255,161,0.2); }
         .msh-btn-warn { background:rgba(255,42,109,0.08); border-color:rgba(255,42,109,0.2); color:#ff2a6d; }
         .msh-btn-warn:hover { background:rgba(255,42,109,0.15); }
+        .msh-btn-primary { background:rgba(0,240,255,0.12); border-color:rgba(0,240,255,0.4); color:#00f0ff; font-weight:bold; }
+        .msh-btn-primary:hover { background:rgba(0,240,255,0.2); box-shadow:0 0 10px rgba(0,240,255,0.2); }
 
         /* ── Stats grid ─────────────────────────────────────────── */
         .msh-stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:10px; }
@@ -1394,9 +1567,12 @@ function _injectStyles() {
         .msh-radio-actions { display:flex; gap:6px; padding:12px 10px; flex-wrap:wrap; }
         .msh-radio-ports { margin-top:8px; }
         .msh-port-list { padding:0 10px; }
-        .msh-port-row { display:flex; align-items:center; gap:8px; padding:6px 6px; border-bottom:1px solid #ffffff08; }
+        .msh-port-row { display:flex; align-items:center; gap:8px; padding:6px 6px; border-bottom:1px solid #ffffff08; transition:background 0.15s; }
+        .msh-port-row:hover { background:rgba(0,240,255,0.03); }
         .msh-port-name { font-size:0.75rem; color:#00f0ff; min-width:120px; }
         .msh-port-desc { font-size:0.65rem; color:#888; flex:1; }
+        .msh-radio-disconnect-bar { padding:8px 10px; }
+        .msh-saved-row .msh-port-name { color:#888; }
 
         /* ── Node table ─────────────────────────────────────────── */
         .msh-node-header { display:flex; justify-content:space-between; padding:4px 10px; border-bottom:1px solid #1a1a2e; flex-shrink:0; }
@@ -1453,10 +1629,12 @@ function _injectStyles() {
         /* ── Config & Module shared ─────────────────────────────── */
         .msh-config-scroll { flex:1; overflow-y:auto; min-height:0; padding-bottom:8px; }
         .msh-config-grid { padding:0 10px; }
-        .msh-cfg-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #ffffff06; font-size:0.72rem; align-items:center; }
+        .msh-cfg-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #ffffff06; font-size:0.72rem; align-items:center; transition:background 0.15s; }
+        .msh-cfg-row:hover { background:rgba(0,240,255,0.02); }
         .msh-cfg-lbl { color:#888; font-size:0.65rem; min-width:100px; flex-shrink:0; }
         .msh-cfg-val { color:#ccc; font-size:0.72rem; text-align:right; }
-        .msh-cfg-edit-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #ffffff06; gap:8px; }
+        .msh-cfg-edit-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #ffffff06; gap:8px; transition:background 0.15s; }
+        .msh-cfg-edit-row:hover { background:rgba(0,240,255,0.02); }
         .msh-cfg-input { max-width:180px; flex:0 0 180px; font-size:0.72rem; padding:3px 6px; }
         .msh-config-save-bar { display:flex; gap:8px; padding:12px 10px; border-top:1px solid #1a1a2e; margin-top:8px; }
 
@@ -1482,6 +1660,10 @@ function _injectStyles() {
         /* ── Modem preset warning ──────────────────────────────── */
         .msh-cfg-warn { color:#fcee0a !important; }
         .msh-preset-warning { font-size:0.6rem; color:#fcee0a; padding:2px 10px; background:rgba(252,238,10,0.06); border-left:2px solid #fcee0a; margin:2px 10px 4px; }
+
+        /* ── Recent row (firmware versions etc) ────────────────── */
+        .msh-recent-row { display:flex; align-items:center; gap:8px; padding:4px 6px; border-bottom:1px solid #ffffff06; transition:background 0.15s; }
+        .msh-recent-row:hover { background:rgba(0,240,255,0.04); }
 
         /* ── Message filter button ─────────────────────────────── */
         .msh-msg-filter-btn { font-size:0.6rem !important; letter-spacing:0.5px; }
