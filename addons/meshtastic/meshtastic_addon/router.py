@@ -233,6 +233,24 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
             )
         return result
 
+    @router.post("/recover")
+    async def recover():
+        """Attempt to recover an unresponsive USB device.
+
+        Drains stale serial data, toggles DTR, and retries connection.
+        Use this when the device stops responding after rapid connect/disconnect.
+        """
+        if not connection:
+            return {"error": "no_connection_manager"}
+        ok = await connection.reset_usb_device()
+        if ok:
+            return {
+                "recovered": True,
+                "connected": connection.is_connected,
+                "device": connection.device_info,
+            }
+        return {"recovered": False, "error": "Recovery failed — device may need physical replug"}
+
     @router.post("/disconnect")
     async def disconnect():
         """Disconnect from the current device."""

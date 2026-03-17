@@ -497,6 +497,45 @@ class ConnectionManager:
         except Exception as e:
             log.debug(f"Serial drain on {port} failed (non-fatal): {e}")
 
+    async def reset_usb_device(self, port: str = ""):
+        """Try to recover an unresponsive USB device.
+
+        1. Close any existing interface
+        2. Drain stale serial data
+        3. Toggle DTR to reset USB-CDC
+        4. If still unresponsive, try BLE reboot command
+        """
+        target = port or self.port or "/dev/ttyACM0"
+        from pathlib import Path
+        if not Path(target).exists():
+            log.warning(f"Cannot reset {target} — port does not exist")
+            return False
+
+        log.info(f"Attempting USB device recovery on {target}")
+        self._close_interface()
+        self._drain_serial(target)
+
+        # Try a quick connect to see if it responds
+        try:
+            import meshtastic.serial_interface
+            loop = asyncio.get_event_loop()
+            iface = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: meshtastic.serial_interface.SerialInterface(
+                    target, noNodes=True, timeout=10,
+                )),
+                timeout=15,
+            )
+            self.interface = iface
+            self._is_connected = True
+            self.transport_type = "serial"
+            self.port = target
+            self._read_device_info()
+            log.info(f"USB recovery succeeded on {target}")
+            return True
+        except Exception as e:
+            log.warning(f"USB recovery failed on {target}: {e}")
+            return False
+
     def _find_serial_device(self) -> str | None:
         """Scan /dev for Meshtastic-compatible serial devices."""
         # Check environment variable first

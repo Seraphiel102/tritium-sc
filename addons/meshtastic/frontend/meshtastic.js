@@ -115,6 +115,8 @@ export const MeshtasticPanelDef = {
         let channelEditIndex = -1; // which channel slot is being edited
         let chatOnlyFilter = true; // filter system messages by default
         let deviceInfoFetched = false; // track if we've fetched device info this session
+        let nodeSearchText = '';
+        let selectedNodeId = null; // for detail overlay
 
         _injectStyles();
 
@@ -755,6 +757,127 @@ export const MeshtasticPanelDef = {
         // =====================================================================
         //  NODES TAB
         // =====================================================================
+        // ── Favorites helpers ──────────────────────────────────
+        function _getFavorites() {
+            try {
+                const raw = localStorage.getItem('tritium.meshtastic.favorites');
+                return raw ? JSON.parse(raw) : [];
+            } catch (_) { return []; }
+        }
+        function _setFavorites(arr) {
+            try { localStorage.setItem('tritium.meshtastic.favorites', JSON.stringify(arr)); } catch (_) {}
+        }
+        function _toggleFavorite(nodeId) {
+            const favs = _getFavorites();
+            const idx = favs.indexOf(nodeId);
+            if (idx >= 0) favs.splice(idx, 1);
+            else favs.push(nodeId);
+            _setFavorites(favs);
+        }
+        function _isFavorite(nodeId) {
+            return _getFavorites().indexOf(nodeId) >= 0;
+        }
+
+        // ── Haversine distance (km) ──────────────────────────────
+        function _haversine(lat1, lon1, lat2, lon2) {
+            const R = 6371; // km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+
+        // ── Get our own position from deviceInfo or first matching node ──
+        function _getOwnPosition() {
+            if (deviceInfo && deviceInfo.latitude && deviceInfo.longitude) {
+                return { lat: deviceInfo.latitude, lng: deviceInfo.longitude };
+            }
+            const myId = deviceInfo && (deviceInfo.node_id || deviceInfo.my_node_num);
+            if (myId) {
+                const me = nodes.find(n => (n.node_id || n.num) === myId);
+                if (me && me.latitude && me.longitude) {
+                    return { lat: me.latitude, lng: me.longitude };
+                }
+            }
+            return null;
+        }
+
+        // ── Node detail overlay ──────────────────────────────────
+        function _renderNodeDetail(nodeId) {
+            const n = nodes.find(nd => (nd.node_id || nd.num || '') === nodeId);
+            if (n == null) return '';
+            const isFav = _isFavorite(nodeId);
+            const now = Math.floor(Date.now() / 1000);
+            const lastHeardSec = n.last_heard != null ? (now - n.last_heard) : null;
+            const lastHeardStr = lastHeardSec != null ? _age(lastHeardSec) + ' ago' : '--';
+            const hasGps = n.latitude != null && n.longitude != null;
+            const ownPos = _getOwnPosition();
+            let distStr = '--';
+            if (hasGps && ownPos) {
+                const km = _haversine(ownPos.lat, ownPos.lng, n.latitude, n.longitude);
+                distStr = km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
+            }
+            const hops = n.hopsAway != null ? String(n.hopsAway) : (n.hops_away != null ? String(n.hops_away) : '--');
+            const uptimeStr = n.uptime != null ? _age(n.uptime) : '--';
+            const bat = n.battery != null ? Math.round(n.battery) + '%' : '--';
+            const volt = n.voltage != null ? n.voltage.toFixed(2) + 'V' : '--';
+            const snr = n.snr != null ? n.snr.toFixed(1) + ' dB' : '--';
+            const chUtil = n.channel_utilization != null ? n.channel_utilization.toFixed(1) + '%' : '--';
+            const airUtil = n.air_util_tx != null ? n.air_util_tx.toFixed(1) + '%' : '--';
+            const temp = n.temperature != null ? n.temperature.toFixed(1) + ' C' : null;
+            const humidity = n.humidity != null ? n.humidity.toFixed(0) + '%' : null;
+            const pressure = n.pressure != null ? n.pressure.toFixed(1) + ' hPa' : null;
+            const neighbors = n.neighbors || [];
+
+            let envRows = '';
+            if (temp) envRows += `<div class="msh-detail-row"><span class="msh-detail-lbl">TEMPERATURE</span><span class="msh-detail-val">${_esc(temp)}</span></div>`;
+            if (humidity) envRows += `<div class="msh-detail-row"><span class="msh-detail-lbl">HUMIDITY</span><span class="msh-detail-val">${_esc(humidity)}</span></div>`;
+            if (pressure) envRows += `<div class="msh-detail-row"><span class="msh-detail-lbl">PRESSURE</span><span class="msh-detail-val">${_esc(pressure)}</span></div>`;
+
+            let neighborsHtml = '';
+            if (neighbors.length > 0) {
+                neighborsHtml = `<div class="msh-detail-section">NEIGHBORS (${neighbors.length})</div>` +
+                    neighbors.map(nb => {
+                        const nbName = nb.long_name || nb.short_name || nb.node_id || 'Unknown';
+                        const nbSnr = nb.snr != null ? nb.snr.toFixed(1) + ' dB' : '';
+                        return `<div class="msh-detail-row"><span class="msh-detail-lbl">${_esc(nbName)}</span><span class="msh-detail-val">${nbSnr}</span></div>`;
+                    }).join('');
+            }
+
+            return `<div class="msh-node-detail">
+                <div class="msh-detail-header">
+                    <span class="msh-detail-fav" data-action="toggle-fav-detail" data-node-id="${_esc(nodeId)}" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}" style="cursor:pointer;font-size:1.1rem;color:${isFav ? '#fcee0a' : '#555'}">${isFav ? '\u2605' : '\u2606'}</span>
+                    <span class="msh-detail-title">${_esc(n.long_name || n.short_name || nodeId)}</span>
+                    <span style="flex:1"></span>
+                    <button class="msh-btn msh-btn-sm" data-action="close-detail">CLOSE</button>
+                </div>
+                <div class="msh-detail-body">
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">LONG NAME</span><span class="msh-detail-val">${_esc(n.long_name || '--')}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">SHORT NAME</span><span class="msh-detail-val">${_esc(n.short_name || '--')}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">NODE ID</span><span class="msh-detail-val" style="color:#00f0ff">${_esc(nodeId)}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">HARDWARE</span><span class="msh-detail-val">${_esc(n.hw_model || '--')}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">ROLE</span><span class="msh-detail-val">${_esc(n.role || '--')}</span></div>
+                    <div class="msh-detail-section">POSITION</div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">LATITUDE</span><span class="msh-detail-val">${hasGps ? n.latitude.toFixed(6) : '--'}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">LONGITUDE</span><span class="msh-detail-val">${hasGps ? n.longitude.toFixed(6) : '--'}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">ALTITUDE</span><span class="msh-detail-val">${n.altitude != null ? Math.round(n.altitude) + ' m' : '--'}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">DISTANCE</span><span class="msh-detail-val">${distStr}</span></div>
+                    ${hasGps ? `<div style="padding:4px 0"><button class="msh-btn msh-btn-primary msh-btn-sm" data-action="fly-to" data-lat="${n.latitude}" data-lng="${n.longitude}">FLY TO</button></div>` : ''}
+                    <div class="msh-detail-section">RADIO</div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">BATTERY</span><span class="msh-detail-val">${bat}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">VOLTAGE</span><span class="msh-detail-val">${volt}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">SNR</span><span class="msh-detail-val">${snr}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">HOPS</span><span class="msh-detail-val">${hops}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">UPTIME</span><span class="msh-detail-val">${uptimeStr}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">CH UTIL</span><span class="msh-detail-val">${chUtil}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">AIR UTIL TX</span><span class="msh-detail-val">${airUtil}</span></div>
+                    <div class="msh-detail-row"><span class="msh-detail-lbl">LAST HEARD</span><span class="msh-detail-val">${lastHeardStr}</span></div>
+                    ${envRows ? `<div class="msh-detail-section">ENVIRONMENT</div>${envRows}` : ''}
+                    ${neighborsHtml}
+                </div>
+            </div>`;
+        }
+
         function renderNodes() {
             if (nodes.length === 0) {
                 if (connected) {
@@ -764,7 +887,25 @@ export const MeshtasticPanelDef = {
                 }
                 return;
             }
-            const sorted = [...nodes].sort((a, b) => {
+
+            const favs = _getFavorites();
+            const ownPos = _getOwnPosition();
+            const searchLower = nodeSearchText.toLowerCase().trim();
+
+            // Filter by search text
+            let filtered = nodes;
+            if (searchLower) {
+                filtered = nodes.filter(n => {
+                    const fields = [n.long_name, n.short_name, n.node_id, n.num, n.hw_model].map(v => String(v || '').toLowerCase());
+                    return fields.some(f => f.indexOf(searchLower) >= 0);
+                });
+            }
+
+            // Sort: favorites first, then by selected sort key
+            const sorted = [...filtered].sort((a, b) => {
+                const aFav = favs.indexOf(a.node_id || a.num || '') >= 0 ? 1 : 0;
+                const bFav = favs.indexOf(b.node_id || b.num || '') >= 0 ? 1 : 0;
+                if (aFav !== bFav) return bFav - aFav; // favorites first
                 let va = a[nodeSortKey], vb = b[nodeSortKey];
                 if (typeof va === 'string') return (va || '').localeCompare(vb || '') * nodeSortDir;
                 if (va == null) va = -Infinity;
@@ -773,19 +914,33 @@ export const MeshtasticPanelDef = {
             });
 
             const now = Math.floor(Date.now() / 1000);
-            const headerCells = NODE_COLS.map(c =>
-                `<th class="msh-th" data-sort="${c.key}" style="width:${c.width};text-align:${c.align || 'left'}">${c.label}${nodeSortKey === c.key ? (nodeSortDir < 0 ? ' \u25BC' : ' \u25B2') : ''}</th>`
-            ).join('');
+
+            // Add fav star column before the rest
+            const headerCells = `<th class="msh-th" style="width:26px;text-align:center">\u2605</th>` +
+                NODE_COLS.map(c =>
+                    `<th class="msh-th" data-sort="${c.key}" style="width:${c.width};text-align:${c.align || 'left'}">${c.label}${nodeSortKey === c.key ? (nodeSortDir < 0 ? ' \u25BC' : ' \u25B2') : ''}</th>`
+                ).join('');
 
             const rows = sorted.map(n => {
+                const nid = n.node_id || n.num || '';
+                const isFav = favs.indexOf(nid) >= 0;
                 const age = _age(now - (n.last_heard || 0));
                 const bat = n.battery != null ? Math.round(n.battery) + '%' : '';
                 const batColor = n.battery != null ? (n.battery > 50 ? '#05ffa1' : n.battery > 20 ? '#fcee0a' : '#ff2a6d') : '#888';
                 const snr = n.snr != null ? n.snr.toFixed(1) : '';
                 const snrColor = n.snr != null ? (n.snr > 5 ? '#05ffa1' : n.snr > 0 ? '#fcee0a' : '#ff2a6d') : '#888';
-                const hops = n.hopsAway != null ? String(n.hopsAway) : '';
-                const dist = n.distance != null ? _formatDist(n.distance) : '';
-                return `<tr class="msh-tr" data-node-id="${_esc(n.node_id || n.num || '')}">
+                const hops = n.hopsAway != null ? String(n.hopsAway) : (n.hops_away != null ? String(n.hops_away) : '--');
+                // Compute distance from own position
+                let dist = '';
+                if (n.distance != null) {
+                    dist = _formatDist(n.distance);
+                } else if (ownPos && n.latitude != null && n.longitude != null) {
+                    const km = _haversine(ownPos.lat, ownPos.lng, n.latitude, n.longitude);
+                    dist = km < 1 ? Math.round(km * 1000) + 'm' : km.toFixed(1) + 'km';
+                }
+                const isSelected = selectedNodeId === nid;
+                return `<tr class="msh-tr${isSelected ? ' msh-tr-selected' : ''}" data-node-id="${_esc(nid)}" style="cursor:pointer">
+                    <td class="msh-td" style="text-align:center"><span class="msh-fav-star" data-action="toggle-fav" data-node-id="${_esc(nid)}" style="cursor:pointer;color:${isFav ? '#fcee0a' : '#333'}">${isFav ? '\u2605' : '\u2606'}</span></td>
                     <td class="msh-td">${_esc(n.short_name || '')}</td>
                     <td class="msh-td msh-td-long">${_esc(n.long_name || '')}</td>
                     <td class="msh-td msh-td-hw">${_esc(n.hw_model || '')}</td>
@@ -801,20 +956,39 @@ export const MeshtasticPanelDef = {
                 if (n.last_heard == null) return false;
                 return (now - n.last_heard) < 900; // 15 min
             }).length;
+            const withGps = nodes.filter(n => n.latitude != null && n.longitude != null).length;
+            const favCount = favs.filter(fid => nodes.some(n => (n.node_id || n.num || '') === fid)).length;
+
+            const detailHtml = selectedNodeId ? _renderNodeDetail(selectedNodeId) : '';
 
             body.innerHTML = `
+                ${detailHtml}
                 <div class="msh-node-header">
-                    <span class="msh-node-count">${nodes.length} node${nodes.length !== 1 ? 's' : ''}</span>
+                    <span class="msh-node-count">${nodes.length} node${nodes.length !== 1 ? 's' : ''} (${withGps} with GPS, ${favCount} favorited)</span>
                     <span class="msh-node-online" style="color:#05ffa1">${online} online</span>
                 </div>
+                <input type="text" class="msh-input" placeholder="Search nodes by name, ID, or hardware..." data-bind="node-search" value="${_esc(nodeSearchText)}" style="margin:6px 10px;width:calc(100% - 20px);flex-shrink:0;" />
                 <div style="flex:1;overflow:auto;min-height:0;">
                     <table class="msh-table">
                         <thead><tr>${headerCells}</tr></thead>
-                        <tbody>${rows || '<tr><td colspan="8" class="msh-empty" style="text-align:center;padding:30px">No nodes discovered</td></tr>'}</tbody>
+                        <tbody>${rows || '<tr><td colspan="9" class="msh-empty" style="text-align:center;padding:30px">No nodes match search</td></tr>'}</tbody>
                     </table>
                 </div>
             `;
 
+            // Search input handler
+            const searchInput = body.querySelector('[data-bind="node-search"]');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    nodeSearchText = e.target.value;
+                    renderNodes();
+                    // Re-focus and restore cursor after re-render
+                    const inp = body.querySelector('[data-bind="node-search"]');
+                    if (inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
+                });
+            }
+
+            // Sort headers
             body.querySelector('thead')?.addEventListener('click', (e) => {
                 const th = e.target.closest('[data-sort]');
                 if (th === null) return;
@@ -822,6 +996,45 @@ export const MeshtasticPanelDef = {
                 else { nodeSortKey = th.dataset.sort; nodeSortDir = -1; }
                 renderNodes();
             });
+
+            // Row click for detail + star toggle
+            body.querySelector('tbody')?.addEventListener('click', (e) => {
+                // Star toggle
+                const star = e.target.closest('[data-action="toggle-fav"]');
+                if (star) {
+                    e.stopPropagation();
+                    _toggleFavorite(star.dataset.nodeId);
+                    renderNodes();
+                    return;
+                }
+                // Row click -> show detail
+                const row = e.target.closest('.msh-tr');
+                if (row && row.dataset.nodeId) {
+                    selectedNodeId = selectedNodeId === row.dataset.nodeId ? null : row.dataset.nodeId;
+                    renderNodes();
+                }
+            });
+
+            // Detail panel actions
+            const closeBtn = body.querySelector('[data-action="close-detail"]');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => { selectedNodeId = null; renderNodes(); });
+            }
+            const flyBtn = body.querySelector('[data-action="fly-to"]');
+            if (flyBtn) {
+                flyBtn.addEventListener('click', () => {
+                    const lat = parseFloat(flyBtn.dataset.lat);
+                    const lng = parseFloat(flyBtn.dataset.lng);
+                    if (lat && lng) EventBus.emit('map:fly-to', { lat, lng, zoom: 16 });
+                });
+            }
+            const favDetailBtn = body.querySelector('[data-action="toggle-fav-detail"]');
+            if (favDetailBtn) {
+                favDetailBtn.addEventListener('click', () => {
+                    _toggleFavorite(favDetailBtn.dataset.nodeId);
+                    renderNodes();
+                });
+            }
         }
 
         // =====================================================================

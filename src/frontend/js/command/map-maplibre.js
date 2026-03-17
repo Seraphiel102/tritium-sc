@@ -488,8 +488,8 @@ function _createMap(mapDiv) {
         // Add compact map legend
         _createMapLegend();
 
-        // Add patrol route drawing button
-        _createPatrolDrawButton();
+        // Patrol draw button removed — redundant with tactical banner tool buttons
+        // _createPatrolDrawButton();
 
         // Combat effects system
         _initEffects();

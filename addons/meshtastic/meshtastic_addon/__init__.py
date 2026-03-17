@@ -111,11 +111,14 @@ class MeshtasticAddon(SensorAddon):
             device_router = create_device_routes(self.device_manager)
             app.include_router(device_router, prefix="/api/addons/meshtastic", tags=["meshtastic-device"])
 
-        # Auto-detect and connect (non-blocking, graceful failure)
-        try:
-            await self.connection.auto_connect()
-        except Exception as e:
-            log.warning(f"Meshtastic auto-connect failed (will retry via API): {e}")
+        # Auto-detect and connect — skip if already connected (prevents rapid reconnect)
+        if not self.connection.is_connected:
+            try:
+                await self.connection.auto_connect()
+            except Exception as e:
+                log.warning(f"Meshtastic auto-connect failed (will retry via API): {e}")
+        else:
+            log.info("Meshtastic already connected, skipping auto-connect")
 
         # Register message bridge callbacks after connection attempt
         self.message_bridge.register_callbacks()
