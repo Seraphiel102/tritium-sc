@@ -110,6 +110,7 @@ import { UnifiedAlertsPanelDef } from './panels/alerts-panel.js';
 import { RadarScopePanelDef } from './panels/radar-scope.js';
 import { SdrWaterfallPanelDef } from './panels/sdr-waterfall.js';
 import { AdsbTablePanelDef } from './panels/adsb-table.js';
+import { AddonsManagerPanelDef } from './panels/addons-manager.js';
 import { loadAddons } from './addon-loader.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
@@ -825,6 +826,7 @@ function initPanelSystem(container) {
     panelManager.register(RadarScopePanelDef);
     panelManager.register(SdrWaterfallPanelDef);
     panelManager.register(AdsbTablePanelDef);
+    panelManager.register(AddonsManagerPanelDef);
 
     // Dynamically load addon panels from /api/addons/manifests
     loadAddons(panelManager).catch(err => {

@@ -1,0 +1,498 @@
+// Created by Matthew Valancy
+// Copyright 2026 Valpatel Software LLC
+// Licensed under AGPL-3.0 — see LICENSE for details.
+// Addons Manager Panel — Blender-style extensions panel for Tritium SC.
+//
+// Lists all discovered addons with enable/disable toggles, health status,
+// category badges, and version info. Fetches from /api/addons/ and posts
+// enable/disable to /api/addons/{id}/enable and /api/addons/{id}/disable.
+
+import { EventBus } from '../events.js';
+import { _esc } from '../panel-utils.js';
+
+const POLL_INTERVAL_MS = 10000;
+
+const CATEGORY_COLORS = {
+    sensor:        '#00f0ff',
+    intelligence:  '#ff2a6d',
+    communication: '#05ffa1',
+    visualization: '#fcee0a',
+    integration:   '#b060ff',
+    simulation:    '#ff8800',
+    security:      '#ff4444',
+    ai:            '#ff2a6d',
+    system:        '#8888cc',
+};
+
+const CATEGORY_ICONS = {
+    sensor:        '\u25C9',  // fisheye
+    intelligence:  '\u2736',  // six-pointed star
+    communication: '\u2637',  // trigram
+    visualization: '\u25A3',  // white square containing small black square
+    integration:   '\u2B21',  // white hexagon
+    simulation:    '\u2338',  // apl quad equal
+    security:      '\u2622',  // radioactive
+    ai:            '\u2699',  // gear
+    system:        '\u2699',  // gear
+};
+
+function _catColor(cat) {
+    return CATEGORY_COLORS[(cat || '').toLowerCase()] || '#888';
+}
+
+function _catIcon(cat) {
+    return CATEGORY_ICONS[(cat || '').toLowerCase()] || '\u2B22';
+}
+
+function _healthDot(addon) {
+    if (addon.error) return '<span class="addmgr-dot addmgr-dot-red" title="Error"></span>';
+    if (addon.crash_count > 0) return '<span class="addmgr-dot addmgr-dot-yellow" title="Degraded"></span>';
+    if (addon.enabled) return '<span class="addmgr-dot addmgr-dot-green" title="Healthy"></span>';
+    return '<span class="addmgr-dot addmgr-dot-off" title="Disabled"></span>';
+}
+
+function _renderAddonCard(addon) {
+    const id = _esc(addon.id || '');
+    const name = _esc(addon.name || addon.id || 'Unknown');
+    const version = _esc(addon.version || '0.0.0');
+    const desc = _esc(addon.description || 'No description');
+    const cat = (addon.category || 'system').toLowerCase();
+    const enabled = addon.enabled;
+    const hasError = addon.error;
+    const errorMsg = _esc(addon.error || '');
+    const catColor = _catColor(cat);
+    const catIcon = _catIcon(cat);
+
+    const cardClass = enabled
+        ? (hasError ? 'addmgr-card addmgr-card-error' : 'addmgr-card addmgr-card-enabled')
+        : 'addmgr-card addmgr-card-disabled';
+
+    return `<div class="${cardClass}" data-addon-id="${id}">
+        <div class="addmgr-card-row">
+            <span class="addmgr-icon" style="color:${catColor}">${catIcon}</span>
+            <div class="addmgr-info">
+                <div class="addmgr-name-row">
+                    <span class="addmgr-name">${name}</span>
+                    <span class="addmgr-version">v${version}</span>
+                    ${_healthDot(addon)}
+                </div>
+                <div class="addmgr-desc">${desc}</div>
+                ${hasError ? `<div class="addmgr-error">${errorMsg}</div>` : ''}
+            </div>
+            <div class="addmgr-actions">
+                <label class="addmgr-toggle" title="${enabled ? 'Disable' : 'Enable'}">
+                    <input type="checkbox" data-toggle="${id}" ${enabled ? 'checked' : ''}>
+                    <span class="addmgr-toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="addmgr-card-footer">
+            <span class="addmgr-badge" style="border-color:${catColor};color:${catColor}">${_esc(cat)}</span>
+            <button class="addmgr-settings-btn" data-settings="${id}" title="Settings (coming soon)" disabled>SETTINGS</button>
+        </div>
+    </div>`;
+}
+
+function _injectStyles() {
+    if (document.getElementById('addmgr-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'addmgr-styles';
+    style.textContent = `
+        .addmgr-wrap {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            font-family: 'Share Tech Mono', 'Fira Code', monospace;
+        }
+        .addmgr-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid #00f0ff33;
+            flex-shrink: 0;
+        }
+        .addmgr-header-title {
+            font-size: 0.8rem;
+            color: #00f0ff;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+            text-shadow: 0 0 6px #00f0ff44;
+        }
+        .addmgr-header-count {
+            font-size: 0.7rem;
+            color: #888;
+        }
+        .addmgr-search {
+            padding: 6px 12px;
+            flex-shrink: 0;
+        }
+        .addmgr-search input {
+            width: 100%;
+            background: #0a0a0f;
+            border: 1px solid #00f0ff33;
+            color: #ccc;
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            border-radius: 2px;
+            outline: none;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        .addmgr-search input:focus {
+            border-color: #00f0ff88;
+            box-shadow: 0 0 4px #00f0ff22;
+        }
+        .addmgr-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 8px;
+            min-height: 0;
+        }
+        .addmgr-card {
+            background: #0e0e14;
+            border: 1px solid #1a1a2e;
+            border-radius: 3px;
+            margin-bottom: 6px;
+            padding: 8px 10px 6px;
+            transition: border-color 0.2s, opacity 0.2s, box-shadow 0.2s;
+        }
+        .addmgr-card-enabled {
+            border-color: #00f0ff44;
+            box-shadow: 0 0 8px #00f0ff11;
+        }
+        .addmgr-card-disabled {
+            opacity: 0.55;
+            border-color: #1a1a2e;
+        }
+        .addmgr-card-error {
+            border-color: #ff4444aa;
+            box-shadow: 0 0 8px #ff444422;
+        }
+        .addmgr-card:hover {
+            border-color: #00f0ff66;
+        }
+        .addmgr-card-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .addmgr-icon {
+            font-size: 0.6rem;
+            line-height: 1;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .addmgr-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .addmgr-name-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .addmgr-name {
+            font-size: 0.75rem;
+            color: #eee;
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .addmgr-version {
+            font-size: 0.6rem;
+            color: #666;
+            flex-shrink: 0;
+        }
+        .addmgr-desc {
+            font-size: 0.65rem;
+            color: #888;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .addmgr-error {
+            font-size: 0.6rem;
+            color: #ff4444;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .addmgr-actions {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+        }
+        /* Toggle switch */
+        .addmgr-toggle {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .addmgr-toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .addmgr-toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: #1a1a2e;
+            border-radius: 9px;
+            border: 1px solid #333;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .addmgr-toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            left: 2px;
+            bottom: 2px;
+            background: #555;
+            border-radius: 50%;
+            transition: transform 0.2s, background 0.2s, box-shadow 0.2s;
+        }
+        .addmgr-toggle input:checked + .addmgr-toggle-slider {
+            background: #00f0ff22;
+            border-color: #00f0ff88;
+        }
+        .addmgr-toggle input:checked + .addmgr-toggle-slider::before {
+            transform: translateX(18px);
+            background: #00f0ff;
+            box-shadow: 0 0 6px #00f0ff88;
+        }
+        /* Health dots */
+        .addmgr-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .addmgr-dot-green {
+            background: #05ffa1;
+            box-shadow: 0 0 4px #05ffa188;
+        }
+        .addmgr-dot-yellow {
+            background: #fcee0a;
+            box-shadow: 0 0 4px #fcee0a88;
+        }
+        .addmgr-dot-red {
+            background: #ff4444;
+            box-shadow: 0 0 4px #ff444488;
+        }
+        .addmgr-dot-off {
+            background: #444;
+        }
+        /* Card footer */
+        .addmgr-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            padding-top: 4px;
+            border-top: 1px solid #ffffff08;
+        }
+        .addmgr-badge {
+            font-size: 0.6rem;
+            border: 1px solid;
+            border-radius: 2px;
+            padding: 1px 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .addmgr-settings-btn {
+            font-size: 0.6rem;
+            background: transparent;
+            border: 1px solid #333;
+            color: #555;
+            padding: 1px 6px;
+            cursor: not-allowed;
+            border-radius: 2px;
+            font-family: inherit;
+        }
+        .addmgr-settings-btn:not(:disabled):hover {
+            border-color: #00f0ff66;
+            color: #00f0ff;
+            cursor: pointer;
+        }
+        /* Footer link */
+        .addmgr-footer {
+            padding: 8px 12px;
+            border-top: 1px solid #00f0ff22;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .addmgr-footer a {
+            font-size: 0.65rem;
+            color: #00f0ff88;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .addmgr-footer a:hover {
+            color: #00f0ff;
+            text-decoration: underline;
+        }
+        .addmgr-empty {
+            color: #555;
+            text-align: center;
+            padding: 30px 10px;
+            font-size: 0.7rem;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+
+export const AddonsManagerPanelDef = {
+    id: 'addons-manager',
+    title: 'ADDONS MANAGER',
+    defaultPosition: { x: 200, y: 100 },
+    defaultSize: { w: 500, h: 600 },
+
+    create(panel) {
+        _injectStyles();
+        const el = document.createElement('div');
+        el.className = 'addmgr-wrap';
+        el.innerHTML = `
+            <div class="addmgr-header">
+                <span class="addmgr-header-title">ADDONS MANAGER</span>
+                <span class="addmgr-header-count" data-bind="count"></span>
+            </div>
+            <div class="addmgr-search">
+                <input type="text" placeholder="Filter addons..." data-bind="filter">
+            </div>
+            <div class="addmgr-list" data-bind="list"></div>
+            <div class="addmgr-footer">
+                <a data-action="discover">Discover new addons...</a>
+            </div>
+        `;
+        return el;
+    },
+
+    mount(bodyEl, panel) {
+        let addons = [];
+        let filterText = '';
+        const listEl = bodyEl.querySelector('[data-bind="list"]');
+        const countEl = bodyEl.querySelector('[data-bind="count"]');
+        const filterInput = bodyEl.querySelector('[data-bind="filter"]');
+
+        async function fetchAddons() {
+            try {
+                const resp = await fetch('/api/addons/');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                addons = data.addons || [];
+                render();
+            } catch (e) {
+                console.warn('[AddonsManager] Fetch failed:', e);
+                if (addons.length === 0) {
+                    listEl.innerHTML = '<div class="addmgr-empty">Failed to load addons</div>';
+                }
+            }
+        }
+
+        function render() {
+            const filtered = filterText
+                ? addons.filter(a => {
+                    const text = `${a.id} ${a.name} ${a.description} ${a.category}`.toLowerCase();
+                    return text.includes(filterText.toLowerCase());
+                })
+                : addons;
+
+            const total = addons.length;
+            const enabled = addons.filter(a => a.enabled).length;
+            countEl.textContent = `${enabled} / ${total} enabled`;
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = filterText
+                    ? '<div class="addmgr-empty">No addons match filter</div>'
+                    : '<div class="addmgr-empty">No addons discovered</div>';
+                return;
+            }
+
+            // Sort: enabled first, then alphabetical
+            const sorted = [...filtered].sort((a, b) => {
+                if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+                return (a.name || a.id || '').localeCompare(b.name || b.id || '');
+            });
+
+            listEl.innerHTML = sorted.map(_renderAddonCard).join('');
+        }
+
+        async function toggleAddon(addonId, shouldEnable) {
+            const action = shouldEnable ? 'enable' : 'disable';
+            try {
+                const resp = await fetch(`/api/addons/${encodeURIComponent(addonId)}/${action}`, {
+                    method: 'POST',
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const result = await resp.json();
+                if (result.error) {
+                    EventBus.emit('toast:show', {
+                        message: `Failed to ${action} ${addonId}: ${result.error}`,
+                        type: 'alert',
+                    });
+                } else {
+                    EventBus.emit('toast:show', {
+                        message: `Addon "${addonId}" ${action}d`,
+                        type: 'info',
+                    });
+                }
+                // Refresh the list
+                await fetchAddons();
+            } catch (e) {
+                console.error(`[AddonsManager] Toggle ${action} failed:`, e);
+                EventBus.emit('toast:show', {
+                    message: `Failed to ${action} ${addonId}`,
+                    type: 'alert',
+                });
+                // Re-fetch to reset toggle state
+                await fetchAddons();
+            }
+        }
+
+        // Event delegation for toggle switches
+        bodyEl.addEventListener('change', (e) => {
+            const toggle = e.target.closest('[data-toggle]');
+            if (toggle) {
+                const addonId = toggle.dataset.toggle;
+                const shouldEnable = toggle.checked;
+                toggleAddon(addonId, shouldEnable);
+            }
+        });
+
+        // Event delegation for discover link
+        bodyEl.addEventListener('click', (e) => {
+            if (e.target.closest('[data-action="discover"]')) {
+                EventBus.emit('toast:show', {
+                    message: 'Addon marketplace coming soon',
+                    type: 'info',
+                });
+            }
+        });
+
+        // Filter input
+        filterInput.addEventListener('input', () => {
+            filterText = filterInput.value.trim();
+            render();
+        });
+
+        // Initial load + polling
+        fetchAddons();
+        panel._addmgrTimer = setInterval(fetchAddons, POLL_INTERVAL_MS);
+    },
+
+    unmount(bodyEl, panel) {
+        if (panel._addmgrTimer) {
+            clearInterval(panel._addmgrTimer);
+            panel._addmgrTimer = null;
+        }
+    },
+};

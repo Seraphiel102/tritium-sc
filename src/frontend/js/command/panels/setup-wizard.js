@@ -88,22 +88,27 @@ const STEPS = [
             const lat = ConfigStore.get('map.centerLat', 33.749);
             const lng = ConfigStore.get('map.centerLng', -84.388);
             return `
-                <p class="wiz-text">Set the default map center for your area of operations.</p>
+                <p class="wiz-text">Set the default map center for your area of operations. Move the map and click "Use Current" or pick a city.</p>
                 <div class="wiz-field">
                     <label class="wiz-label">Latitude</label>
-                    <input type="number" step="0.001" class="wiz-input" data-key="map.centerLat" value="${lat}" />
+                    <input type="number" step="0.0001" class="wiz-input" data-key="map.centerLat" value="${lat}" />
                 </div>
                 <div class="wiz-field">
                     <label class="wiz-label">Longitude</label>
-                    <input type="number" step="0.001" class="wiz-input" data-key="map.centerLng" value="${lng}" />
+                    <input type="number" step="0.0001" class="wiz-input" data-key="map.centerLng" value="${lng}" />
                 </div>
                 <div class="wiz-presets">
+                    <button class="wiz-preset-btn wiz-use-current" data-lat="" data-lng="">USE CURRENT</button>
                     <button class="wiz-preset-btn" data-lat="33.749" data-lng="-84.388">Atlanta</button>
                     <button class="wiz-preset-btn" data-lat="40.7128" data-lng="-74.006">New York</button>
                     <button class="wiz-preset-btn" data-lat="37.7749" data-lng="-122.4194">San Francisco</button>
                     <button class="wiz-preset-btn" data-lat="51.5074" data-lng="-0.1278">London</button>
-                    <button class="wiz-preset-btn" data-lat="0" data-lng="0">0,0 (Custom)</button>
+                    <button class="wiz-preset-btn" data-lat="34.0522" data-lng="-118.2437">Los Angeles</button>
+                    <button class="wiz-preset-btn" data-lat="41.8781" data-lng="-87.6298">Chicago</button>
+                    <button class="wiz-preset-btn" data-lat="48.8566" data-lng="2.3522">Paris</button>
+                    <button class="wiz-preset-btn" data-lat="35.6762" data-lng="139.6503">Tokyo</button>
                 </div>
+                <p class="wiz-hint" id="wiz-live-coords" style="margin-top:8px;color:#00f0ff88"></p>
             `;
         },
         save: (bodyEl) => {
@@ -235,7 +240,7 @@ export const SetupWizardPanelDef = {
     id: 'setup-wizard',
     title: 'SETUP WIZARD',
     defaultPosition: { x: 250, y: 80 },
-    defaultSize: { w: 420, h: 480 },
+    defaultSize: { w: 520, h: 560 },
 
     create(_panel) {
         const el = document.createElement('div');
@@ -274,15 +279,65 @@ export const SetupWizardPanelDef = {
             backBtn.style.display = step === 0 ? 'none' : '';
             nextBtn.textContent = step === STEPS.length - 1 ? 'FINISH' : 'NEXT';
 
+            // Show crosshairs when on map-center step
+            EventBus.emit('map:crosshairs', { show: s.id === 'map-center' });
+
             // Wire preset buttons for map center step
             contentEl.querySelectorAll('.wiz-preset-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const latInput = contentEl.querySelector('[data-key="map.centerLat"]');
                     const lngInput = contentEl.querySelector('[data-key="map.centerLng"]');
+
+                    // "Use Current" — read map's current center
+                    if (btn.classList.contains('wiz-use-current')) {
+                        // Try to get map center from maplibre instance
+                        const mapEl = document.querySelector('.maplibregl-map');
+                        const mapInstance = mapEl && mapEl.__map;
+                        if (mapInstance) {
+                            const center = mapInstance.getCenter();
+                            if (latInput) latInput.value = center.lat.toFixed(4);
+                            if (lngInput) lngInput.value = center.lng.toFixed(4);
+                        } else {
+                            // Fallback: emit event to get map center
+                            EventBus.emit('map:get-center', (center) => {
+                                if (center && latInput && lngInput) {
+                                    latInput.value = center.lat.toFixed(4);
+                                    lngInput.value = center.lng.toFixed(4);
+                                }
+                            });
+                        }
+                        return;
+                    }
+
+                    // City preset — update inputs AND fly map there
                     if (latInput) latInput.value = btn.dataset.lat;
                     if (lngInput) lngInput.value = btn.dataset.lng;
+
+                    // Fly the map to the selected location
+                    const lat = parseFloat(btn.dataset.lat);
+                    const lng = parseFloat(btn.dataset.lng);
+                    if (!isNaN(lat) && !isNaN(lng)) {
+                        EventBus.emit('map:fly-to', { lat, lng, zoom: 12 });
+                    }
                 });
             });
+
+            // Live coordinate display — update as user moves the map
+            const liveCoordsEl = contentEl.querySelector('#wiz-live-coords');
+            if (liveCoordsEl) {
+                const mapEl = document.querySelector('.maplibregl-map');
+                const mapInstance = mapEl && mapEl.__map;
+                if (mapInstance) {
+                    const updateCoords = () => {
+                        const c = mapInstance.getCenter();
+                        liveCoordsEl.textContent = `Map center: ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
+                    };
+                    mapInstance.on('moveend', updateCoords);
+                    updateCoords();
+                    // Store cleanup ref
+                    panel._wizMapListener = { map: mapInstance, fn: updateCoords };
+                }
+            }
 
             // Wire radio card selection highlight
             contentEl.querySelectorAll('.wiz-radio-card input[type="radio"]').forEach(radio => {
@@ -332,6 +387,16 @@ export const SetupWizardPanelDef = {
         });
 
         renderStep();
+    },
+
+    unmount(_bodyEl, panel) {
+        // Clean up map moveend listener
+        if (panel._wizMapListener) {
+            panel._wizMapListener.map.off('moveend', panel._wizMapListener.fn);
+            panel._wizMapListener = null;
+        }
+        // Hide crosshairs when wizard closes
+        EventBus.emit('map:crosshairs', { show: false });
     },
 
     shouldAutoOpen() {

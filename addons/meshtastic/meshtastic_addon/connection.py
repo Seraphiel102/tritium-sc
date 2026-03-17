@@ -13,6 +13,16 @@ from typing import Any, Optional
 
 log = logging.getLogger("meshtastic.connection")
 
+# Default timeouts per transport.  Serial config exchange (channels, nodeinfo)
+# can take 30-60s on mesh networks with many nodes.  The meshtastic library's
+# SerialInterface `timeout` kwarg maps to `connectTimeout` (socket open), NOT
+# to `waitForConfig` which has its own 300s internal default.  We use the
+# outer asyncio.wait_for to enforce a hard wall-clock limit.
+DEFAULT_SERIAL_TIMEOUT = 60.0
+DEFAULT_TCP_TIMEOUT = 30.0
+DEFAULT_BLE_TIMEOUT = 45.0
+DEFAULT_MQTT_TIMEOUT = 15.0
+
 
 class ConnectionManager:
     """Manages connection to a Meshtastic device across multiple transports."""
@@ -34,13 +44,31 @@ class ConnectionManager:
         2. /dev/ttyACM0 (known T-LoRa Pager port)
         3. Auto-detect by VID:PID scan
         4. TCP host if MESHTASTIC_TCP_HOST is set
-        5. Graceful disconnected mode if all fail
+        5. MQTT broker if MESHTASTIC_MQTT_HOST is set
+        6. BLE if MESHTASTIC_BLE_ADDRESS is set
+        7. Graceful disconnected mode if all fail
+
+        Uses a two-phase strategy for serial: try fast connect first (noNodes,
+        shorter timeout), then retry with full config exchange on failure.
         """
         # Try USB serial first
         port = self._find_serial_device()
         if port:
+            # Phase 1: fast connect (skip full node list)
             try:
-                await self.connect_serial(port)
+                await self.connect_serial(
+                    port, timeout=20.0, retries=0, noNodes=True,
+                )
+                if self.is_connected:
+                    return
+            except Exception as e:
+                log.warning(f"Fast serial connect to {port} failed: {e}")
+
+            # Phase 2: full connect with longer timeout
+            try:
+                await self.connect_serial(
+                    port, timeout=DEFAULT_SERIAL_TIMEOUT, retries=1,
+                )
                 if self.is_connected:
                     return
             except Exception as e:
@@ -48,11 +76,12 @@ class ConnectionManager:
 
         # Try known port /dev/ttyACM0 as fallback (T-LoRa Pager default)
         if not self.is_connected:
-            from pathlib import Path
             fallback_port = "/dev/ttyACM0"
             if Path(fallback_port).exists() and port != fallback_port:
                 try:
-                    await self.connect_serial(fallback_port)
+                    await self.connect_serial(
+                        fallback_port, timeout=DEFAULT_SERIAL_TIMEOUT, retries=1,
+                    )
                     if self.is_connected:
                         return
                 except Exception as e:
@@ -68,19 +97,56 @@ class ConnectionManager:
             except Exception as e:
                 log.warning(f"TCP connect to {tcp_host} failed: {e}")
 
+        # Try MQTT if configured
+        mqtt_host = os.environ.get("MESHTASTIC_MQTT_HOST")
+        if mqtt_host and not self.is_connected:
+            try:
+                mqtt_topic = os.environ.get("MESHTASTIC_MQTT_TOPIC", "msh/US/2/e/#")
+                mqtt_user = os.environ.get("MESHTASTIC_MQTT_USER", "meshdev")
+                mqtt_pass = os.environ.get("MESHTASTIC_MQTT_PASSWORD", "large4cats")
+                await self.connect_mqtt(
+                    mqtt_host, topic=mqtt_topic,
+                    username=mqtt_user, password=mqtt_pass,
+                )
+                if self.is_connected:
+                    return
+            except Exception as e:
+                log.warning(f"MQTT connect to {mqtt_host} failed: {e}")
+
+        # Try BLE if configured
+        ble_addr = os.environ.get("MESHTASTIC_BLE_ADDRESS")
+        if ble_addr and not self.is_connected:
+            try:
+                await self.connect_ble(ble_addr)
+                if self.is_connected:
+                    return
+            except Exception as e:
+                log.warning(f"BLE connect to {ble_addr} failed: {e}")
+
         log.info("No Meshtastic device found — running in disconnected mode (connect later via API)")
 
-    async def connect_serial(self, port: str, timeout: float = 30.0, retries: int = 1):
+    async def connect_serial(
+        self,
+        port: str,
+        timeout: float = DEFAULT_SERIAL_TIMEOUT,
+        retries: int = 1,
+        noNodes: bool = False,
+    ):
         """Connect via USB serial port.
 
         Args:
             port: Serial device path (e.g. /dev/ttyACM0).
-            timeout: Max seconds to wait for the meshtastic library to connect
-                     and receive device config. The library's internal default
-                     is 300s which is far too long for an API call.
+            timeout: Max wall-clock seconds for the entire connect+config
+                     exchange.  The meshtastic library's SerialInterface
+                     ``timeout`` kwarg sets ``connectTimeout`` (the serial
+                     port open), NOT the config wait.  We rely on
+                     ``asyncio.wait_for`` to enforce the real deadline.
             retries: Number of retry attempts after a failure (with 2s delay).
+            noNodes: If True, pass ``noNodes=True`` to SerialInterface so it
+                     skips waiting for the full node list.  This makes the
+                     initial connect much faster on busy meshes — you can
+                     request nodes later via ``get_nodes()``.
         """
-        from pathlib import Path
         if not Path(port).exists():
             log.warning(f"Serial port {port} does not exist")
             self.is_connected = False
@@ -89,28 +155,32 @@ class ConnectionManager:
         for attempt in range(1 + retries):
             try:
                 import meshtastic.serial_interface
-                log.info(f"Connecting to Meshtastic on {port} (attempt {attempt + 1}, timeout {timeout}s)...")
+                log.info(
+                    f"Connecting to Meshtastic on {port} "
+                    f"(attempt {attempt + 1}, timeout {timeout}s, "
+                    f"noNodes={noNodes})..."
+                )
 
                 # Disconnect any existing interface first
-                if self.interface:
-                    try:
-                        self.interface.close()
-                    except Exception:
-                        pass
-                    self.interface = None
+                self._close_interface()
 
                 loop = asyncio.get_event_loop()
 
-                # The meshtastic SerialInterface constructor blocks while it
-                # waits for the device to send its config (waitForConfig).
-                # The default timeout is 300s which is far too long.  We pass
-                # a shorter timeout to the library AND wrap the executor call
-                # in asyncio.wait_for so the API endpoint doesn't hang.
-                lib_timeout = max(int(timeout) - 2, 10)  # leave 2s headroom
+                # The SerialInterface ``timeout`` kwarg maps to
+                # ``connectTimeout`` — the time to open the serial port
+                # and get a basic response.  It does NOT control
+                # ``_waitConnected`` (config exchange).  We set a
+                # generous connect timeout and let asyncio.wait_for
+                # enforce the outer wall-clock deadline.
+                connect_timeout = min(int(timeout), 30)
 
                 def _connect():
                     return meshtastic.serial_interface.SerialInterface(
-                        port, debugOut=None, noProto=False, timeout=lib_timeout,
+                        port,
+                        debugOut=None,
+                        noProto=False,
+                        noNodes=noNodes,
+                        connectTimeout=connect_timeout,
                     )
 
                 self.interface = await asyncio.wait_for(
@@ -129,13 +199,7 @@ class ConnectionManager:
                 return  # success
             except asyncio.TimeoutError:
                 log.warning(f"Serial connection to {port} timed out after {timeout}s (attempt {attempt + 1})")
-                # Clean up the partially-connected interface
-                if self.interface:
-                    try:
-                        self.interface.close()
-                    except Exception:
-                        pass
-                    self.interface = None
+                self._close_interface()
                 self.is_connected = False
             except ImportError:
                 log.warning("meshtastic package not installed — pip install meshtastic")
@@ -143,38 +207,30 @@ class ConnectionManager:
                 return  # no point retrying
             except Exception as e:
                 log.warning(f"Serial connection failed on {port}: {e} (attempt {attempt + 1})")
-                # Clean up on failure
-                if self.interface:
-                    try:
-                        self.interface.close()
-                    except Exception:
-                        pass
-                    self.interface = None
+                self._close_interface()
                 self.is_connected = False
 
             # Retry delay (only if we have retries left)
             if attempt < retries:
-                log.info(f"Retrying serial connection in 2s...")
+                log.info("Retrying serial connection in 2s...")
                 await asyncio.sleep(2)
 
-    async def connect_tcp(self, host: str, port: int = 4403, timeout: float = 30.0):
+    async def connect_tcp(self, host: str, port: int = 4403, timeout: float = DEFAULT_TCP_TIMEOUT):
         """Connect via WiFi/TCP."""
         try:
             import meshtastic.tcp_interface
             log.info(f"Connecting to Meshtastic on {host}:{port} (timeout {timeout}s)...")
 
-            if self.interface:
-                try:
-                    self.interface.close()
-                except Exception:
-                    pass
-                self.interface = None
+            self._close_interface()
 
             loop = asyncio.get_event_loop()
-            lib_timeout = max(int(timeout) - 2, 10)
+            connect_timeout = min(int(timeout), 30)
 
             def _connect():
-                return meshtastic.tcp_interface.TCPInterface(host, noProto=False, timeout=lib_timeout)
+                return meshtastic.tcp_interface.TCPInterface(
+                    host, portNumber=port, noProto=False,
+                    connectTimeout=connect_timeout,
+                )
 
             self.interface = await asyncio.wait_for(
                 loop.run_in_executor(None, _connect),
@@ -185,33 +241,173 @@ class ConnectionManager:
             self.port = f"{host}:{port}"
             self._read_device_info()
             log.info(f"Connected to {self.device_info.get('long_name', host)} via TCP")
+            if self.event_bus:
+                self.event_bus.emit("meshtastic:connected", {
+                    "transport": "tcp", "port": self.port, "device": self.device_info,
+                })
         except asyncio.TimeoutError:
             log.warning(f"TCP connection to {host}:{port} timed out after {timeout}s")
-            if self.interface:
-                try:
-                    self.interface.close()
-                except Exception:
-                    pass
-                self.interface = None
+            self._close_interface()
+            self.is_connected = False
+        except ImportError:
+            log.warning("meshtastic package not installed — pip install meshtastic")
             self.is_connected = False
         except Exception as e:
             log.warning(f"TCP connection failed: {e}")
-            if self.interface:
-                try:
-                    self.interface.close()
-                except Exception:
-                    pass
-                self.interface = None
+            self._close_interface()
+            self.is_connected = False
+
+    async def connect_ble(
+        self,
+        address: str = "",
+        timeout: float = DEFAULT_BLE_TIMEOUT,
+        noNodes: bool = False,
+    ):
+        """Connect via Bluetooth Low Energy.
+
+        Args:
+            address: BLE device address (e.g. "AA:BB:CC:DD:EE:FF").
+                     If empty, the meshtastic library will scan and pick the
+                     first device it finds.
+            timeout: Max wall-clock seconds for BLE discovery + config exchange.
+            noNodes: If True, skip waiting for full node list.
+        """
+        try:
+            import meshtastic.ble_interface
+        except ImportError:
+            log.warning(
+                "meshtastic BLE interface not available — "
+                "pip install meshtastic[ble] (requires bleak)"
+            )
+            self.is_connected = False
+            return
+
+        try:
+            log.info(
+                f"Connecting to Meshtastic via BLE "
+                f"(address={address or 'auto-discover'}, timeout={timeout}s)..."
+            )
+            self._close_interface()
+
+            loop = asyncio.get_event_loop()
+
+            def _connect():
+                kwargs: dict[str, Any] = {
+                    "noNodes": noNodes,
+                }
+                if address:
+                    kwargs["address"] = address
+                return meshtastic.ble_interface.BLEInterface(**kwargs)
+
+            self.interface = await asyncio.wait_for(
+                loop.run_in_executor(None, _connect),
+                timeout=timeout,
+            )
+            self.is_connected = True
+            self.transport_type = "ble"
+            self.port = address or "auto"
+            self._read_device_info()
+            log.info(
+                f"Connected to {self.device_info.get('long_name', address)} via BLE"
+            )
+            if self.event_bus:
+                self.event_bus.emit("meshtastic:connected", {
+                    "transport": "ble", "address": address, "device": self.device_info,
+                })
+        except asyncio.TimeoutError:
+            log.warning(f"BLE connection timed out after {timeout}s")
+            self._close_interface()
+            self.is_connected = False
+        except Exception as e:
+            log.warning(f"BLE connection failed: {e}")
+            self._close_interface()
+            self.is_connected = False
+
+    async def connect_mqtt(
+        self,
+        host: str = "mqtt.meshtastic.org",
+        port: int = 1883,
+        topic: str = "msh/US/2/e/#",
+        username: str = "meshdev",
+        password: str = "large4cats",
+        timeout: float = DEFAULT_MQTT_TIMEOUT,
+    ):
+        """Connect to the Meshtastic MQTT broker.
+
+        Many Meshtastic nodes uplink their packets to an MQTT broker.
+        This transport receives mesh traffic without a local radio.
+
+        Args:
+            host: MQTT broker hostname.
+            port: MQTT broker port.
+            topic: MQTT topic filter for mesh packets.
+            username: Broker username (Meshtastic public broker default).
+            password: Broker password.
+            timeout: Max seconds to establish the MQTT connection.
+        """
+        try:
+            import meshtastic.mqtt_interface
+        except ImportError:
+            log.warning(
+                "meshtastic MQTT interface not available — "
+                "pip install meshtastic (>=2.3.0 for MQTTInterface)"
+            )
+            self.is_connected = False
+            return
+
+        try:
+            log.info(f"Connecting to Meshtastic via MQTT {host}:{port} topic={topic}...")
+            self._close_interface()
+
+            loop = asyncio.get_event_loop()
+
+            def _connect():
+                return meshtastic.mqtt_interface.MQTTInterface(
+                    hostname=host,
+                    port=port,
+                    root_topic=topic,
+                    username=username,
+                    password=password,
+                )
+
+            self.interface = await asyncio.wait_for(
+                loop.run_in_executor(None, _connect),
+                timeout=timeout,
+            )
+            self.is_connected = True
+            self.transport_type = "mqtt"
+            self.port = f"{host}:{port}"
+            # MQTT interface does not always expose local node info;
+            # populate what we can.
+            self.device_info = {
+                "node_id": "",
+                "long_name": f"MQTT ({host})",
+                "short_name": "MQTT",
+                "hw_model": "",
+                "mac": "",
+                "mqtt_topic": topic,
+            }
+            log.info(f"Connected to Meshtastic MQTT broker at {host}:{port}")
+            if self.event_bus:
+                self.event_bus.emit("meshtastic:connected", {
+                    "transport": "mqtt",
+                    "host": host,
+                    "port": port,
+                    "topic": topic,
+                    "device": self.device_info,
+                })
+        except asyncio.TimeoutError:
+            log.warning(f"MQTT connection to {host}:{port} timed out after {timeout}s")
+            self._close_interface()
+            self.is_connected = False
+        except Exception as e:
+            log.warning(f"MQTT connection failed: {e}")
+            self._close_interface()
             self.is_connected = False
 
     async def disconnect(self):
         """Disconnect from the current device."""
-        if self.interface:
-            try:
-                self.interface.close()
-            except Exception:
-                pass
-            self.interface = None
+        self._close_interface()
         self.is_connected = False
         self.transport_type = "none"
         self.port = ""
@@ -242,6 +438,19 @@ class ConnectionManager:
         except Exception as e:
             log.warning(f"Send failed: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _close_interface(self):
+        """Safely close the current interface, if any."""
+        if self.interface:
+            try:
+                self.interface.close()
+            except Exception:
+                pass
+            self.interface = None
 
     def _find_serial_device(self) -> str | None:
         """Scan /dev for Meshtastic-compatible serial devices."""

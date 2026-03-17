@@ -54,3 +54,25 @@ Features:
 - Z-index: 50 (above map, below panels)
 - Width: 40px collapsed, 140px expanded
 - Position: left edge, vertically centered
+
+## User Feedback (2026-03-16)
+
+### FILE Menu
+- [x] Add "Addons Manager..." at top of FILE menu (DONE)
+- [x] Add "Settings..." in FILE menu (DONE)
+- [ ] Build actual Addons Manager modal (like Blender's extensions panel)
+
+### Tactical Banner
+- Banner should be taller with more controls (not just collapsable tiny bar)
+- Mode buttons (Observe, Tactical, Setup) should be IN the tactical banner
+- Polygon management tools (waypoints, paths, geofences) should be accessible from banner
+- If banner has more info and is taller → collapsable is OK
+- Currently the banner at top-left corner shows Observe/Tactical/Setup — move these INTO the banner
+
+### Addons Manager Modal
+- Like Blender's Extensions panel
+- Show all discovered addons with enable/disable toggles
+- Show addon health, version, description
+- Allow installing from URL or file
+- Configure addon settings
+- Should be a top-level accessible feature (FILE → Addons Manager)

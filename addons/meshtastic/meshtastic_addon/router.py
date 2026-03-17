@@ -78,9 +78,16 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
         """Connect to a Meshtastic device.
 
         Body: {
-            "transport": "serial"|"tcp"|"ble",
-            "port": "/dev/ttyACM0" or "host:port",
-            "timeout": 30  (optional, seconds)
+            "transport": "serial"|"tcp"|"ble"|"mqtt",
+            "port": "/dev/ttyACM0" or "host:port" or BLE address,
+            "timeout": 60  (optional, seconds),
+            "noNodes": false  (optional, skip full node list for faster connect),
+            "host": "mqtt.meshtastic.org"  (mqtt only),
+            "mqtt_port": 1883  (mqtt only),
+            "topic": "msh/US/2/e/#"  (mqtt only),
+            "username": "meshdev"  (mqtt only),
+            "password": "large4cats"  (mqtt only),
+            "address": "AA:BB:CC:DD:EE:FF"  (ble only)
         }
         """
         if not connection:
@@ -88,7 +95,8 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
         body = body or {}
         transport = body.get("transport", "serial")
         port = body.get("port", "")
-        timeout = float(body.get("timeout", 30))
+        timeout = float(body.get("timeout", 60))
+        noNodes = body.get("noNodes", False)
 
         if transport == "serial":
             serial_port = port or "/dev/ttyACM0"
@@ -96,13 +104,26 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
             if not Path(serial_port).exists():
                 return {
                     "connected": False,
-                    "error": f"port_not_found",
+                    "error": "port_not_found",
                     "message": f"Serial port {serial_port} does not exist. Is the device plugged in?",
                 }
-            await connection.connect_serial(serial_port, timeout=timeout)
+            await connection.connect_serial(serial_port, timeout=timeout, noNodes=noNodes)
         elif transport == "tcp":
             host = port or "localhost"
             await connection.connect_tcp(host, timeout=timeout)
+        elif transport == "ble":
+            address = port or body.get("address", "")
+            await connection.connect_ble(address, timeout=timeout, noNodes=noNodes)
+        elif transport == "mqtt":
+            mqtt_host = port or body.get("host", "mqtt.meshtastic.org")
+            mqtt_port = int(body.get("mqtt_port", 1883))
+            topic = body.get("topic", "msh/US/2/e/#")
+            username = body.get("username", "meshdev")
+            password = body.get("password", "large4cats")
+            await connection.connect_mqtt(
+                mqtt_host, port=mqtt_port, topic=topic,
+                username=username, password=password, timeout=timeout,
+            )
         else:
             return {"error": f"unsupported transport: {transport}"}
 
@@ -180,6 +201,13 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
         if not message_bridge:
             return {"error": "bridge_not_available"}
         return message_bridge.get_stats()
+
+    @router.get("/stats")
+    async def network_stats():
+        """Network-level statistics (node counts, avg SNR, etc)."""
+        if not node_manager:
+            return {"error": "not_available"}
+        return node_manager.get_stats()
 
     @router.get("/health")
     async def health():

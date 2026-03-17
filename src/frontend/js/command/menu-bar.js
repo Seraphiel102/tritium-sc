@@ -179,6 +179,12 @@ function _mapMenuItems(mapActions) {
         { label: 'Terrain', shortcut: 'H', checkable: true, checked: () => s().showTerrain, action: () => mapActions.toggleTerrain() },
         { label: '3D Mode', checkable: true, checked: () => s().tiltMode === 'tilted', action: () => mapActions.toggleTilt() },
         { separator: true },
+        // Tools
+        { label: 'Crosshairs', checkable: true, checked: () => {
+            const el = document.getElementById('map-crosshairs');
+            return el && el.style.display !== 'none';
+        }, action: () => EventBus.emit('map:crosshairs', {}) },
+        { separator: true },
         // Camera
         { label: 'Center on Action', shortcut: 'F', action: () => mapActions.centerOnAction() },
         { label: 'Reset Camera', action: () => mapActions.resetCamera() },

@@ -1015,8 +1015,8 @@ console.log('\n--- Dropdown items structure ---');
     const fileDropdown = left.children[0].children[1];
 
     fileTrigger.click(); // Opens and builds dropdown items
-    // FILE menu should have: Save Layout..., Export Layout JSON, Import Layout JSON
-    assert(fileDropdown.children.length === 3, 'FILE dropdown has 3 items, got ' + fileDropdown.children.length);
+    // FILE menu: Addons Manager, Settings, separator, Save Layout, Export Layout JSON, Import Layout JSON
+    assert(fileDropdown.children.length === 6, 'FILE dropdown has 6 items, got ' + fileDropdown.children.length);
 })();
 
 (function testFileMenuItemLabels() {
@@ -1032,13 +1032,12 @@ console.log('\n--- Dropdown items structure ---');
     const fileDropdown = left.children[0].children[1];
 
     fileTrigger.click();
-    // Each menu-item row has: check span, label span, spacer span, optional shortcut/delete
+    // First item is Addons Manager
     const item0 = fileDropdown.children[0];
     assert(item0.className === 'menu-item', 'first FILE item is a menu-item');
-    // Label is the second child
     const label0 = item0.children[1];
     assert(label0.className === 'menu-item-label', 'first item has menu-item-label');
-    assert(label0.textContent === 'Save Layout...', 'first FILE item label is "Save Layout..."');
+    assert(label0.textContent === 'Addons Manager...', 'first FILE item label is "Addons Manager..."');
 })();
 
 (function testFileMenuItemShortcut() {
@@ -1054,9 +1053,9 @@ console.log('\n--- Dropdown items structure ---');
     const fileDropdown = left.children[0].children[1];
 
     fileTrigger.click();
-    const item0 = fileDropdown.children[0]; // Save Layout...
+    const item3 = fileDropdown.children[3]; // Save Layout... (after Addons Manager, Settings, separator)
     // Has: check, label, spacer, shortcut
-    const shortcutSpan = item0.children[3];
+    const shortcutSpan = item3.children[3];
     assert(shortcutSpan.className === 'menu-item-shortcut', 'Save Layout item has shortcut span');
     assert(shortcutSpan.textContent === 'Ctrl+Shift+S', 'Save Layout shortcut is "Ctrl+Shift+S"');
 })();
