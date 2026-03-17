@@ -97,19 +97,12 @@ class TestInputValidation:
     """Invalid inputs should be rejected with clear error messages."""
 
     def test_reversed_frequency_range(self):
-        """BUG: freq_start > freq_end should be rejected."""
+        """freq_start > freq_end should be rejected."""
         db = SignalDatabase()
         sa = SpectrumAnalyzer(signal_db=db)
-        # Currently this starts hackrf_sweep with -f 108:88 which may fail or produce garbage
-        # The addon should validate before passing to subprocess
-        # This test documents the expected behavior:
-        with patch("asyncio.create_subprocess_exec") as mock_exec:
-            mock_proc = MagicMock()
-            mock_proc.stdout = None
-            mock_exec.return_value = mock_proc
-            result = asyncio.run(sa.start_sweep(108, 88))
-            # BUG: currently returns success=True
-            # When fixed: assert result.get("success") is False
+        result = asyncio.run(sa.start_sweep(108, 88))
+        assert result.get("success") is False
+        assert "less than" in result.get("error", "").lower() or "start" in result.get("error", "").lower()
 
     def test_reversed_frequency_range_2(self):
         """Verify the subprocess receives correct args when range is valid."""
@@ -135,9 +128,9 @@ class TestInputValidation:
         """Zero bin width should be rejected."""
         db = SignalDatabase()
         sa = SpectrumAnalyzer(signal_db=db)
-        # BUG: currently accepted, will cause hackrf_sweep to fail
-        # When fixed: result = asyncio.run(sa.start_sweep(88, 108, 0))
-        # assert result.get("success") is False
+        result = asyncio.run(sa.start_sweep(88, 108, 0))
+        assert result.get("success") is False
+        assert "positive" in result.get("error", "").lower() or "bin" in result.get("error", "").lower()
 
     def test_negative_frequency(self):
         """Negative frequencies should be rejected."""

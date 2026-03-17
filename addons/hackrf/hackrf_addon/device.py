@@ -44,7 +44,7 @@ class HackRFDevice:
         """
         if not self.is_available:
             log.warning("hackrf_info not found on PATH")
-            return None
+            return {"connected": False, "error": "hackrf_info not found on PATH"}
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -55,19 +55,19 @@ class HackRFDevice:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
         except asyncio.TimeoutError:
             log.error("hackrf_info timed out")
-            return None
+            return {"connected": False, "error": "hackrf_info timed out"}
         except FileNotFoundError:
             log.error("hackrf_info binary not found")
             self._available = False
-            return None
+            return {"connected": False, "error": "hackrf_info not installed"}
         except Exception as e:
             log.error(f"hackrf_info failed: {e}")
-            return None
+            return {"connected": False, "error": str(e)}
 
         if proc.returncode != 0:
             err = stderr.decode(errors="replace").strip()
             log.warning(f"hackrf_info returned {proc.returncode}: {err}")
-            return None
+            return {"connected": False, "error": err or f"hackrf_info exit code {proc.returncode}"}
 
         output = stdout.decode(errors="replace")
         info = self._parse_hackrf_info(output)

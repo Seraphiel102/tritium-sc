@@ -151,7 +151,7 @@ class TestSweepStartStop:
     async def test_stop_sweep_not_running(self):
         sa = SpectrumAnalyzer()
         result = await sa.stop_sweep()
-        assert result["success"] is False
+        assert result["success"] is True  # Idempotent — safe to stop when already stopped
 
     @pytest.mark.asyncio
     @patch("shutil.which", return_value="/usr/bin/hackrf_sweep")

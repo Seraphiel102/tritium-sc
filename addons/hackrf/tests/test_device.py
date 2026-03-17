@@ -144,7 +144,7 @@ class TestDetect:
     async def test_detect_not_available(self, mock_which):
         dev = HackRFDevice()
         result = await dev.detect()
-        assert result is None
+        assert result.get("connected") is False
 
     @pytest.mark.asyncio
     @patch("shutil.which", return_value="/usr/bin/hackrf_info")
@@ -172,7 +172,7 @@ class TestDetect:
 
         dev = HackRFDevice()
         result = await dev.detect()
-        assert result is None
+        assert result.get("connected") is False
 
     @pytest.mark.asyncio
     @patch("shutil.which", return_value="/usr/bin/hackrf_info")
@@ -180,7 +180,7 @@ class TestDetect:
     async def test_detect_binary_not_found(self, mock_exec, mock_which):
         dev = HackRFDevice()
         result = await dev.detect()
-        assert result is None
+        assert result.get("connected") is False
         assert dev._available is False
 
     @pytest.mark.asyncio
@@ -189,7 +189,7 @@ class TestDetect:
     async def test_detect_generic_error(self, mock_exec, mock_which):
         dev = HackRFDevice()
         result = await dev.detect()
-        assert result is None
+        assert result.get("connected") is False
 
 
 class TestFlashFirmware:

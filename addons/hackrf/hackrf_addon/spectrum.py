@@ -73,6 +73,16 @@ class SpectrumAnalyzer:
         if not shutil.which("hackrf_sweep"):
             return {"success": False, "error": "hackrf_sweep not found on PATH"}
 
+        # Input validation
+        if freq_start_mhz >= freq_end_mhz:
+            return {"success": False, "error": f"Start frequency ({freq_start_mhz} MHz) must be less than end ({freq_end_mhz} MHz)"}
+        if freq_start_mhz < 0:
+            return {"success": False, "error": f"Start frequency cannot be negative ({freq_start_mhz} MHz)"}
+        if freq_end_mhz > 7250:
+            return {"success": False, "error": f"End frequency exceeds HackRF range ({freq_end_mhz} MHz > 7250 MHz)"}
+        if bin_width <= 0:
+            return {"success": False, "error": f"Bin width must be positive ({bin_width} Hz)"}
+
         self._freq_start_mhz = freq_start_mhz
         self._freq_end_mhz = freq_end_mhz
         self._bin_width = bin_width
@@ -113,7 +123,7 @@ class SpectrumAnalyzer:
             Status dict with sweep count and duration.
         """
         if not self._running:
-            return {"success": False, "error": "No sweep running"}
+            return {"success": True, "sweep_count": self._sweep_count, "already_stopped": True}
 
         self._running = False
 
