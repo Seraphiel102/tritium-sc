@@ -249,7 +249,6 @@ export const HackRFPanelDef = {
                         const specCanvas = body.querySelector('[data-bind="spectrum-canvas"]');
                         const wfCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
                         const peakList = body.querySelector('[data-bind="peak-list"]');
-                        console.log(`[HRF] Draw spectrum: canvas=${!!specCanvas}, freqs=${sweepData?.freqs?.length}, powers=${sweepData?.powers?.length}`);
                         if (specCanvas) _drawSpectrum(specCanvas, sweepData);
                         if (wfCanvas) _drawWaterfall(wfCanvas, waterfallHistory);
                         if (peakList) _renderPeaks(peakList, sweepData);
