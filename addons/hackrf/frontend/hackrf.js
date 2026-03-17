@@ -201,6 +201,11 @@ export const HackRFPanelDef = {
                     const d = await r.json();
                     deviceStatus = d;
                     updateConnection(null, d);
+                    // Sync sweepRunning from backend status
+                    const backendSweeping = d.sweep && (d.sweep.running || d.sweep.sweep_count > 0);
+                    if (backendSweeping && !sweepRunning) {
+                        sweepRunning = true;  // Backend started a sweep we didn't know about
+                    }
                     _updateStatusBar();
                 }
             } catch (_) { /* network error */ }
