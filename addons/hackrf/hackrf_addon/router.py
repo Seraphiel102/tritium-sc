@@ -14,7 +14,7 @@ import tempfile
 import os
 
 
-def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None, rtl433=None, fm_player=None, adsb_decoder=None) -> APIRouter:
+def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None, rtl433=None, fm_player=None, adsb_decoder=None, signal_db=None) -> APIRouter:
     """Create FastAPI router for HackRF addon endpoints.
 
     Args:
@@ -232,6 +232,81 @@ def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None
             return result
         finally:
             os.unlink(tmp_path)
+
+    @router.get("/geojson")
+    async def geojson():
+        """SDR detections as GeoJSON FeatureCollection for the tactical map.
+
+        Returns:
+        - ADS-B aircraft as Point features with position, altitude, heading
+        - RF signal peaks as Point features at the server's configured position
+          (since SDR signals are received at our location)
+
+        Each feature includes full properties for map popup display.
+        """
+        import time as _time
+
+        features = []
+
+        # ADS-B aircraft with decoded positions
+        if adsb_decoder is not None:
+            for ac in adsb_decoder.get_aircraft():
+                lat = ac.get("latitude")
+                lng = ac.get("longitude")
+                if lat is None or lng is None:
+                    continue
+                icao = ac["icao"]
+                callsign = ac.get("callsign", "")
+                features.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [lng, lat],
+                    },
+                    "properties": {
+                        "target_id": f"adsb_{icao}",
+                        "name": callsign if callsign else f"ICAO {icao.upper()}",
+                        "source": "adsb",
+                        "asset_type": "aircraft",
+                        "alliance": "unknown",
+                        "icao": icao,
+                        "callsign": callsign,
+                        "altitude_ft": ac.get("altitude_ft"),
+                        "velocity_kt": ac.get("velocity_kt"),
+                        "heading": ac.get("heading"),
+                        "vertical_rate_fpm": ac.get("vertical_rate_fpm"),
+                        "squawk": ac.get("squawk", ""),
+                        "on_ground": ac.get("on_ground", False),
+                        "last_seen": ac.get("last_seen", 0),
+                        "age_s": ac.get("age_s", 0),
+                        "message_count": ac.get("message_count", 0),
+                    },
+                })
+
+        # Strong RF signal peaks — positioned at server location
+        # These represent signals received at our antenna, so they appear at our position
+        if signal_db is not None:
+            peaks = signal_db.get_peaks(threshold_dbm=-20.0)
+            for peak in peaks[:10]:
+                freq_mhz = peak["freq_hz"] / 1_000_000
+                # RF signals don't have inherent positions; they are received at our location
+                # The map layer can render these as a heatmap or signal indicators
+                features.append({
+                    "type": "Feature",
+                    "geometry": None,  # No position — use map overlay rendering
+                    "properties": {
+                        "target_id": f"sdr_{peak['freq_hz']}",
+                        "name": f"{freq_mhz:.1f} MHz",
+                        "source": "sdr",
+                        "asset_type": "rf_signal",
+                        "freq_hz": peak["freq_hz"],
+                        "freq_mhz": round(freq_mhz, 1),
+                        "power_dbm": round(peak["power_dbm"], 1),
+                        "timestamp": peak["timestamp"],
+                    },
+                })
+
+        return {"type": "FeatureCollection", "features": features}
 
     @router.get("/health")
     async def health():

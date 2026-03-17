@@ -342,6 +342,51 @@ def create_router(connection, node_manager, message_bridge=None) -> APIRouter:
                 "last_update": 0,
             }
 
+    @router.get("/geojson")
+    async def geojson():
+        """All mesh nodes with GPS as GeoJSON FeatureCollection.
+
+        Returns a standard GeoJSON FeatureCollection consumable by MapLibre GL
+        as a GeoJSON source layer. Only nodes with valid GPS coordinates are included.
+        """
+        if not node_manager:
+            return {"type": "FeatureCollection", "features": []}
+
+        features = []
+        for nid, node in node_manager.nodes.items():
+            lat = node.get("lat")
+            lng = node.get("lng")
+            if lat is None or lng is None:
+                continue
+            if lat == 0.0 and lng == 0.0:
+                continue
+
+            battery = node.get("battery")
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [lng, lat],  # GeoJSON is [lon, lat]
+                },
+                "properties": {
+                    "target_id": f"mesh_{nid.replace('!', '')}",
+                    "name": node.get("long_name") or nid,
+                    "short_name": node.get("short_name", ""),
+                    "hw_model": node.get("hw_model", ""),
+                    "role": _clean_role(node.get("role", "")),
+                    "battery": round(battery / 100.0, 2) if battery is not None else None,
+                    "snr": node.get("snr"),
+                    "last_heard": node.get("last_heard"),
+                    "altitude": node.get("altitude"),
+                    "hops_away": node.get("hops_away"),
+                    "source": "mesh",
+                    "asset_type": "mesh_radio",
+                    "alliance": "friendly",
+                },
+            })
+
+        return {"type": "FeatureCollection", "features": features}
+
     @router.get("/health")
     async def health():
         """Addon health check."""

@@ -396,6 +396,9 @@ class ADSBDecoder:
     of tracked aircraft.
     """
 
+    # Stale timeout for ADS-B targets in the TargetTracker (seconds)
+    ADSB_STALE_TIMEOUT = 120.0
+
     def __init__(self, capture_dir: str | Path | None = None):
         self._capture_dir = Path(capture_dir) if capture_dir else Path("/tmp/hackrf_adsb")
         self._aircraft: dict[str, Aircraft] = {}
@@ -405,6 +408,7 @@ class ADSBDecoder:
         self._messages_failed_crc: int = 0
         self._preambles_detected: int = 0
         self._start_time: float = 0.0
+        self.target_tracker = None  # Set by HackRFAddon.register()
 
     @property
     def is_running(self) -> bool:
@@ -819,5 +823,30 @@ class ADSBDecoder:
                 ac.heading = vel["heading"]
                 ac.vertical_rate_fpm = vel["vertical_rate_fpm"]
                 result.update(vel)
+
+        # Push aircraft with decoded position to the TargetTracker
+        if self.target_tracker and ac.latitude is not None and ac.longitude is not None:
+            try:
+                update_fn = getattr(self.target_tracker, 'update_from_adsb', None)
+                if update_fn is None:
+                    # Fallback to update_from_mesh if adsb method not available
+                    update_fn = self.target_tracker.update_from_mesh
+                update_fn({
+                    "target_id": f"adsb_{icao}",
+                    "name": ac.callsign if ac.callsign else f"ICAO {icao.upper()}",
+                    "lat": ac.latitude,
+                    "lng": ac.longitude,
+                    "alt": float(ac.altitude_ft * 0.3048) if ac.altitude_ft else 0.0,
+                    "heading": ac.heading or 0.0,
+                    "speed": ac.velocity_kt or 0.0,
+                    "alliance": "unknown",
+                    "asset_type": "aircraft",
+                    "callsign": ac.callsign,
+                    "icao": icao,
+                    "altitude_ft": ac.altitude_ft,
+                    "squawk": ac.squawk,
+                })
+            except Exception as e:
+                log.debug(f"Failed to update target tracker for aircraft {icao}: {e}")
 
         return result
