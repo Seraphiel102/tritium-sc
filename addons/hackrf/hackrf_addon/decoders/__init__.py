@@ -11,5 +11,6 @@ no GNU Radio dependency.
 from .fm_radio import FMRadioDecoder
 from .tpms import TPMSDecoder
 from .ism_monitor import ISMBandMonitor
+from .adsb import ADSBDecoder
 
-__all__ = ["FMRadioDecoder", "TPMSDecoder", "ISMBandMonitor"]
+__all__ = ["FMRadioDecoder", "TPMSDecoder", "ISMBandMonitor", "ADSBDecoder"]

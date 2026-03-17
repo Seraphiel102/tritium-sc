@@ -2,7 +2,7 @@
 // Copyright 2026 Valpatel Software LLC
 // Licensed under AGPL-3.0 — see LICENSE for details.
 // HACKRF SDR — Full-featured HackRF One management panel.
-// Tabs: RADIO | SPECTRUM | SIGNALS | CONFIG | FIRMWARE
+// Tabs: RADIO | SPECTRUM | SIGNALS | DEVICES | AIRCRAFT | CONFIG | FIRMWARE
 // Polls device status on open; auto-refreshes sweep data while running.
 
 import { _esc } from '/static/js/command/panel-utils.js';
@@ -16,6 +16,8 @@ const TABS = [
     { id: 'radio',    label: 'RADIO',    tip: 'Device info, quick actions, presets' },
     { id: 'spectrum', label: 'SPECTRUM', tip: 'Frequency sweep and waterfall display' },
     { id: 'signals',  label: 'SIGNALS',  tip: 'Detected signals above threshold' },
+    { id: 'devices',  label: 'DEVICES',  tip: 'ISM band devices detected by rtl_433' },
+    { id: 'aircraft', label: 'AIRCRAFT', tip: 'ADS-B aircraft tracking' },
     { id: 'config',   label: 'CONFIG',   tip: 'Gain, sample rate, antenna settings' },
     { id: 'firmware', label: 'FIRMWARE', tip: 'Firmware version and flashing' },
 ];
@@ -104,6 +106,19 @@ export const HackRFPanelDef = {
         let sweepStartMhz = 88;
         let sweepEndMhz = 108;
         let sweepBinWidth = '500kHz';
+        let waterfallHistory = [];  // array of power arrays, newest first
+        const WATERFALL_MAX_ROWS = 60;
+
+        // DEVICES tab state
+        let rtl433Devices = [];
+        let rtl433Running = false;
+        let rtl433Freq = '433.92';
+        let devicesTimer = null;
+
+        // AIRCRAFT tab state
+        let adsbAircraft = [];
+        let adsbRunning = false;
+        let aircraftTimer = null;
 
         _injectStyles();
 
@@ -162,7 +177,24 @@ export const HackRFPanelDef = {
                     sweepData = d;
                     sweepRunning = d.running || false;
                     if (d.signals) signals = d.signals;
-                    if (activeTab === 'spectrum' || activeTab === 'signals') renderBody();
+                    // Push new row into waterfall history
+                    if (d.powers && d.powers.length > 0) {
+                        waterfallHistory.unshift(d.powers.slice());
+                        if (waterfallHistory.length > WATERFALL_MAX_ROWS) {
+                            waterfallHistory.length = WATERFALL_MAX_ROWS;
+                        }
+                    }
+                    if (activeTab === 'spectrum') {
+                        // Update canvases in-place without full re-render
+                        const specCanvas = body.querySelector('[data-bind="spectrum-canvas"]');
+                        const wfCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
+                        const peakList = body.querySelector('[data-bind="peak-list"]');
+                        if (specCanvas) _drawSpectrum(specCanvas, sweepData);
+                        if (wfCanvas) _drawWaterfall(wfCanvas, waterfallHistory);
+                        if (peakList) _renderPeaks(peakList, sweepData);
+                    } else if (activeTab === 'signals') {
+                        renderBody();
+                    }
                 }
             } catch (_) { /* network error */ }
         }
@@ -221,10 +253,15 @@ export const HackRFPanelDef = {
 
         // ── Render dispatcher ──────────────────────────────────────
         function renderBody() {
+            // Clear tab-specific timers when switching away
+            if (activeTab !== 'devices' && devicesTimer) { clearInterval(devicesTimer); devicesTimer = null; }
+            if (activeTab !== 'aircraft' && aircraftTimer) { clearInterval(aircraftTimer); aircraftTimer = null; }
             switch (activeTab) {
                 case 'radio':    renderRadio(); break;
                 case 'spectrum': renderSpectrum(); break;
                 case 'signals':  renderSignals(); break;
+                case 'devices':  renderDevices(); break;
+                case 'aircraft': renderAircraft(); break;
                 case 'config':   renderConfig(); break;
                 case 'firmware': renderFirmware(); break;
             }
@@ -263,7 +300,7 @@ export const HackRFPanelDef = {
 
                 <div class="hrf-section-label">PRESETS</div>
                 <div class="hrf-radio-actions">
-                    ${PRESETS.map(p => `<button class="hrf-btn hrf-btn-preset" data-preset-start="${p.startMhz}" data-preset-end="${p.endMhz}" style="border-color:${p.color}44;color:${p.color}">${_esc(p.label)}</button>`).join('')}
+                    ${PRESETS.map(p => `<button class="hrf-btn hrf-btn-preset" data-preset-start="${p.startMhz}" data-preset-end="${p.endMhz}" style="border-color:${p.color}44;color:${p.color}" title="${_esc(p.desc)}">${_esc(p.label)}</button>`).join('')}
                 </div>
             `;
 
@@ -321,6 +358,11 @@ export const HackRFPanelDef = {
                     <canvas data-bind="spectrum-canvas" width="600" height="200"></canvas>
                 </div>
 
+                <div class="hrf-section-label">WATERFALL</div>
+                <div class="hrf-spectrum-canvas-wrap">
+                    <canvas data-bind="waterfall-canvas" width="600" height="150"></canvas>
+                </div>
+
                 <div class="hrf-section-label">PEAK SIGNALS</div>
                 <div class="hrf-peak-list" data-bind="peak-list"></div>
             `;
@@ -342,8 +384,19 @@ export const HackRFPanelDef = {
                 stopSweep();
             });
 
+            const waterfallCanvas = body.querySelector('[data-bind="waterfall-canvas"]');
+
+            // Update waterfall history with latest sweep data
+            if (sweepData && sweepData.powers && sweepData.powers.length > 0) {
+                waterfallHistory.unshift(sweepData.powers.slice());
+                if (waterfallHistory.length > WATERFALL_MAX_ROWS) {
+                    waterfallHistory.length = WATERFALL_MAX_ROWS;
+                }
+            }
+
             // Draw spectrum
             _drawSpectrum(canvas, sweepData);
+            _drawWaterfall(waterfallCanvas, waterfallHistory);
             _renderPeaks(peakList, sweepData);
         }
 
@@ -453,6 +506,70 @@ export const HackRFPanelDef = {
             return Math.max(2, Math.min(100, ((power - minP) / (maxP - minP)) * 100));
         }
 
+        // ── Waterfall helpers ──────────────────────────────────────
+        function _powerColor(norm) {
+            // Blue (weak) -> Green -> Yellow -> Red (strong)
+            if (norm < 0.25) {
+                const t = norm / 0.25;
+                const r = 0;
+                const g = Math.round(t * 200);
+                const b = Math.round(80 + (1 - t) * 175);
+                return `rgb(${r},${g},${b})`;
+            } else if (norm < 0.5) {
+                const t = (norm - 0.25) / 0.25;
+                const r = Math.round(t * 100);
+                const g = Math.round(200 + t * 55);
+                const b = Math.round(80 * (1 - t));
+                return `rgb(${r},${g},${b})`;
+            } else if (norm < 0.75) {
+                const t = (norm - 0.5) / 0.25;
+                const r = Math.round(100 + t * 152);
+                const g = Math.round(255 - t * 17);
+                const b = Math.round(t * 10);
+                return `rgb(${r},${g},${b})`;
+            } else {
+                const t = (norm - 0.75) / 0.25;
+                const r = 255;
+                const g = Math.round(238 - t * 238);
+                const b = Math.round(10 + t * 99);
+                return `rgb(${r},${g},${b})`;
+            }
+        }
+
+        function _drawWaterfall(canvas, history) {
+            if (canvas == null) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, w, h);
+
+            const rows = history.length;
+            if (rows === 0) {
+                ctx.fillStyle = '#555';
+                ctx.font = '11px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('Waterfall history builds as sweep runs', w / 2, h / 2);
+                return;
+            }
+
+            const cols = history[0].length;
+            if (cols === 0) return;
+            const cellW = w / cols;
+            const cellH = h / Math.min(rows, WATERFALL_MAX_ROWS);
+
+            for (let row = 0; row < rows; row++) {
+                const rowData = history[row];
+                for (let col = 0; col < rowData.length; col++) {
+                    const power = rowData[col]; // dBm value
+                    const norm = Math.max(0, Math.min(1, (power + 80) / 60)); // -80 to -20 dBm range
+                    ctx.fillStyle = _powerColor(norm);
+                    ctx.fillRect(col * cellW, row * cellH, cellW + 1, cellH + 1);
+                }
+            }
+        }
+
         // ── SIGNALS tab ────────────────────────────────────────────
         function renderSignals() {
             const filtered = (signals || []).filter(s => s.power_dbm >= signalThreshold);
@@ -533,6 +650,236 @@ export const HackRFPanelDef = {
             if (secs < 60) return Math.round(secs) + 's';
             if (secs < 3600) return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
             return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+        }
+
+        // ── DEVICES tab (rtl_433) ─────────────────────────────────
+        function renderDevices() {
+            const now = Date.now() / 1000;
+            const tpmsDevices = rtl433Devices.filter(d => (d.protocol || '').toLowerCase().includes('tpms') || (d.model || '').toLowerCase().includes('tpms'));
+            const otherDevices = rtl433Devices.filter(d => tpmsDevices.indexOf(d) === -1);
+
+            body.innerHTML = `
+                <div class="hrf-devices-controls">
+                    <div class="hrf-spectrum-row" style="gap:8px">
+                        <button class="hrf-btn hrf-btn-start" data-action="rtl433-start" ${rtl433Running ? 'disabled' : ''}>START MONITORING</button>
+                        <button class="hrf-btn hrf-btn-stop" data-action="rtl433-stop" ${rtl433Running ? '' : 'disabled'}>STOP MONITORING</button>
+                        ${rtl433Running ? '<span class="hrf-sweep-live"><span class="hrf-live-dot"></span> MONITORING</span>' : ''}
+                        <span style="flex:1"></span>
+                        <label class="hrf-lbl">FREQ</label>
+                        <select class="hrf-select" data-bind="rtl433-freq">
+                            <option value="315"${rtl433Freq === '315' ? ' selected' : ''}>315 MHz (US)</option>
+                            <option value="433.92"${rtl433Freq === '433.92' ? ' selected' : ''}>433.92 MHz (EU)</option>
+                        </select>
+                    </div>
+                    <div style="font-size:0.65rem;color:#888;padding:2px 0">${rtl433Devices.length} device${rtl433Devices.length !== 1 ? 's' : ''} detected</div>
+                </div>
+
+                <div class="hrf-section-label">DECODED DEVICES</div>
+                <div class="hrf-signal-table-wrap">
+                    <table class="hrf-table">
+                        <thead>
+                            <tr>
+                                <th class="hrf-th" style="width:90px">PROTOCOL</th>
+                                <th class="hrf-th" style="width:80px">DEVICE ID</th>
+                                <th class="hrf-th" style="width:120px">MODEL</th>
+                                <th class="hrf-th">LAST DATA</th>
+                                <th class="hrf-th" style="width:80px;text-align:right">LAST SEEN</th>
+                                <th class="hrf-th" style="width:50px;text-align:right">EVENTS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${otherDevices.length === 0
+                                ? '<tr><td colspan="6" class="hrf-td" style="text-align:center;color:#555;padding:20px">No devices detected -- start monitoring to scan ISM band</td></tr>'
+                                : otherDevices.map(d => {
+                                    const age = now - (d.last_seen || 0);
+                                    const recencyColor = age < 10 ? '#05ffa1' : age < 60 ? '#fcee0a' : '#555';
+                                    return `<tr class="hrf-tr">
+                                        <td class="hrf-td" style="color:#b060ff">${_esc(d.protocol || '--')}</td>
+                                        <td class="hrf-td" style="color:#00f0ff">${_esc(String(d.device_id != null ? d.device_id : '--'))}</td>
+                                        <td class="hrf-td">${_esc(d.model || '--')}</td>
+                                        <td class="hrf-td" style="font-size:0.65rem;max-width:180px;overflow:hidden;text-overflow:ellipsis">${_esc(_deviceDataStr(d))}</td>
+                                        <td class="hrf-td" style="text-align:right;color:${recencyColor}">${_esc(_agoStr(age))}</td>
+                                        <td class="hrf-td" style="text-align:right">${d.event_count || 1}</td>
+                                    </tr>`;
+                                }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+
+                ${tpmsDevices.length > 0 ? `
+                    <div class="hrf-section-label">TPMS SENSORS</div>
+                    <div class="hrf-tpms-grid">
+                        ${tpmsDevices.map(d => {
+                            const pressure = d.pressure_kPa != null ? (d.pressure_kPa * 0.145038).toFixed(1) + ' PSI' : d.pressure_PSI != null ? d.pressure_PSI.toFixed(1) + ' PSI' : '--';
+                            const temp = d.temperature_C != null ? d.temperature_C.toFixed(0) + ' C' : '--';
+                            const age = now - (d.last_seen || 0);
+                            const recencyColor = age < 10 ? '#05ffa1' : age < 60 ? '#fcee0a' : '#555';
+                            return `<div class="hrf-tpms-card">
+                                <div class="hrf-tpms-id" style="color:#00f0ff">${_esc(String(d.device_id != null ? d.device_id : '--'))}</div>
+                                <div class="hrf-tpms-pressure">${_esc(pressure)}</div>
+                                <div class="hrf-tpms-temp">${_esc(temp)}</div>
+                                <div class="hrf-tpms-age" style="color:${recencyColor}">${_esc(_agoStr(age))}</div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                ` : ''}
+            `;
+
+            body.querySelector('[data-bind="rtl433-freq"]')?.addEventListener('change', (e) => {
+                rtl433Freq = e.target.value;
+            });
+
+            body.querySelector('[data-action="rtl433-start"]')?.addEventListener('click', async () => {
+                try {
+                    const r = await fetch(API + '/rtl433/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ frequency: parseFloat(rtl433Freq) }),
+                    });
+                    if (r.ok) { rtl433Running = true; renderDevices(); }
+                } catch (_) { /* network error */ }
+            });
+
+            body.querySelector('[data-action="rtl433-stop"]')?.addEventListener('click', async () => {
+                try {
+                    const r = await fetch(API + '/rtl433/stop', { method: 'POST' });
+                    if (r.ok) { rtl433Running = false; renderDevices(); }
+                } catch (_) { /* network error */ }
+            });
+
+            // Start auto-refresh for devices tab
+            if (devicesTimer == null) {
+                devicesTimer = setInterval(async () => {
+                    if (activeTab !== 'devices') return;
+                    try {
+                        const r = await fetch(API + '/rtl433/devices');
+                        if (r.ok) {
+                            const d = await r.json();
+                            rtl433Devices = d.devices || d || [];
+                            if (d.running != null) rtl433Running = d.running;
+                            renderDevices();
+                        }
+                    } catch (_) { /* network error */ }
+                }, REFRESH_MS);
+            }
+        }
+
+        function _deviceDataStr(d) {
+            const parts = [];
+            if (d.temperature_C != null) parts.push('T:' + d.temperature_C.toFixed(1) + 'C');
+            if (d.humidity != null) parts.push('H:' + d.humidity + '%');
+            if (d.battery_ok != null) parts.push('bat:' + (d.battery_ok ? 'OK' : 'LOW'));
+            if (d.pressure_kPa != null) parts.push('P:' + d.pressure_kPa.toFixed(1) + 'kPa');
+            if (d.wind_avg_km_h != null) parts.push('wind:' + d.wind_avg_km_h.toFixed(1) + 'km/h');
+            if (d.rain_mm != null) parts.push('rain:' + d.rain_mm.toFixed(1) + 'mm');
+            if (d.last_data) return d.last_data;
+            return parts.length > 0 ? parts.join(', ') : '--';
+        }
+
+        function _agoStr(seconds) {
+            if (seconds == null || seconds < 0) return '--';
+            if (seconds < 5) return 'now';
+            if (seconds < 60) return Math.round(seconds) + 's ago';
+            if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+            return Math.floor(seconds / 3600) + 'h ago';
+        }
+
+        // ── AIRCRAFT tab (ADS-B) ─────────────────────────────────
+        function renderAircraft() {
+            const now = Date.now() / 1000;
+
+            body.innerHTML = `
+                <div class="hrf-devices-controls">
+                    <div class="hrf-spectrum-row" style="gap:8px">
+                        <button class="hrf-btn hrf-btn-start" data-action="adsb-start" ${adsbRunning ? 'disabled' : ''}>START ADS-B</button>
+                        <button class="hrf-btn hrf-btn-stop" data-action="adsb-stop" ${adsbRunning ? '' : 'disabled'}>STOP ADS-B</button>
+                        ${adsbRunning ? '<span class="hrf-sweep-live"><span class="hrf-live-dot"></span> TRACKING</span>' : ''}
+                        <span style="flex:1"></span>
+                        <span class="hrf-aircraft-count" style="font-size:0.72rem;color:#00f0ff;font-weight:bold">${adsbAircraft.length} aircraft</span>
+                    </div>
+                </div>
+
+                <div class="hrf-section-label">TRACKED AIRCRAFT</div>
+                <div class="hrf-signal-table-wrap">
+                    <table class="hrf-table">
+                        <thead>
+                            <tr>
+                                <th class="hrf-th" style="width:70px">ICAO</th>
+                                <th class="hrf-th" style="width:80px">CALLSIGN</th>
+                                <th class="hrf-th" style="width:70px;text-align:right">ALT (ft)</th>
+                                <th class="hrf-th" style="width:70px;text-align:right">SPD (kt)</th>
+                                <th class="hrf-th" style="width:50px;text-align:right">HDG</th>
+                                <th class="hrf-th" style="width:70px;text-align:right">LAT</th>
+                                <th class="hrf-th" style="width:70px;text-align:right">LNG</th>
+                                <th class="hrf-th" style="width:60px;text-align:right">SEEN</th>
+                                <th class="hrf-th" style="width:40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${adsbAircraft.length === 0
+                                ? '<tr><td colspan="9" class="hrf-td" style="text-align:center;color:#555;padding:20px">No aircraft detected -- start ADS-B decoder (1090 MHz)</td></tr>'
+                                : adsbAircraft.map(ac => {
+                                    const alt = ac.altitude != null ? ac.altitude : null;
+                                    const altColor = alt == null ? '#555' : alt < 5000 ? '#05ffa1' : alt < 20000 ? '#fcee0a' : '#ff2a6d';
+                                    const age = now - (ac.last_seen || 0);
+                                    const hasPos = ac.lat != null && ac.lng != null;
+                                    return `<tr class="hrf-tr">
+                                        <td class="hrf-td" style="color:#b060ff;font-weight:bold">${_esc(ac.icao || '--')}</td>
+                                        <td class="hrf-td" style="color:#00f0ff">${_esc(ac.callsign || '--')}</td>
+                                        <td class="hrf-td" style="text-align:right;color:${altColor}">${alt != null ? alt.toLocaleString() : '--'}</td>
+                                        <td class="hrf-td" style="text-align:right">${ac.speed != null ? ac.speed.toFixed(0) : '--'}</td>
+                                        <td class="hrf-td" style="text-align:right">${ac.heading != null ? ac.heading.toFixed(0) + '\u00B0' : '--'}</td>
+                                        <td class="hrf-td" style="text-align:right;font-size:0.65rem">${ac.lat != null ? ac.lat.toFixed(4) : '--'}</td>
+                                        <td class="hrf-td" style="text-align:right;font-size:0.65rem">${ac.lng != null ? ac.lng.toFixed(4) : '--'}</td>
+                                        <td class="hrf-td" style="text-align:right;color:${age < 10 ? '#05ffa1' : age < 60 ? '#fcee0a' : '#555'}">${_esc(_agoStr(age))}</td>
+                                        <td class="hrf-td">${hasPos ? '<button class="hrf-btn hrf-btn-flyto" data-flyto-lat="' + ac.lat + '" data-flyto-lng="' + ac.lng + '" title="Fly to aircraft on map">FLY TO</button>' : ''}</td>
+                                    </tr>`;
+                                }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            body.querySelector('[data-action="adsb-start"]')?.addEventListener('click', async () => {
+                try {
+                    const r = await fetch(API + '/adsb/start', { method: 'POST' });
+                    if (r.ok) { adsbRunning = true; renderAircraft(); }
+                } catch (_) { /* network error */ }
+            });
+
+            body.querySelector('[data-action="adsb-stop"]')?.addEventListener('click', async () => {
+                try {
+                    const r = await fetch(API + '/adsb/stop', { method: 'POST' });
+                    if (r.ok) { adsbRunning = false; renderAircraft(); }
+                } catch (_) { /* network error */ }
+            });
+
+            // Fly-to buttons
+            body.querySelectorAll('[data-flyto-lat]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const lat = parseFloat(btn.dataset.flytoLat);
+                    const lng = parseFloat(btn.dataset.flytoLng);
+                    if (isFinite(lat) && isFinite(lng)) {
+                        document.dispatchEvent(new CustomEvent('map:fly-to', { detail: { lat, lng, zoom: 12 } }));
+                    }
+                });
+            });
+
+            // Start auto-refresh for aircraft tab
+            if (aircraftTimer == null) {
+                aircraftTimer = setInterval(async () => {
+                    if (activeTab !== 'aircraft') return;
+                    try {
+                        const r = await fetch(API + '/adsb/aircraft');
+                        if (r.ok) {
+                            const d = await r.json();
+                            adsbAircraft = d.aircraft || d || [];
+                            if (d.running != null) adsbRunning = d.running;
+                            renderAircraft();
+                        }
+                    } catch (_) { /* network error */ }
+                }, 2000);
+            }
         }
 
         // ── CONFIG tab ─────────────────────────────────────────────
@@ -707,12 +1054,17 @@ export const HackRFPanelDef = {
         // Save cleanup
         panel._hrfCleanup = {
             timers: [statusTimer, sweepTimer],
+            tabTimers: () => {
+                if (devicesTimer) { clearInterval(devicesTimer); devicesTimer = null; }
+                if (aircraftTimer) { clearInterval(aircraftTimer); aircraftTimer = null; }
+            },
         };
     },
 
     unmount(bodyEl, panel) {
         if (panel._hrfCleanup) {
             (panel._hrfCleanup.timers || []).forEach(t => clearInterval(t));
+            if (typeof panel._hrfCleanup.tabTimers === 'function') panel._hrfCleanup.tabTimers();
             panel._hrfCleanup = null;
         }
     },
@@ -832,6 +1184,19 @@ function _injectStyles() {
         .hrf-toggle-slider::before { content:""; position:absolute; height:14px; width:14px; left:2px; bottom:2px; background:#888; transition:0.2s; border-radius:50%; }
         .hrf-toggle input:checked + .hrf-toggle-slider { background:rgba(176,96,255,0.3); }
         .hrf-toggle input:checked + .hrf-toggle-slider::before { transform:translateX(14px); background:#b060ff; }
+
+        /* ── Devices tab ───────────────────────────────────────── */
+        .hrf-devices-controls { padding:8px 10px; border-bottom:1px solid #1a1a2e; }
+        .hrf-tpms-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; padding:8px 10px; }
+        .hrf-tpms-card { background:#0e0e14; border:1px solid #1a1a2e; border-radius:4px; padding:10px; text-align:center; }
+        .hrf-tpms-id { font-size:0.65rem; font-weight:bold; margin-bottom:4px; }
+        .hrf-tpms-pressure { font-size:1rem; font-weight:bold; color:#fcee0a; }
+        .hrf-tpms-temp { font-size:0.72rem; color:#888; margin-top:2px; }
+        .hrf-tpms-age { font-size:0.6rem; margin-top:4px; }
+
+        /* ── Aircraft tab / Fly-to button ──────────────────────── */
+        .hrf-btn-flyto { font-size:0.55rem; padding:1px 5px; background:rgba(0,240,255,0.08); border:1px solid rgba(0,240,255,0.2); color:#00f0ff; border-radius:2px; cursor:pointer; }
+        .hrf-btn-flyto:hover { background:rgba(0,240,255,0.2); }
     `;
     document.head.appendChild(s);
 }

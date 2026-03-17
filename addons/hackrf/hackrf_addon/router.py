@@ -6,13 +6,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, UploadFile, File
+from fastapi.responses import StreamingResponse
 from typing import Optional
 
+import asyncio
 import tempfile
 import os
 
 
-def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None, rtl433=None) -> APIRouter:
+def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None, continuous_scanner=None, rtl433=None, fm_player=None, adsb_decoder=None) -> APIRouter:
     """Create FastAPI router for HackRF addon endpoints.
 
     Args:
@@ -637,5 +639,158 @@ def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None
         A USB re-enumeration is required after reset.
         """
         return await device.reset_device()
+
+    # ── ADS-B Aircraft Tracking ───────────────────────────────────
+
+    @router.post("/adsb/start")
+    async def adsb_start(body: dict = None):
+        """Start ADS-B aircraft monitoring on 1090 MHz.
+
+        Body: {
+            "cycle_s": 10    // Capture cycle duration (default 10s)
+        }
+        """
+        if adsb_decoder is None:
+            return {"success": False, "error": "ADS-B decoder not available"}
+        body = body or {}
+        cycle_s = float(body.get("cycle_s", 10.0))
+        return await adsb_decoder.start_monitoring(cycle_s=cycle_s)
+
+    @router.post("/adsb/stop")
+    async def adsb_stop():
+        """Stop ADS-B monitoring."""
+        if adsb_decoder is None:
+            return {"success": False, "error": "ADS-B decoder not available"}
+        return await adsb_decoder.stop_monitoring()
+
+    @router.get("/adsb/aircraft")
+    async def adsb_aircraft():
+        """List all detected aircraft."""
+        if adsb_decoder is None:
+            return {"aircraft": [], "error": "ADS-B decoder not available"}
+        aircraft = adsb_decoder.get_aircraft()
+        return {
+            "aircraft": aircraft,
+            "count": len(aircraft),
+        }
+
+    @router.get("/adsb/stats")
+    async def adsb_stats():
+        """Get ADS-B decoder statistics."""
+        if adsb_decoder is None:
+            return {"error": "ADS-B decoder not available"}
+        return adsb_decoder.get_stats()
+
+    # ── FM Radio Player (continuous streaming) ───────────────
+
+    @router.post("/fm/play")
+    async def fm_play(body: dict):
+        """Start FM radio playback.
+
+        Body: {
+            "freq_mhz": 92.5     // FM frequency in MHz
+        }
+        """
+        if fm_player is None:
+            return {"success": False, "error": "FM player not available"}
+
+        freq_mhz = float(body.get("freq_mhz", 101.1))
+        return await fm_player.start(freq_mhz=freq_mhz)
+
+    @router.post("/fm/stop")
+    async def fm_stop_player():
+        """Stop FM radio playback."""
+        if fm_player is None:
+            return {"success": False, "error": "FM player not available"}
+        return await fm_player.stop()
+
+    @router.get("/fm/status")
+    async def fm_player_status():
+        """Get current FM player state (frequency, playing, signal level)."""
+        if fm_player is None:
+            return {"playing": False, "error": "FM player not available"}
+        return fm_player.get_status()
+
+    @router.get("/fm/stream")
+    async def fm_stream():
+        """Server-Sent Events stream of FM audio data.
+
+        Each event contains a base64-encoded WAV chunk (~0.5 seconds).
+        The frontend can decode and play these via Web Audio API.
+
+        Event format:
+            event: audio
+            data: {"chunk": "<base64 WAV>", "seq": 1, "freq_mhz": 92.5}
+        """
+        if fm_player is None:
+            return {"error": "FM player not available"}
+
+        import json
+
+        async def event_generator():
+            seq = 0
+            last_chunk_count = 0
+            while fm_player._playing:
+                chunk = await fm_player.get_audio_chunk()
+                if chunk and fm_player._chunks_produced > last_chunk_count:
+                    last_chunk_count = fm_player._chunks_produced
+                    seq += 1
+                    data = json.dumps({
+                        "chunk": chunk,
+                        "seq": seq,
+                        "freq_mhz": fm_player._freq_hz / 1_000_000,
+                        "signal_dbfs": round(fm_player._signal_strength, 1),
+                    })
+                    yield f"event: audio\ndata: {data}\n\n"
+                else:
+                    await asyncio.sleep(0.1)
+
+            # Send end event
+            yield f"event: stopped\ndata: {{}}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @router.get("/fm/scan")
+    async def fm_scan(
+        freq_start: float = 87.5,
+        freq_end: float = 108.0,
+        threshold: float = -40.0,
+    ):
+        """Scan the FM broadcast band for active stations.
+
+        Query params:
+            freq_start: Start frequency in MHz (default 87.5).
+            freq_end: End frequency in MHz (default 108.0).
+            threshold: Minimum power in dBm (default -40).
+        """
+        if fm_player is None:
+            return {"stations": [], "error": "FM player not available"}
+
+        stations = await fm_player.scan_fm_band(
+            freq_start_mhz=freq_start,
+            freq_end_mhz=freq_end,
+            threshold_dbm=threshold,
+        )
+        return {
+            "stations": stations,
+            "count": len(stations),
+            "freq_range_mhz": [freq_start, freq_end],
+            "threshold_dbm": threshold,
+        }
+
+    @router.post("/fm/save")
+    async def fm_save():
+        """Save the current audio buffer to a WAV file."""
+        if fm_player is None:
+            return {"success": False, "error": "FM player not available"}
+        return await fm_player.save_wav()
 
     return router

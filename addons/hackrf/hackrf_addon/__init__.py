@@ -14,9 +14,10 @@ from .spectrum import SpectrumAnalyzer
 from .receiver import FMReceiver
 from .signal_db import SignalDatabase
 from .router import create_router
-from .decoders import FMRadioDecoder, TPMSDecoder, ISMBandMonitor
+from .decoders import FMRadioDecoder, TPMSDecoder, ISMBandMonitor, ADSBDecoder
 from .decoders.rtl433_wrapper import RTL433Wrapper
 from .continuous_scan import ContinuousScanner
+from .fm_player import FMPlayer
 
 
 class HackRFAddon(SensorAddon):
@@ -25,8 +26,8 @@ class HackRFAddon(SensorAddon):
     info = AddonInfo(
         id="hackrf",
         name="HackRF One SDR",
-        version="2.0.0",
-        description="Software Defined Radio — spectrum analyzer, FM demodulation, TPMS tracking, ISM monitoring",
+        version="2.1.0",
+        description="Software Defined Radio — spectrum analyzer, FM demodulation, TPMS tracking, ISM monitoring, ADS-B aircraft tracking",
         author="Valpatel Software LLC",
         category="radio",
         icon="📻",
@@ -41,8 +42,10 @@ class HackRFAddon(SensorAddon):
         self.fm_decoder = FMRadioDecoder()
         self.tpms_decoder = TPMSDecoder()
         self.ism_monitor = ISMBandMonitor()
+        self.adsb_decoder = ADSBDecoder()
         self.continuous_scanner = ContinuousScanner(self.spectrum, self.signal_db)
         self.rtl433 = RTL433Wrapper()
+        self.fm_player = FMPlayer()
         self._poll_task = None
 
     async def register(self, app):
@@ -67,6 +70,8 @@ class HackRFAddon(SensorAddon):
             ism_monitor=self.ism_monitor,
             continuous_scanner=self.continuous_scanner,
             rtl433=self.rtl433,
+            adsb_decoder=self.adsb_decoder,
+            fm_player=self.fm_player,
         )
         if hasattr(app, 'include_router'):
             app.include_router(router, prefix="/api/addons/hackrf", tags=["hackrf"])
@@ -78,6 +83,8 @@ class HackRFAddon(SensorAddon):
 
     async def unregister(self, app):
         # Stop all running operations
+        if self.fm_player._playing:
+            await self.fm_player.stop()
         if self.rtl433.is_running:
             await self.rtl433.stop_monitoring()
         if self.continuous_scanner.is_running:
