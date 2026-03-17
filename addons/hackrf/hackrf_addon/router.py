@@ -912,11 +912,23 @@ def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None
         if fm_player is None:
             return {"stations": [], "error": "FM player not available"}
 
-        stations = await fm_player.scan_fm_band(
-            freq_start_mhz=freq_start,
-            freq_end_mhz=freq_end,
-            threshold_dbm=threshold,
-        )
+        # Acquire radio lock for scan
+        if radio_lock and not radio_lock.acquire("fm_scan", f"FM {freq_start}-{freq_end} MHz"):
+            return {
+                "stations": [],
+                "error": f"Radio busy: {radio_lock.current_owner} ({radio_lock.current_description})",
+            }
+
+        try:
+            stations = await fm_player.scan_fm_band(
+                freq_start_mhz=freq_start,
+                freq_end_mhz=freq_end,
+                threshold_dbm=threshold,
+            )
+        finally:
+            if radio_lock:
+                radio_lock.release("fm_scan")
+
         return {
             "stations": stations,
             "count": len(stations),
