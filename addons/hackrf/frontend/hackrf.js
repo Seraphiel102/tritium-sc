@@ -22,11 +22,23 @@ const TABS = [
 
 // ── Frequency presets ──────────────────────────────────────────────
 const PRESETS = [
-    { label: 'FM Radio',    startMhz: 88,    endMhz: 108,  color: '#05ffa1' },
-    { label: 'ISM 433MHz',  startMhz: 430,   endMhz: 440,  color: '#b060ff' },
-    { label: 'ISM 915MHz',  startMhz: 902,   endMhz: 928,  color: '#00f0ff' },
-    { label: 'WiFi 2.4GHz', startMhz: 2400,  endMhz: 2500, color: '#fcee0a' },
-    { label: 'ADS-B 1090',  startMhz: 1085,  endMhz: 1095, color: '#ff2a6d' },
+    { label: 'FULL SWEEP',    startMhz: 1,     endMhz: 6000, color: '#888', desc: 'Complete 1MHz-6GHz scan' },
+    { label: 'VHF Low',       startMhz: 30,    endMhz: 88,   color: '#ff8800', desc: 'Emergency, business, government' },
+    { label: 'FM Radio',      startMhz: 88,    endMhz: 108,  color: '#05ffa1', desc: 'Commercial FM broadcast' },
+    { label: 'Aircraft VHF',  startMhz: 108,   endMhz: 137,  color: '#00d4ff', desc: 'Air traffic control, ACARS' },
+    { label: 'VHF Marine',    startMhz: 156,   endMhz: 163,  color: '#0088ff', desc: 'Marine radio, channel 16' },
+    { label: 'NOAA Weather',  startMhz: 162,   endMhz: 163,  color: '#00ccff', desc: 'NOAA weather broadcasts' },
+    { label: 'TPMS 315MHz',   startMhz: 314,   endMhz: 316,  color: '#ff2a6d', desc: 'Tire pressure sensors (US)' },
+    { label: 'ISM 433MHz',    startMhz: 430,   endMhz: 440,  color: '#b060ff', desc: 'TPMS EU, remotes, weather stations' },
+    { label: 'UHF TV',        startMhz: 470,   endMhz: 698,  color: '#886600', desc: 'Digital TV broadcasts' },
+    { label: 'Cellular 700',  startMhz: 698,   endMhz: 806,  color: '#ff8844', desc: 'LTE Band 12/13/17' },
+    { label: 'Cellular 850',  startMhz: 824,   endMhz: 894,  color: '#ff6622', desc: 'LTE Band 5/26' },
+    { label: 'LoRa/ISM 915',  startMhz: 902,   endMhz: 928,  color: '#00f0ff', desc: 'Meshtastic, LoRaWAN, Zigbee' },
+    { label: 'ADS-B 1090',    startMhz: 1085,  endMhz: 1095, color: '#ff2a6d', desc: 'Aircraft transponders' },
+    { label: 'GPS L1',        startMhz: 1574,  endMhz: 1576, color: '#05ffa1', desc: 'GPS navigation signal' },
+    { label: 'Cellular 1900', startMhz: 1850,  endMhz: 1990, color: '#ff4400', desc: 'PCS/LTE Band 2/25' },
+    { label: 'WiFi 2.4GHz',   startMhz: 2400,  endMhz: 2500, color: '#fcee0a', desc: 'WiFi, Bluetooth, Zigbee, microwave' },
+    { label: 'WiFi 5GHz',     startMhz: 5100,  endMhz: 5900, color: '#ffcc00', desc: 'WiFi 5GHz channels' },
 ];
 
 // ── Signal table columns ───────────────────────────────────────────

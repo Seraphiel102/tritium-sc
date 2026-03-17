@@ -12,13 +12,16 @@ import tempfile
 import os
 
 
-def create_router(device, spectrum, receiver) -> APIRouter:
+def create_router(device, spectrum, receiver, fm_decoder=None, tpms_decoder=None, ism_monitor=None) -> APIRouter:
     """Create FastAPI router for HackRF addon endpoints.
 
     Args:
         device: HackRFDevice instance.
         spectrum: SpectrumAnalyzer instance.
         receiver: FMReceiver instance.
+        fm_decoder: FMRadioDecoder instance (optional).
+        tpms_decoder: TPMSDecoder instance (optional).
+        ism_monitor: ISMBandMonitor instance (optional).
 
     Returns:
         Configured APIRouter.
@@ -238,5 +241,182 @@ def create_router(device, spectrum, receiver) -> APIRouter:
             "connected": info is not None,
             "sweep_running": spectrum.is_running,
         }
+
+    # --- FM Radio Decoder Endpoints ---
+
+    @router.post("/fm/tune")
+    async def fm_tune(body: dict):
+        """Tune to an FM frequency, capture IQ, and demodulate audio.
+
+        Body: {
+            "freq_hz": 101100000,     // FM frequency in Hz
+            "duration_s": 5,          // Capture duration (default 5s)
+            "sample_rate": 2000000,   // IQ sample rate (default 2 MSPS)
+            "save_audio": true        // Save WAV file (default true)
+        }
+        """
+        if fm_decoder is None:
+            return {"success": False, "error": "FM decoder not available"}
+
+        freq_hz = int(body.get("freq_hz", 101_100_000))
+        duration_s = float(body.get("duration_s", 5.0))
+        sample_rate = int(body.get("sample_rate", 2_000_000))
+        save_audio = body.get("save_audio", True)
+
+        try:
+            result = await fm_decoder.tune_and_demod(
+                freq_hz=freq_hz,
+                duration_s=duration_s,
+                sample_rate=sample_rate,
+                save_audio=save_audio,
+            )
+            result["success"] = True
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @router.get("/fm/stations")
+    async def fm_stations():
+        """List known FM stations with optional signal strength from sweep data.
+
+        Returns station call signs and frequencies. If a sweep is running,
+        includes measured signal strength for each station frequency.
+        """
+        if fm_decoder is None:
+            return {"stations": [], "error": "FM decoder not available"}
+
+        from .decoders.fm_radio import US_FM_STATIONS
+
+        stations = []
+        for freq_hz, name in sorted(US_FM_STATIONS.items()):
+            entry = {
+                "freq_hz": freq_hz,
+                "freq_mhz": freq_hz / 1_000_000,
+                "name": name,
+                "power_dbm": None,
+            }
+            # Check sweep data for signal strength if available
+            if spectrum.signal_db.count > 0:
+                nearby = spectrum.signal_db.query(
+                    freq_start=freq_hz - 200_000,
+                    freq_end=freq_hz + 200_000,
+                )
+                if nearby:
+                    entry["power_dbm"] = max(m["power_dbm"] for m in nearby)
+            stations.append(entry)
+        return {"stations": stations, "count": len(stations)}
+
+    # --- TPMS Decoder Endpoints ---
+
+    @router.post("/tpms/start")
+    async def tpms_start(body: dict = None):
+        """Start TPMS monitoring on 315 MHz (US) or 433.92 MHz (EU).
+
+        Body: {
+            "freq_hz": 315000000,     // Frequency (default 315 MHz US)
+            "cycle_s": 30             // Capture cycle duration (default 30s)
+        }
+        """
+        if tpms_decoder is None:
+            return {"success": False, "error": "TPMS decoder not available"}
+
+        body = body or {}
+        freq_hz = int(body.get("freq_hz", 315_000_000))
+        cycle_s = float(body.get("cycle_s", 30.0))
+
+        return await tpms_decoder.start_monitoring(freq_hz=freq_hz, cycle_s=cycle_s)
+
+    @router.post("/tpms/stop")
+    async def tpms_stop():
+        """Stop TPMS monitoring."""
+        if tpms_decoder is None:
+            return {"success": False, "error": "TPMS decoder not available"}
+        return await tpms_decoder.stop_monitoring()
+
+    @router.get("/tpms/sensors")
+    async def tpms_sensors():
+        """List detected TPMS sensors.
+
+        Each sensor has a unique 32-bit ID that can track a specific vehicle.
+        """
+        if tpms_decoder is None:
+            return {"sensors": [], "error": "TPMS decoder not available"}
+        sensors = tpms_decoder.get_sensors()
+        return {
+            "sensors": sensors,
+            "count": len(sensors),
+            "status": tpms_decoder.get_status(),
+        }
+
+    @router.get("/tpms/transmissions")
+    async def tpms_transmissions(limit: int = 100):
+        """Get recent TPMS transmissions.
+
+        Query params:
+            limit: Maximum number of transmissions (default 100).
+        """
+        if tpms_decoder is None:
+            return {"transmissions": [], "error": "TPMS decoder not available"}
+        txs = tpms_decoder.get_transmissions(limit=limit)
+        return {"transmissions": txs, "count": len(txs)}
+
+    # --- ISM Band Monitor Endpoints ---
+
+    @router.post("/ism/start")
+    async def ism_start(body: dict = None):
+        """Start ISM band monitoring (315, 433, 868, 915 MHz).
+
+        Body: {
+            "threshold_dbm": -50      // Signal detection threshold (default -50)
+        }
+        """
+        if ism_monitor is None:
+            return {"success": False, "error": "ISM monitor not available"}
+
+        body = body or {}
+        threshold = float(body.get("threshold_dbm", -50.0))
+        return await ism_monitor.start_monitoring(threshold_dbm=threshold)
+
+    @router.post("/ism/stop")
+    async def ism_stop():
+        """Stop ISM band monitoring."""
+        if ism_monitor is None:
+            return {"success": False, "error": "ISM monitor not available"}
+        return await ism_monitor.stop_monitoring()
+
+    @router.get("/ism/devices")
+    async def ism_devices(max_age: float = 300.0):
+        """List detected ISM band devices.
+
+        Query params:
+            max_age: Maximum age in seconds to show (default 300s = 5 min).
+        """
+        if ism_monitor is None:
+            return {"devices": [], "error": "ISM monitor not available"}
+        devices = ism_monitor.get_active_devices(max_age_s=max_age)
+        return {
+            "devices": devices,
+            "count": len(devices),
+            "status": ism_monitor.get_status(),
+        }
+
+    @router.get("/ism/log")
+    async def ism_log(limit: int = 200):
+        """Get ISM transmission log.
+
+        Query params:
+            limit: Maximum number of log entries (default 200).
+        """
+        if ism_monitor is None:
+            return {"log": [], "error": "ISM monitor not available"}
+        log_entries = ism_monitor.get_transmission_log(limit=limit)
+        return {"log": log_entries, "count": len(log_entries)}
+
+    @router.get("/ism/bands")
+    async def ism_bands():
+        """Get ISM band activity summary."""
+        if ism_monitor is None:
+            return {"bands": [], "error": "ISM monitor not available"}
+        return {"bands": ism_monitor.get_band_summary()}
 
     return router
