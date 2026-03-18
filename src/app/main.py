@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -1104,6 +1104,50 @@ async def lifespan(app: FastAPI):
         if sim_engine is not None:
             sim_engine.set_plugin_manager(plugin_manager)
 
+    # Addon system — discover and enable addons from addons/ directory
+    try:
+        from engine.addons.loader import AddonLoader
+        # Scan: local addons/, parent submodule tritium-addons/, and user home
+        _sc_root = Path(__file__).resolve().parent.parent.parent
+        addon_loader = AddonLoader(
+            addon_dirs=[
+                "addons/",                                          # local SC addons (dev overrides)
+                str(_sc_root.parent / "tritium-addons"),            # submodule: ../tritium-addons/
+                str(Path.home() / ".tritium" / "addons"),           # user addons
+            ],
+            app=app,
+        )
+        found = addon_loader.discover()
+        if found:
+            logger.info(f"Discovered {len(found)} addon(s): {', '.join(found)}")
+            for addon_id in found:
+                try:
+                    ok = await addon_loader.enable(addon_id)
+                    if ok:
+                        logger.info(f"Enabled addon: {addon_id}")
+                    else:
+                        logger.warning(f"Failed to enable addon: {addon_id}")
+                except Exception as e:
+                    logger.warning(f"Addon enable error for {addon_id}: {e}")
+        app.state.addon_loader = addon_loader
+        logger.info(f"Addon system: {len(addon_loader.enabled)} addon(s) active")
+    except Exception as e:
+        logger.warning(f"Addon system init failed (non-fatal): {e}")
+
+    # Include addon API routes
+    try:
+        from app.routers.addons import router as addons_router
+        app.include_router(addons_router)
+    except Exception as e:
+        logger.warning(f"Addon routes failed (non-fatal): {e}")
+
+    # Server lifecycle routes (restart, status)
+    try:
+        from app.routers.server import router as server_router
+        app.include_router(server_router)
+    except Exception as e:
+        logger.warning(f"Server routes failed (non-fatal): {e}")
+
     # RL auto-retrain scheduler — retrains correlation model every 6h or
     # after 50 new feedback entries. Pushes results to Amy's sensorium.
     try:
@@ -1344,7 +1388,27 @@ app.include_router(target_groups_router)
 app.include_router(reid_router)
 app.include_router(unified_alerts_router)
 
-# Static files
+# Static files — addon frontend files served before main frontend
+# so the SPA catch-all doesn't intercept /addons/ requests.
+# Priority: local addons/ (dev overrides), then submodule tritium-addons/
+_sc_root = Path(__file__).resolve().parent.parent.parent
+_submodule_addons = _sc_root.parent / "tritium-addons"
+_local_addons = _sc_root / "addons"
+
+# Mount submodule addons at /addons-shared/ (always available)
+if _submodule_addons.exists():
+    app.mount("/addons-shared", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-shared-static")
+
+# Mount at /addons/ — prefer submodule (canonical), local addons/ is for dev overrides only
+# Check if local addons/ has actual addon dirs (not just _examples/)
+_has_local_addons = _local_addons.exists() and any(
+    (d / "tritium_addon.toml").exists() for d in _local_addons.iterdir() if d.is_dir()
+)
+if _has_local_addons:
+    app.mount("/addons", StaticFiles(directory=_local_addons, follow_symlink=True), name="addon-static")
+elif _submodule_addons.exists():
+    app.mount("/addons", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-static")
+
 frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=frontend_path, follow_symlink=True), name="static")
@@ -1354,7 +1418,7 @@ if frontend_path.exists():
 async def no_cache_static(request: Request, call_next):
     """Disable caching for static CSS/JS during development."""
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+    if request.url.path.startswith(("/static/", "/addons/")):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
@@ -1401,6 +1465,64 @@ async def command_center():
     if cmd_path.exists():
         return FileResponse(cmd_path)
     return HTMLResponse(content="Command center not found")
+
+
+@app.get("/addon/{addon_id}/", response_class=HTMLResponse)
+async def addon_standalone(addon_id: str, request: Request):
+    """Serve standalone full-screen addon app."""
+    standalone_path = frontend_path / "addon-standalone.html"
+    if standalone_path.exists():
+        html = standalone_path.read_text()
+        html = html.replace("__ADDON_ID__", addon_id)
+        return HTMLResponse(content=html)
+    return HTMLResponse(
+        content=f"""
+        <html>
+            <head><title>{addon_id.upper()} — Tritium</title></head>
+            <body style="background: #0a0a0f; color: #00f0ff; font-family: monospace;">
+                <h1>{addon_id.upper()} — Standalone Mode</h1>
+                <p>addon-standalone.html not found. Please check installation.</p>
+                <a href="/" style="color: #ff2a6d;">Back to Command Center</a>
+            </body>
+        </html>
+        """
+    )
+
+
+@app.get("/addon/{addon_id}/manifest.json")
+async def addon_pwa_manifest(addon_id: str, request: Request):
+    """Generate PWA manifest for this addon."""
+    loader = getattr(request.app.state, "addon_loader", None)
+    addon_name = addon_id.upper()
+    addon_description = f"Tritium {addon_name} standalone addon"
+
+    if loader:
+        entry = loader.registry.get(addon_id)
+        if entry and entry.manifest:
+            addon_name = entry.manifest.name or addon_name
+            addon_description = entry.manifest.description or addon_description
+
+    return JSONResponse({
+        "name": f"{addon_name} — Tritium",
+        "short_name": addon_id.upper(),
+        "start_url": f"/addon/{addon_id}/",
+        "display": "standalone",
+        "background_color": "#0a0a0f",
+        "theme_color": "#00f0ff",
+        "description": addon_description,
+        "icons": [
+            {
+                "src": "/static/img/tritium-icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+            },
+            {
+                "src": "/static/img/tritium-icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+            },
+        ],
+    })
 
 
 @app.get("/health")

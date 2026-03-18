@@ -32,7 +32,7 @@ import { _esc } from './panel-utils.js';
 // ============================================================
 
 const ZOOM_DEFAULT = 16;    // MapLibre zoom (16 = neighborhood)
-const ZOOM_MIN = 10;        // Wide area
+const ZOOM_MIN = 2;         // World view (was 10, too restrictive)
 const ZOOM_MAX = 21;        // Max close-up
 const PITCH_DEFAULT = 50;   // Degrees from vertical (0 = top-down, 60 = tilted)
 const PITCH_TOPDOWN = 0;
@@ -339,6 +339,80 @@ async function _fetchGeoReference() {
     _state.geoCenter = { lat: 37.7159, lng: -121.8960 };
 }
 
+// ---------------------------------------------------------------------------
+// Map Crosshairs Overlay
+// ---------------------------------------------------------------------------
+
+function _initCrosshairs(mapDiv) {
+    // Create crosshairs overlay element
+    const overlay = document.createElement('div');
+    overlay.id = 'map-crosshairs';
+    overlay.style.cssText = `
+        position: absolute; inset: 0; pointer-events: none; z-index: 5;
+        display: none; /* hidden by default */
+    `;
+
+    // Vertical line
+    const vLine = document.createElement('div');
+    vLine.style.cssText = `
+        position: absolute; left: 50%; top: 0; bottom: 0; width: 1px;
+        background: rgba(0, 240, 255, 0.4);
+        box-shadow: 0 0 4px rgba(0, 240, 255, 0.2);
+    `;
+
+    // Horizontal line
+    const hLine = document.createElement('div');
+    hLine.style.cssText = `
+        position: absolute; top: 50%; left: 0; right: 0; height: 1px;
+        background: rgba(0, 240, 255, 0.4);
+        box-shadow: 0 0 4px rgba(0, 240, 255, 0.2);
+    `;
+
+    // Center dot
+    const dot = document.createElement('div');
+    dot.style.cssText = `
+        position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
+        margin: -4px 0 0 -4px; border: 1px solid #00f0ff; border-radius: 50%;
+        box-shadow: 0 0 6px rgba(0, 240, 255, 0.5);
+    `;
+
+    // Coordinate readout
+    const readout = document.createElement('div');
+    readout.style.cssText = `
+        position: absolute; left: 50%; top: 50%; margin-top: 12px;
+        transform: translateX(-50%);
+        background: rgba(10, 10, 15, 0.85); border: 1px solid rgba(0, 240, 255, 0.3);
+        border-radius: 3px; padding: 3px 8px;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        font-size: 0.75rem; color: #00f0ff; white-space: nowrap;
+        text-shadow: 0 0 4px rgba(0, 240, 255, 0.3);
+    `;
+
+    overlay.appendChild(vLine);
+    overlay.appendChild(hLine);
+    overlay.appendChild(dot);
+    overlay.appendChild(readout);
+    mapDiv.appendChild(overlay);
+
+    // Update readout on map move
+    function updateReadout() {
+        if (!_state.map || overlay.style.display === 'none') return;
+        const c = _state.map.getCenter();
+        readout.textContent = `${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`;
+    }
+
+    _state.map.on('move', updateReadout);
+
+    // Toggle crosshairs via event
+    EventBus.on('map:crosshairs', (data) => {
+        const show = data && data.show !== undefined ? data.show : overlay.style.display === 'none';
+        overlay.style.display = show ? '' : 'none';
+        if (show) updateReadout();
+    });
+
+    _state._crosshairsOverlay = overlay;
+}
+
 function _createMap(mapDiv) {
     const center = [_state.geoCenter.lng, _state.geoCenter.lat];
 
@@ -414,8 +488,8 @@ function _createMap(mapDiv) {
         // Add compact map legend
         _createMapLegend();
 
-        // Add patrol route drawing button
-        _createPatrolDrawButton();
+        // Patrol draw button removed — redundant with tactical banner tool buttons
+        // _createPatrolDrawButton();
 
         // Combat effects system
         _initEffects();
@@ -466,6 +540,32 @@ function _createMap(mapDiv) {
             }
         });
 
+        // Generic fly-to event (used by setup wizard, search, etc)
+        EventBus.on('map:fly-to', (data) => {
+            if (!_state.map || !data) return;
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+            if (isNaN(lat) || isNaN(lng)) return;
+            _state.map.flyTo({
+                center: [lng, lat],
+                zoom: data.zoom || 12,
+                duration: data.duration || 2000,
+            });
+        });
+
+        // Generic get-center event (callback-based)
+        EventBus.on('map:get-center', (callback) => {
+            if (!_state.map || typeof callback !== 'function') return;
+            const c = _state.map.getCenter();
+            callback({ lat: c.lat, lng: c.lng });
+        });
+
+        // Expose map instance on DOM for setup wizard live coordinate display
+        mapDiv.__map = _state.map;
+
+        // Map crosshairs overlay — toggled via 'map:crosshairs' event
+        _initCrosshairs(mapDiv);
+
         // Camera markers from camera-feeds plugin
         EventBus.on('cameras:changed', _onCamerasChanged);
 
@@ -491,6 +591,12 @@ function _createMap(mapDiv) {
 
         // Start unit update loop
         _startUnitLoop();
+
+        // Expose map instance globally for addon layers and other consumers
+        window._tritiumMap = _state.map;
+        window._tritiumMapInstance = _state.map;
+        EventBus.emit('map:ready', _state.map);
+        console.log('[MAP-ML] Map ready — exposed on window._tritiumMap, emitted map:ready');
     };
 
     _state.map.on('load', _onMapLoaded);

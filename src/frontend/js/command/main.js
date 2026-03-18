@@ -19,7 +19,8 @@ import { AmyPanelDef } from './panels/amy.js';
 import { UnitsPanelDef } from './panels/units.js';
 import { AlertsPanelDef } from './panels/alerts.js';
 import { GameHudPanelDef } from './panels/game-hud.js';
-import { MeshPanelDef } from './panels/mesh.js';
+// MeshPanelDef replaced by meshtastic addon's unified tabbed panel
+// import { MeshPanelDef } from './panels/mesh.js';
 import { AudioPanelDef } from './panels/audio.js';
 import { EscalationPanelDef } from './panels/escalation.js';
 import { EventsPanelDef } from './panels/events.js';
@@ -110,6 +111,8 @@ import { UnifiedAlertsPanelDef } from './panels/alerts-panel.js';
 import { RadarScopePanelDef } from './panels/radar-scope.js';
 import { SdrWaterfallPanelDef } from './panels/sdr-waterfall.js';
 import { AdsbTablePanelDef } from './panels/adsb-table.js';
+import { AddonsManagerPanelDef } from './panels/addons-manager.js';
+import { loadAddons } from './addon-loader.js';
 import { PredictionEllipseManager } from './prediction-ellipses.js';
 import { initScreenshotHotkey } from './panels/map-screenshot.js';
 import { MissionModal, initMissionModal } from './mission-modal.js';
@@ -122,6 +125,7 @@ import { TargetTrailManager } from './target-trails.js';
 import { HandoffLineManager } from './handoff-lines.js';
 import { ConvoyOverlayManager } from './convoy-overlay.js';
 import { startAdsbOverlay, toggleAdsbOverlay } from './adsb-overlay.js';
+import { AddonMapLayers } from './addon-map-layers.js';
 
 // Make available on window for console debugging
 window.TritiumStore = TritiumStore;
@@ -733,7 +737,7 @@ function initPanelSystem(container) {
     panelManager.register(UnitsPanelDef);
     panelManager.register(AlertsPanelDef);
     panelManager.register(GameHudPanelDef);
-    panelManager.register(MeshPanelDef);
+    // MeshPanelDef replaced by meshtastic addon — loaded dynamically via addon-loader
     panelManager.register(AudioPanelDef);
     panelManager.register(EscalationPanelDef);
     panelManager.register(EventsPanelDef);
@@ -824,6 +828,12 @@ function initPanelSystem(container) {
     panelManager.register(RadarScopePanelDef);
     panelManager.register(SdrWaterfallPanelDef);
     panelManager.register(AdsbTablePanelDef);
+    panelManager.register(AddonsManagerPanelDef);
+
+    // Dynamically load addon panels from /api/addons/manifests
+    loadAddons(panelManager).catch(err => {
+        console.warn('[TRITIUM] Addon loading failed:', err);
+    });
 
     // Start prediction confidence ellipses on the map
     const predictionEllipses = new PredictionEllipseManager();
@@ -841,6 +851,22 @@ function initPanelSystem(container) {
     // If map is already ready, try to start with window._tritiumMap
     if (window._tritiumMap) {
         convoyOverlay.start(window._tritiumMap);
+    }
+
+    // Addon GeoJSON map layers (polls addon endpoints, renders on map)
+    EventBus.on('map:ready', (mapInstance) => {
+        const addonLayers = new AddonMapLayers(mapInstance);
+        addonLayers.loadFromAddons().catch(err => {
+            console.warn('[TRITIUM] Addon map layer loading failed:', err);
+        });
+        window._addonMapLayers = addonLayers;
+    });
+    if (window._tritiumMap) {
+        const addonLayers = new AddonMapLayers(window._tritiumMap);
+        addonLayers.loadFromAddons().catch(err => {
+            console.warn('[TRITIUM] Addon map layer loading failed:', err);
+        });
+        window._addonMapLayers = addonLayers;
     }
 
     // Enhanced map screenshot hotkey (Ctrl+Shift+P)
@@ -1003,10 +1029,25 @@ function updateClock() {
 
 const TOAST_MAX = 2;
 const TOAST_DURATION = 3500;
+const TOAST_DEDUP_MS = 5000;  // Suppress duplicate messages within 5 seconds
+const _recentToasts = new Map();  // message -> timestamp
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) return;
+
+    // Debounce: suppress duplicate messages within TOAST_DEDUP_MS
+    const dedupKey = `${type}:${message}`;
+    const now = Date.now();
+    const lastShown = _recentToasts.get(dedupKey);
+    if (lastShown && (now - lastShown) < TOAST_DEDUP_MS) return;
+    _recentToasts.set(dedupKey, now);
+    // Prune old entries to prevent memory leak
+    if (_recentToasts.size > 100) {
+        for (const [k, t] of _recentToasts) {
+            if (now - t > TOAST_DEDUP_MS * 2) _recentToasts.delete(k);
+        }
+    }
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
@@ -1738,7 +1779,7 @@ function initKeyboard() {
                 if (panelManager) panelManager.toggle('game');
                 break;
             case '5':
-                if (panelManager) panelManager.toggle('mesh');
+                if (panelManager) panelManager.toggle('meshtastic');
                 break;
             case '6':
                 if (panelManager) panelManager.toggle('cameras');

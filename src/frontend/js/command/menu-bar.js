@@ -19,6 +19,9 @@ import { toggleAdsbOverlay, isAdsbOverlayActive } from './adsb-overlay.js';
 
 function _fileMenuItems(layoutManager) {
     return [
+        { label: 'Addons Manager...', action: () => EventBus.emit('panel:request-open', { id: 'addons-manager' }) },
+        { label: 'Settings...', action: () => EventBus.emit('panel:request-open', { id: 'setup-wizard' }) },
+        { separator: true },
         { label: 'Save Layout...', shortcut: 'Ctrl+Shift+S',
           action: (bar) => focusSaveInput(bar) },
         { label: 'Export Layout JSON',
@@ -54,6 +57,25 @@ function _fileMenuItems(layoutManager) {
               });
               document.body.appendChild(input); input.click();
           } },
+        { separator: true },
+        { label: 'Restart Server', action: () => {
+              if (!confirm('Restart the server? The page will reconnect automatically.')) return;
+              fetch('/api/server/restart', { method: 'POST' })
+                  .then(() => {
+                      EventBus.emit('toast:show', { message: 'Server restarting...', type: 'info' });
+                      // Auto-reload page after server comes back
+                      let attempts = 0;
+                      const check = setInterval(async () => {
+                          attempts++;
+                          try {
+                              const r = await fetch('/api/server/status');
+                              if (r.ok) { clearInterval(check); location.reload(); }
+                          } catch (_) {}
+                          if (attempts > 30) { clearInterval(check); location.reload(); }
+                      }, 1000);
+                  })
+                  .catch(() => EventBus.emit('toast:show', { message: 'Restart failed', type: 'alert' }));
+          } },
     ];
 }
 
@@ -61,7 +83,7 @@ function _fileMenuItems(layoutManager) {
 const PANEL_CATEGORIES = {
     'Tactical':      ['ops-dashboard', 'units', 'unit-inspector', 'alerts', 'unified-alerts', 'escalation', 'missions', 'patrol', 'geofence', 'zones', 'minimap', 'layers', 'bookmarks', 'annotations', 'watchlist', 'swarm-coordination', 'convoy'],
     'Intelligence':  ['search', 'dossiers', 'dossier-groups', 'dossier-timeline', 'graph-explorer', 'timeline', 'target-search', 'target-compare', 'target-merge', 'heatmap', 'heatmap-timeline', 'automation', 'analytics-dashboard', 'dwell-monitor', 'behavioral-intelligence', 'reid-matches', 'lpr', 'fusion-dashboard', 'acoustic-intelligence', 'activity-feed', 'trail-export'],
-    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'mesh', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'indoor-positioning', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector', 'radar-scope', 'sdr-waterfall', 'adsb-table'],
+    'Sensors':       ['edge-tracker', 'camera-feeds', 'cameras', 'multi-camera', 'rf-motion', 'meshtastic', 'hackrf', 'sensors', 'tak', 'sensor-health', 'wifi-fingerprint', 'indoor-positioning', 'edge-intelligence', 'edge-diagnostics', 'mqtt-inspector', 'radar-scope', 'sdr-waterfall', 'adsb-table'],
     'Fleet':         ['fleet', 'fleet-dashboard', 'device-manager', 'device-capabilities', 'assets', 'command-history', 'federation', 'training-dashboard'],
     'AI & Comms':    ['amy', 'amy-conversation', 'graphlings', 'audio', 'notifications', 'notification-prefs', 'voice-command'],
     'Collaboration': ['operator-activity', 'operator-cursors', 'map-share', 'keyboard-macros'],
@@ -72,7 +94,7 @@ const PANEL_CATEGORIES = {
 
 function _viewMenuItems(panelManager) {
     const keyMap = {
-        amy: '1', units: '2', alerts: '3', game: '4', mesh: '5',
+        amy: '1', units: '2', alerts: '3', game: '4', meshtastic: '5',
         cameras: '6', search: '7', tak: '8', videos: '9', zones: '0',
         minimap: 'M', replay: 'R', sensors: 'E', 'battle-stats': 'P',
         'unit-inspector': 'J', layers: 'L',
@@ -175,6 +197,12 @@ function _mapMenuItems(mapActions) {
         { label: 'ADS-B Aircraft', checkable: true, checked: () => isAdsbOverlayActive(), action: () => toggleAdsbOverlay() },
         { label: 'Terrain', shortcut: 'H', checkable: true, checked: () => s().showTerrain, action: () => mapActions.toggleTerrain() },
         { label: '3D Mode', checkable: true, checked: () => s().tiltMode === 'tilted', action: () => mapActions.toggleTilt() },
+        { separator: true },
+        // Tools
+        { label: 'Crosshairs', checkable: true, checked: () => {
+            const el = document.getElementById('map-crosshairs');
+            return el && el.style.display !== 'none';
+        }, action: () => EventBus.emit('map:crosshairs', {}) },
         { separator: true },
         // Camera
         { label: 'Center on Action', shortcut: 'F', action: () => mapActions.centerOnAction() },
@@ -538,7 +566,7 @@ function _shortLabel(title) {
 
 function _panelKey(id) {
     const map = {
-        amy: '1', units: '2', alerts: '3', game: '4', mesh: '5',
+        amy: '1', units: '2', alerts: '3', game: '4', meshtastic: '5',
         cameras: '6', search: '7', tak: '8', videos: '9', zones: '0',
         minimap: 'M', replay: 'R', sensors: 'E', 'battle-stats': 'P',
         'unit-inspector': 'J', layers: 'L',

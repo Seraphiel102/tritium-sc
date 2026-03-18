@@ -60,7 +60,8 @@ _HALF_LIVES: dict[str, float] = {
     "yolo": 15.0,
     "rf_motion": 10.0,
     "mesh": 120.0,
-    "simulation": 0.0,   # never decays
+    "adsb": 60.0,         # aircraft update frequently but can lose signal
+    "simulation": 0.0,    # never decays
     "manual": 300.0,
 }
 _MIN_CONFIDENCE = 0.05
@@ -483,6 +484,176 @@ class TargetTracker:
             self.history.record(tid, position)
             self._check_geofence(tid, position[0], position[1])
 
+    # Mesh radio targets — nodes can be stationary for long periods
+    MESH_STALE_TIMEOUT = 300.0
+
+    def update_from_mesh(self, mesh_data: dict) -> None:
+        """Update or create a tracked target from a Meshtastic mesh node.
+
+        Mesh nodes are friendly infrastructure with GPS. They report position
+        via LoRa and have longer stale timeouts since nodes can be stationary
+        repeaters that only update periodically.
+
+        Args:
+            mesh_data: Dict with keys: target_id, name, lat, lng, alt,
+                       battery (0-1 float), short_name, hw_model, firmware, snr.
+                       Position can also be in position: {x, y} (local coords).
+        """
+        tid = mesh_data.get("target_id", "")
+        if not tid:
+            return
+
+        name = mesh_data.get("name", tid)
+        battery = mesh_data.get("battery", 1.0)
+        alliance = mesh_data.get("alliance", "friendly")
+        asset_type = mesh_data.get("asset_type", "mesh_radio")
+
+        # Convert lat/lng to local coordinates if provided
+        lat = mesh_data.get("lat")
+        lng = mesh_data.get("lng")
+        alt = mesh_data.get("alt", 0.0)
+
+        if lat is not None and lng is not None and (lat != 0.0 or lng != 0.0):
+            try:
+                from .geo import latlng_to_local
+                x, y, _z = latlng_to_local(lat, lng, alt or 0.0)
+                position = (x, y)
+                pos_source = "gps"
+                confidence = 0.9  # GPS from mesh radio is high confidence
+            except Exception:
+                position = (0.0, 0.0)
+                pos_source = "unknown"
+                confidence = 0.0
+        elif mesh_data.get("position"):
+            pos = mesh_data["position"]
+            position = (float(pos.get("x", 0)), float(pos.get("y", 0)))
+            pos_source = "gps"
+            confidence = 0.9
+        else:
+            position = (0.0, 0.0)
+            pos_source = "unknown"
+            confidence = 0.0
+
+        with self._lock:
+            if tid in self._targets:
+                t = self._targets[tid]
+                if pos_source != "unknown":
+                    self._check_velocity(t, position)
+                    t.position = position
+                    t.position_source = pos_source
+                t.name = name
+                t.battery = battery
+                t.last_seen = time.monotonic()
+                t.position_confidence = confidence
+                t._initial_confidence = confidence
+                self._add_confirming_source(t, "mesh")
+            else:
+                self._targets[tid] = TrackedTarget(
+                    target_id=tid,
+                    name=name,
+                    alliance=alliance,
+                    asset_type=asset_type,
+                    position=position,
+                    last_seen=time.monotonic(),
+                    source="mesh",
+                    battery=battery,
+                    position_source=pos_source,
+                    position_confidence=confidence,
+                    _initial_confidence=confidence,
+                    confirming_sources={"mesh"},
+                    classification="mesh_radio",
+                )
+                # Check if this is a returning node
+                self.reappearance_monitor.check_reappearance(
+                    target_id=tid,
+                    name=name,
+                    source="mesh",
+                    asset_type=asset_type,
+                    position=position,
+                )
+        # Record position if we have a meaningful location
+        if pos_source != "unknown":
+            self.history.record(tid, position)
+            self._check_geofence(tid, position[0], position[1])
+
+    # ADS-B aircraft targets — aircraft disappear quickly when out of range
+    ADSB_STALE_TIMEOUT = 120.0
+
+    def update_from_adsb(self, adsb_data: dict) -> None:
+        """Update or create a tracked target from an ADS-B aircraft detection.
+
+        ADS-B aircraft broadcast their ICAO address, position, altitude,
+        velocity, and callsign on 1090 MHz. These are high-confidence
+        GPS positions with well-known unique identifiers.
+
+        Args:
+            adsb_data: Dict with keys: target_id, name, lat, lng, alt,
+                       heading, speed (knots), callsign, icao, altitude_ft,
+                       vertical_rate_fpm, squawk.
+        """
+        tid = adsb_data.get("target_id", "")
+        if not tid:
+            return
+
+        name = adsb_data.get("name", tid)
+        lat = adsb_data.get("lat")
+        lng = adsb_data.get("lng")
+        alt = adsb_data.get("alt", 0.0)
+        heading = adsb_data.get("heading", 0.0)
+        speed = adsb_data.get("speed", 0.0)
+
+        if lat is not None and lng is not None and (lat != 0.0 or lng != 0.0):
+            try:
+                from .geo import latlng_to_local
+                x, y, _z = latlng_to_local(lat, lng, alt or 0.0)
+                position = (x, y)
+                pos_source = "adsb"
+                confidence = 0.95  # ADS-B GPS is high confidence
+            except Exception:
+                position = (0.0, 0.0)
+                pos_source = "unknown"
+                confidence = 0.0
+        else:
+            position = (0.0, 0.0)
+            pos_source = "unknown"
+            confidence = 0.0
+
+        with self._lock:
+            if tid in self._targets:
+                t = self._targets[tid]
+                if pos_source != "unknown":
+                    self._check_velocity(t, position)
+                    t.position = position
+                    t.position_source = pos_source
+                t.name = name
+                t.heading = heading
+                t.speed = speed
+                t.last_seen = time.monotonic()
+                t.position_confidence = confidence
+                t._initial_confidence = confidence
+                self._add_confirming_source(t, "adsb")
+            else:
+                self._targets[tid] = TrackedTarget(
+                    target_id=tid,
+                    name=name,
+                    alliance="unknown",
+                    asset_type="aircraft",
+                    position=position,
+                    heading=heading,
+                    speed=speed,
+                    last_seen=time.monotonic(),
+                    source="adsb",
+                    position_source=pos_source,
+                    position_confidence=confidence,
+                    _initial_confidence=confidence,
+                    confirming_sources={"adsb"},
+                    classification="aircraft",
+                )
+
+        if pos_source != "unknown":
+            self.history.record(tid, position)
+            self._check_geofence(tid, position[0], position[1])
+
     # RF motion targets have shorter stale timeout — transient detections
     RF_MOTION_STALE_TIMEOUT = 30.0
 
@@ -628,6 +799,8 @@ class TargetTracker:
                 or (t.source == "simulation" and (now - t.last_seen) > self.SIM_STALE_TIMEOUT)
                 or (t.source == "ble" and (now - t.last_seen) > self.BLE_STALE_TIMEOUT)
                 or (t.source == "rf_motion" and (now - t.last_seen) > self.RF_MOTION_STALE_TIMEOUT)
+                or (t.source == "mesh" and (now - t.last_seen) > self.MESH_STALE_TIMEOUT)
+                or (t.source == "adsb" and (now - t.last_seen) > self.ADSB_STALE_TIMEOUT)
             ]
             for tid in stale:
                 t = self._targets[tid]

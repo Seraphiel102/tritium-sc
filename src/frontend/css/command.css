@@ -50,7 +50,7 @@ body.v2 {
 
 .unified-tactical {
     position: absolute;
-    inset: 50px 0 20px 0;   /* Leave 28px command bar + 22px tactical banner, 20px for status bar */
+    inset: 80px 0 20px 0;   /* Leave 28px command bar + 52px tactical banner, 20px for status bar */
     overflow: hidden;
     background: #060609;
 }
@@ -70,7 +70,7 @@ body.v2 {
 
 .unified-layout > .panel-container {
     position: absolute;
-    inset: 50px 0 20px 0;   /* Reserved: command bar (28px) + tactical banner (22px) top + status bar (20px) bottom */
+    inset: 80px 0 20px 0;   /* Reserved: command bar (28px) + tactical banner (52px) top + status bar (20px) bottom */
     pointer-events: none;
     z-index: 100;
     overflow: hidden;
@@ -3143,7 +3143,7 @@ body.v2 {
     padding: 0 8px;
     background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1) 100%);
     border-bottom: 1px solid var(--border);
-    z-index: 200;       /* Above panels (z:100) so menu dropdowns are always readable */
+    z-index: 300;       /* Above panels (z:100) AND tactical banner (z:150) so dropdowns aren't blocked */
     position: relative;
 }
 
@@ -3712,11 +3712,11 @@ body.v2 {
 
     /* Unified layout: smaller command bar + tactical banner */
     .unified-tactical {
-        inset: 44px 0 18px 0;
+        inset: 74px 0 18px 0;
     }
 
     .unified-layout > .panel-container {
-        inset: 44px 0 18px 0;
+        inset: 74px 0 18px 0;
     }
 
     /* Panels: reduce default sizes */
@@ -3818,11 +3818,11 @@ body.v2 {
     }
 
     .unified-tactical {
-        inset: 40px 0 16px 0;
+        inset: 70px 0 16px 0;
     }
 
     .unified-layout > .panel-container {
-        inset: 40px 0 16px 0;
+        inset: 70px 0 16px 0;
     }
 
     /* Panels: full-width on mobile, stack vertically */
