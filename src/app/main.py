@@ -1399,8 +1399,12 @@ _local_addons = _sc_root / "addons"
 if _submodule_addons.exists():
     app.mount("/addons-shared", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-shared-static")
 
-# Mount local addons at /addons/ (takes priority for development)
-if _local_addons.exists():
+# Mount at /addons/ — prefer submodule (canonical), local addons/ is for dev overrides only
+# Check if local addons/ has actual addon dirs (not just _examples/)
+_has_local_addons = _local_addons.exists() and any(
+    (d / "tritium_addon.toml").exists() for d in _local_addons.iterdir() if d.is_dir()
+)
+if _has_local_addons:
     app.mount("/addons", StaticFiles(directory=_local_addons, follow_symlink=True), name="addon-static")
 elif _submodule_addons.exists():
     app.mount("/addons", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-static")
