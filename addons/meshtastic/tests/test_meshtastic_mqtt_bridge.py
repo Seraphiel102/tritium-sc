@@ -4,11 +4,16 @@
 """Tests for Meshtastic MQTT bridge — auto-discovery and node ingestion."""
 
 import json
+import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+# Add addon source to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tritium_lib.sdk import DeviceRegistry, DeviceState
 
