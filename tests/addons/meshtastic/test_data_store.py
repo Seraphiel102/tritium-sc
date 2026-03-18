@@ -11,7 +11,16 @@ import time
 import pytest
 import pytest_asyncio
 
-from addons.meshtastic.meshtastic_addon.data_store import MeshtasticDataStore
+import sys as _sys
+
+# Prefer tritium-addons submodule, fall back to local addons/
+_addons_root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "tritium-addons", "meshtastic")
+if os.path.isdir(_addons_root):
+    if _addons_root not in _sys.path:
+        _sys.path.insert(0, _addons_root)
+    from meshtastic_addon.data_store import MeshtasticDataStore
+else:
+    from addons.meshtastic.meshtastic_addon.data_store import MeshtasticDataStore
 
 
 @pytest_asyncio.fixture

@@ -226,10 +226,11 @@ class TestNodeManagerToTracker:
     def test_node_manager_feeds_tracker(self):
         """NodeManager.update_nodes feeds targets into TargetTracker."""
         import sys
-        addon_path = str(
-            __import__("pathlib").Path(__file__).resolve().parents[3]
-            / "addons" / "meshtastic"
-        )
+        # Prefer tritium-addons submodule, fall back to local addons/
+        _base = __import__("pathlib").Path(__file__).resolve().parents[3]
+        addon_path = str(_base.parent / "tritium-addons" / "meshtastic")
+        if not __import__("os").path.isdir(addon_path):
+            addon_path = str(_base / "addons" / "meshtastic")
         if addon_path not in sys.path:
             sys.path.insert(0, addon_path)
 

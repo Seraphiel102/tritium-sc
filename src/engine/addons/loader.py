@@ -14,6 +14,12 @@ from typing import Any
 from tritium_lib.sdk import AddonBase
 from tritium_lib.sdk.manifest import AddonManifest, load_manifest, validate_manifest
 
+try:
+    from tritium_lib.sdk import AddonContext, AddonEventBus
+    _HAS_ADDON_CONTEXT = True
+except ImportError:
+    _HAS_ADDON_CONTEXT = False
+
 log = logging.getLogger("addons.loader")
 
 
@@ -46,6 +52,62 @@ class AddonLoader:
         self.app = app
         self.registry: dict[str, AddonEntry] = {}
         self.enabled: set[str] = set()
+
+    def _build_context(self) -> "AddonContext | None":
+        """Build an AddonContext from SC app internals.
+
+        Returns None if AddonContext is not available (import error).
+        """
+        if not _HAS_ADDON_CONTEXT:
+            return None
+
+        app = self.app
+        if app is None:
+            return None
+
+        # Extract services from SC's app.state
+        amy = getattr(getattr(app, 'state', None), 'amy', None)
+        target_tracker = None
+        event_bus = None
+        if amy:
+            target_tracker = getattr(amy, 'target_tracker', None)
+            event_bus = getattr(amy, 'event_bus', None)
+        if target_tracker is None:
+            target_tracker = getattr(app, 'target_tracker', None)
+        if event_bus is None:
+            event_bus = getattr(app, 'event_bus', None)
+
+        mqtt_client = getattr(getattr(app, 'state', None), 'mqtt_bridge', None)
+        site_id = getattr(
+            app, 'site_id',
+            getattr(getattr(app, 'state', None), 'site_id', 'home'),
+        )
+
+        # Router handler — wraps app.include_router
+        router_handler = app if hasattr(app, 'include_router') else None
+
+        # Addon event bus (shared across all addons)
+        if not hasattr(self, '_addon_event_bus'):
+            self._addon_event_bus = AddonEventBus(event_bus=event_bus)
+
+        # Persistent state dict (survives hot-reload, per-addon)
+        if not hasattr(app, 'state'):
+            from types import SimpleNamespace
+            app.state = SimpleNamespace()
+        addon_states = getattr(app.state, '_addon_states', {})
+        app.state._addon_states = addon_states
+
+        return AddonContext(
+            target_tracker=target_tracker,
+            event_bus=event_bus,
+            mqtt_client=mqtt_client,
+            router_handler=router_handler,
+            site_id=site_id,
+            data_dir=str(Path("data")),
+            state=addon_states,
+            addon_event_bus=self._addon_event_bus,
+            app=app,
+        )
 
     def discover(self) -> list[str]:
         """Scan addon directories for tritium_addon.toml manifests.
@@ -131,7 +193,31 @@ class AddonLoader:
         # Instantiate and register
         try:
             instance = addon_class()
-            await instance.register(self.app)
+
+            # Build AddonContext if available, with per-addon state namespace
+            addon_context = None
+            base_context = self._build_context()
+            if base_context is not None:
+                addon_state_key = f"_addon_{addon_id}"
+                if addon_state_key not in base_context.state:
+                    base_context.state[addon_state_key] = {}
+                addon_context = AddonContext(
+                    target_tracker=base_context.target_tracker,
+                    event_bus=base_context.event_bus,
+                    mqtt_client=base_context.mqtt_client,
+                    router_handler=base_context.router_handler,
+                    site_id=base_context.site_id,
+                    data_dir=base_context.data_dir,
+                    state=base_context.state[addon_state_key],
+                    addon_event_bus=base_context.addon_event_bus,
+                    app=base_context.app,
+                )
+
+            if addon_context is not None:
+                await instance.register(app=self.app, context=addon_context)
+            else:
+                await instance.register(self.app)
+
             entry.instance = instance
             entry.enabled = True
             entry.error = None

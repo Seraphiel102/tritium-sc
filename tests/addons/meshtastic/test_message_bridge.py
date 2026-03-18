@@ -16,8 +16,12 @@ import pytest
 import sys
 import os
 
-# Ensure addons path is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "addons", "meshtastic"))
+# Ensure addons path is importable — prefer tritium-addons submodule
+_addons_root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "tritium-addons", "meshtastic")
+if os.path.isdir(_addons_root):
+    sys.path.insert(0, _addons_root)
+else:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "addons", "meshtastic"))
 
 from meshtastic_addon.message_bridge import (
     MAX_MESSAGE_HISTORY,

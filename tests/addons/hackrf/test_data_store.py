@@ -10,7 +10,17 @@ import time
 import pytest
 import pytest_asyncio
 
-from addons.hackrf.hackrf_addon.data_store import HackRFDataStore
+import os as _os
+import sys as _sys
+
+# Prefer tritium-addons submodule, fall back to local addons/
+_addons_root = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "..", "tritium-addons", "hackrf")
+if _os.path.isdir(_addons_root):
+    if _addons_root not in _sys.path:
+        _sys.path.insert(0, _addons_root)
+    from hackrf_addon.data_store import HackRFDataStore
+else:
+    from addons.hackrf.hackrf_addon.data_store import HackRFDataStore
 
 
 @pytest_asyncio.fixture

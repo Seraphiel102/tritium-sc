@@ -16,8 +16,13 @@ import wave
 import numpy as np
 import pytest
 
-# Ensure addon is importable
-sys.path.insert(0, "addons/hackrf")
+# Ensure addon is importable — prefer tritium-addons submodule, fall back to local
+import os as _os
+_addons_root = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "..", "tritium-addons", "hackrf")
+if _os.path.isdir(_addons_root):
+    sys.path.insert(0, _addons_root)
+else:
+    sys.path.insert(0, "addons/hackrf")
 
 from hackrf_addon.fm_player import FMPlayer, SAMPLE_RATE, AUDIO_RATE
 
