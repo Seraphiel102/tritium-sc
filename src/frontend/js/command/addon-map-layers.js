@@ -110,6 +110,27 @@ export class AddonMapLayers {
             },
         });
 
+        // Add text labels for Points (node names, callsigns, etc.)
+        this._map.addLayer({
+            id: `${id}-label`,
+            type: 'symbol',
+            source: id,
+            filter: ['==', '$type', 'Point'],
+            layout: {
+                'text-field': ['coalesce', ['get', 'long_name'], ['get', 'callsign'], ['get', 'label'], ['get', 'target_id']],
+                'text-size': 10,
+                'text-offset': [0, 1.5],
+                'text-anchor': 'top',
+                'text-allow-overlap': false,
+                visibility: visible ? 'visible' : 'none',
+            },
+            paint: {
+                'text-color': color,
+                'text-halo-color': '#000000',
+                'text-halo-width': 1,
+            },
+        });
+
         // Add a line layer for LineStrings
         this._map.addLayer({
             id: `${id}-line`,
@@ -223,6 +244,90 @@ export class AddonMapLayers {
         } catch (_) {
             // Silently ignore fetch errors — the endpoint may be temporarily unavailable
         }
+    }
+
+    /**
+     * Fit the map to the bounds of a specific layer's features.
+     * @param {string} layerId
+     * @param {object} [options] — MapLibre fitBounds options
+     */
+    fitToLayer(layerId, options = {}) {
+        const source = this._map.getSource(layerId);
+        if (!source || !source._data) return;
+        const data = source._data;
+        const features = data.features || [];
+        if (features.length === 0) return;
+
+        const coords = [];
+        for (const f of features) {
+            const geom = f.geometry;
+            if (!geom) continue;
+            if (geom.type === 'Point') {
+                coords.push(geom.coordinates);
+            } else if (geom.type === 'LineString') {
+                coords.push(...geom.coordinates);
+            } else if (geom.type === 'Polygon') {
+                coords.push(...(geom.coordinates[0] || []));
+            }
+        }
+        if (coords.length === 0) return;
+
+        const bounds = coords.reduce(
+            (b, c) => [
+                [Math.min(b[0][0], c[0]), Math.min(b[0][1], c[1])],
+                [Math.max(b[1][0], c[0]), Math.max(b[1][1], c[1])],
+            ],
+            [[Infinity, Infinity], [-Infinity, -Infinity]]
+        );
+
+        this._map.fitBounds(bounds, { padding: 60, maxZoom: 14, ...options });
+    }
+
+    /**
+     * Fit the map to ALL addon layer features combined.
+     */
+    fitToAll(options = {}) {
+        const allCoords = [];
+        for (const [id, entry] of this._layers) {
+            if (!entry.visible) continue;
+            const source = this._map.getSource(id);
+            if (!source || !source._data) continue;
+            for (const f of (source._data.features || [])) {
+                const geom = f.geometry;
+                if (!geom) continue;
+                if (geom.type === 'Point') allCoords.push(geom.coordinates);
+                else if (geom.type === 'LineString') allCoords.push(...geom.coordinates);
+            }
+        }
+        if (allCoords.length === 0) return;
+
+        const bounds = allCoords.reduce(
+            (b, c) => [
+                [Math.min(b[0][0], c[0]), Math.min(b[0][1], c[1])],
+                [Math.max(b[1][0], c[0]), Math.max(b[1][1], c[1])],
+            ],
+            [[Infinity, Infinity], [-Infinity, -Infinity]]
+        );
+        this._map.fitBounds(bounds, { padding: 60, maxZoom: 14, ...options });
+    }
+
+    /**
+     * Get all layer definitions (for the layer manager panel).
+     * @returns {Array<{layer_id, label, category, color, visible}>}
+     */
+    getLayerList() {
+        const result = [];
+        for (const [id, entry] of this._layers) {
+            result.push({
+                layer_id: id,
+                label: entry.def.label,
+                category: entry.def.category,
+                color: entry.def.color,
+                visible: entry.visible,
+                addon_id: entry.def.addon_id,
+            });
+        }
+        return result;
     }
 
     /**
