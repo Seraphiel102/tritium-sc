@@ -1107,8 +1107,14 @@ async def lifespan(app: FastAPI):
     # Addon system — discover and enable addons from addons/ directory
     try:
         from engine.addons.loader import AddonLoader
+        # Scan: local addons/, parent submodule tritium-addons/, and user home
+        _sc_root = Path(__file__).resolve().parent.parent.parent
         addon_loader = AddonLoader(
-            addon_dirs=["addons/", str(Path.home() / ".tritium" / "addons")],
+            addon_dirs=[
+                "addons/",                                          # local SC addons (dev overrides)
+                str(_sc_root.parent / "tritium-addons"),            # submodule: ../tritium-addons/
+                str(Path.home() / ".tritium" / "addons"),           # user addons
+            ],
             app=app,
         )
         found = addon_loader.discover()
@@ -1384,9 +1390,20 @@ app.include_router(unified_alerts_router)
 
 # Static files — addon frontend files served before main frontend
 # so the SPA catch-all doesn't intercept /addons/ requests.
-addons_path = Path(__file__).parent.parent.parent / "addons"
-if addons_path.exists():
-    app.mount("/addons", StaticFiles(directory=addons_path, follow_symlink=True), name="addon-static")
+# Priority: local addons/ (dev overrides), then submodule tritium-addons/
+_sc_root = Path(__file__).resolve().parent.parent.parent
+_submodule_addons = _sc_root.parent / "tritium-addons"
+_local_addons = _sc_root / "addons"
+
+# Mount submodule addons at /addons-shared/ (always available)
+if _submodule_addons.exists():
+    app.mount("/addons-shared", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-shared-static")
+
+# Mount local addons at /addons/ (takes priority for development)
+if _local_addons.exists():
+    app.mount("/addons", StaticFiles(directory=_local_addons, follow_symlink=True), name="addon-static")
+elif _submodule_addons.exists():
+    app.mount("/addons", StaticFiles(directory=_submodule_addons, follow_symlink=True), name="addon-static")
 
 frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
