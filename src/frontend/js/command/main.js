@@ -1029,10 +1029,25 @@ function updateClock() {
 
 const TOAST_MAX = 2;
 const TOAST_DURATION = 3500;
+const TOAST_DEDUP_MS = 5000;  // Suppress duplicate messages within 5 seconds
+const _recentToasts = new Map();  // message -> timestamp
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) return;
+
+    // Debounce: suppress duplicate messages within TOAST_DEDUP_MS
+    const dedupKey = `${type}:${message}`;
+    const now = Date.now();
+    const lastShown = _recentToasts.get(dedupKey);
+    if (lastShown && (now - lastShown) < TOAST_DEDUP_MS) return;
+    _recentToasts.set(dedupKey, now);
+    // Prune old entries to prevent memory leak
+    if (_recentToasts.size > 100) {
+        for (const [k, t] of _recentToasts) {
+            if (now - t > TOAST_DEDUP_MS * 2) _recentToasts.delete(k);
+        }
+    }
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
